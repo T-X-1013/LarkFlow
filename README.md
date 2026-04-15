@@ -44,26 +44,29 @@ graph TD
 ## 目录结构
 
 ```text
-LarkFlow/
-├── agents/               # 🧠 智能体定义 (架构师、程序员、测试员、审查员的 System Prompt)
-│   ├── phase1_design.md
-│   ├── phase2_coding.md
-│   ├── phase3_test.md
-│   ├── phase4_review.md  # [新增] 代码审查 Agent
-│   └── tools_definition.md
-├── pipeline/             # ⚙️ 调度引擎 (Python 状态机)
-│   ├── engine.py         # 核心状态机 (触发 -> 挂起 -> 唤醒)
-│   ├── lark_interaction.py # 飞书卡片构建与 Webhook 接收
-│   └── tools_schema.py   # Claude API 的工具 JSON Schema
-├── rules/                # 🚦 规则路由 (AI 查阅规范的总入口)
-│   ├── flow-rule.md      # 最高准则
-│   └── skill-routing.md  # 关键词路由表 (RAG 核心)
-└── skills/               # 📚 通用领域知识库 (Go 最佳实践)
-    ├── database.md       # GORM / SQL 防注入规范
-    ├── redis.md          # go-redis / 过期时间规范
-    ├── http.md           # Gin / 标准 JSON 响应规范
-    ├── error.md          # 错误包装与 Sentinel Errors
-    └── concurrency.md    # goroutine 安全规范
+.                         # 仓库根目录
+├── demo-app/             # 🎯 由 LarkFlow 自动生成的示例 Go 工程
+│   └── go.mod            #    可直接编译运行，完全符合 skills/ 中定义的代码规范
+└── LarkFlow/             # ⚙️ LarkFlow 工作流引擎本体
+    ├── agents/           # 🧠 智能体定义 (架构师、程序员、测试员、审查员的 System Prompt)
+    │   ├── phase1_design.md
+    │   ├── phase2_coding.md
+    │   ├── phase3_test.md
+    │   ├── phase4_review.md
+    │   └── tools_definition.md
+    ├── pipeline/         # 调度引擎 (Python 状态机)
+    │   ├── engine.py     # 核心状态机 (触发 -> 挂起 -> 唤醒)
+    │   ├── lark_interaction.py # 飞书卡片构建与 Webhook 接收
+    │   └── tools_schema.py     # Claude API 的工具 JSON Schema
+    ├── rules/            # 🚦 规则路由 (AI 查阅规范的总入口)
+    │   ├── flow-rule.md  # 最高准则
+    │   └── skill-routing.md    # 关键词路由表 (RAG 核心)
+    └── skills/           # 📚 通用领域知识库 (Go 最佳实践)
+        ├── database.md   # GORM / SQL 防注入规范
+        ├── redis.md      # go-redis / 过期时间规范
+        ├── http.md       # Gin / 标准 JSON 响应规范
+        ├── error.md      # 错误包装与 Sentinel Errors
+        └── concurrency.md # goroutine 安全规范
 ```
 
 ---
