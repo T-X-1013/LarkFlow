@@ -57,7 +57,8 @@ graph TD
     ├── pipeline/         # 调度引擎 (Python 状态机)
     │   ├── engine.py     # 核心状态机 (触发 -> 挂起 -> 唤醒)
     │   ├── lark_interaction.py # 飞书卡片构建与 Webhook 接收
-    │   └── tools_schema.py     # Claude API 的工具 JSON Schema
+    │   ├── llm_adapter.py  # Anthropic / OpenAI 统一适配层
+    │   └── tools_schema.py     # Anthropic / OpenAI 的工具 JSON Schema
     ├── rules/            # 🚦 规则路由 (AI 查阅规范的总入口)
     │   ├── flow-rule.md  # 最高准则
     │   └── skill-routing.md    # 关键词路由表 (RAG 核心)
@@ -75,7 +76,7 @@ graph TD
 
 ### 1. 环境准备
 
-确保你已经安装了 Python 3.9+，并配置了 Anthropic API Key。
+确保你已经安装了 Python 3.9+，并配置了可用的 LLM API Key（Anthropic 或 OpenAI）。
 
 ```bash
 # 克隆仓库
@@ -92,12 +93,32 @@ pip install -r requirements.txt
 
 ### 2. 配置环境变量
 
-在项目根目录创建 `.env` 文件：
+在 `LarkFlow/` 目录下创建 `.env` 文件（可参考 `.env.example`）：
 
 ```env
-ANTHROPIC_API_KEY=sk-ant-api03-...
+LLM_PROVIDER=anthropic
 LARK_WEBHOOK_URL=https://open.feishu.cn/open-apis/bot/v2/hook/...
+
+# 飞书应用机器人 (Bot API)
+LARK_APP_ID=cli_xxx
+LARK_APP_SECRET=xxx
+LARK_CHAT_ID=ou_xxx
+
+# Claude / Anthropic
+ANTHROPIC_API_KEY=sk-ant-api03-...
+ANTHROPIC_AUTH_TOKEN=
+ANTHROPIC_BASE_URL=
+ANTHROPIC_MODEL=claude-sonnet-4-6
+
+# Codex / OpenAI
+OPENAI_API_KEY=sk-...
+OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_MODEL=gpt-5-codex
+OPENAI_REASONING_EFFORT=medium
 ```
+
+- 当 `LLM_PROVIDER=anthropic` 时，Pipeline 使用 Claude / Anthropic SDK。
+- 当 `LLM_PROVIDER=openai` 时，Pipeline 使用 OpenAI Responses API。
 
 ### 3. 运行 Pipeline
 

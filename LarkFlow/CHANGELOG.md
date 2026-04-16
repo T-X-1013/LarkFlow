@@ -19,3 +19,15 @@
 ### Removed
 - 删除 `mcp-servers.json`、`.claude/`、`hooks/` 等强绑定本地 IDE 的配置文件。
 
+## v1.1.0 (2026-04-16)
+
+### Overview
+新增 OpenAI provider 支持，Pipeline 现在支持在 Anthropic 与 OpenAI 之间切换。
+
+### Changed
+- 新增 `pipeline/llm_adapter.py`，统一 Anthropic 与 OpenAI 两种 provider 的调用接口与会话状态。
+- 重构 `pipeline/tools_schema.py`，工具定义支持 Anthropic 和 OpenAI 两种格式输出。
+- 重构 `pipeline/engine.py`，去掉 Anthropic 硬编码，改为调用 `llm_adapter` 统一接口。
+- 新增 `openai>=1.0.0` 依赖。
+- 更新文档与环境变量配置说明。
+
