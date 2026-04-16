@@ -6,92 +6,7 @@ from pydantic import BaseModel
 app = FastAPI()
 
 # ==========================================
-# 1. 飞书消息卡片构建 (Lark Message Card)
-# ==========================================
-def build_approval_card(demand_id: str, summary: str, design_doc: str) -> dict:
-    """
-    构建飞书交互式消息卡片 JSON
-    """
-    # 截断过长的设计文档，避免卡片超长
-    display_doc = design_doc[:500] + "..." if len(design_doc) > 500 else design_doc
-    
-    return {
-        "config": {
-            "wide_screen_mode": True
-        },
-        "header": {
-            "title": {
-                "tag": "plain_text",
-                "content": f"🚀 AI 架构设计审批 (需求 ID: {demand_id})"
-            },
-            "template": "blue"
-        },
-        "elements": [
-            {
-                "tag": "markdown",
-                "content": f"**AI 助手已完成技术方案设计，请审批：**\n\n**📝 方案摘要**\n{summary}\n\n**📄 详细设计 (部分)**\n{display_doc}"
-            },
-            {
-                "tag": "hr"
-            },
-            {
-                "tag": "action",
-                "actions": [
-                    {
-                        "tag": "button",
-                        "text": {
-                            "tag": "plain_text",
-                            "content": "✅ 同意并进入编码阶段"
-                        },
-                        "type": "primary",
-                        "value": {
-                            "action": "approve",
-                            "demand_id": demand_id
-                        }
-                    },
-                    {
-                        "tag": "button",
-                        "text": {
-                            "tag": "plain_text",
-                            "content": "❌ 驳回并要求修改"
-                        },
-                        "type": "danger",
-                        "value": {
-                            "action": "reject",
-                            "demand_id": demand_id
-                        }
-                    }
-                ]
-            }
-        ]
-    }
-
-def send_lark_card(webhook_url: str, demand_id: str, summary: str, design_doc: str):
-    """
-    发送卡片到飞书群聊或个人
-    """
-    card_json = build_approval_card(demand_id, summary, design_doc)
-    payload = {
-        "msg_type": "interactive",
-        "card": card_json
-    }
-    response = requests.post(webhook_url, json=payload)
-    return response.json()
-
-def send_lark_text(webhook_url: str, text: str):
-    """
-    发送普通文本消息到飞书
-    """
-    payload = {
-        "msg_type": "text",
-        "content": {"text": text}
-    }
-    response = requests.post(webhook_url, json=payload)
-    return response.json()
-
-
-# ==========================================
-# 2. 飞书 Webhook 回调处理 (接收用户点击)
+# 1. 飞书 Webhook 回调处理 (接收用户点击)
 # ==========================================
 @app.post("/lark/webhook")
 async def lark_webhook(request: Request):
@@ -115,7 +30,7 @@ async def lark_webhook(request: Request):
         # 飞书要求必须返回合法的卡片 JSON，否则会报 200340
         return update_card_status(f"解析失败，收到的数据: {json.dumps(data)}")
 
-    # 3. 根据用户操作，恢复 Claude Pipeline
+    # 3. 根据用户操作，恢复 Agent Pipeline
     if action_type == "approve":
         print(f"[Webhook] 需求 {demand_id} 已通过审批，准备进入 Coding 阶段...")
         
@@ -171,13 +86,13 @@ def update_card_status(message: str) -> dict:
 
 
 # ==========================================
-# 3. 恢复 Claude Pipeline (从 engine 导入)
+# 2. 恢复 Agent Pipeline (从 engine 导入)
 # ==========================================
 from pipeline.engine import resume_after_approval
 
 def resume_pipeline(demand_id: str, approved: bool, feedback: str):
     """
-    唤醒挂起的 Claude 上下文，并将人类的反馈作为 Tool Result 传回给 Claude
+    唤醒挂起的 Agent 上下文，并将人类的反馈作为 Tool Result 传回给 Agent
     """
     # 实际调用 engine.py 中的状态机恢复逻辑
     resume_after_approval(demand_id, approved, feedback)

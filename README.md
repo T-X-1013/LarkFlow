@@ -56,8 +56,9 @@ graph TD
     │   └── tools_definition.md
     ├── pipeline/         # 调度引擎 (Python 状态机)
     │   ├── engine.py     # 核心状态机 (触发 -> 挂起 -> 唤醒)
-    │   ├── lark_interaction.py # 飞书卡片构建与 Webhook 接收
-    │   └── tools_schema.py     # Claude API 的工具 JSON Schema
+    │   ├── lark_client.py：飞书卡片构建与发送
+    │   ├── lark_interaction.py：Webhook 接收与恢复 Pipeline
+    │   └── tools_schema.py     # Anthropic / OpenAI 的工具 JSON Schema
     ├── rules/            # 🚦 规则路由 (AI 查阅规范的总入口)
     │   ├── flow-rule.md  # 最高准则
     │   └── skill-routing.md    # 关键词路由表 (RAG 核心)
@@ -75,12 +76,12 @@ graph TD
 
 ### 1. 环境准备
 
-确保你已经安装了 Python 3.9+，并配置了 Anthropic API Key。
+确保你已经安装了 Python 3.9+，并配置了可用的 LLM API Key（Anthropic 或 OpenAI）。
 
 ```bash
 # 克隆仓库
-git clone https://github.com/your-repo/larkflow.git
-cd larkflow
+git clone https://github.com/T-X-1013/LarkFlow.git
+cd LarkFlow/LarkFlow
 
 # 创建虚拟环境
 python3 -m venv venv
@@ -92,16 +93,41 @@ pip install -r requirements.txt
 
 ### 2. 配置环境变量
 
-在项目根目录创建 `.env` 文件：
+在 `LarkFlow/` 目录下创建 `.env` 文件：
 
 ```env
-ANTHROPIC_API_KEY=sk-ant-api03-...
+LLM_PROVIDER=openai
 LARK_WEBHOOK_URL=https://open.feishu.cn/open-apis/bot/v2/hook/...
+
+# Claude / Anthropic
+# 官方直连时填写 ANTHROPIC_API_KEY
+ANTHROPIC_API_KEY=
+
+# 公司内部网关时填写 ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL
+ANTHROPIC_AUTH_TOKEN=
+ANTHROPIC_BASE_URL=https://your-anthropic-gateway
+ANTHROPIC_MODEL=claude-sonnet-4-6
+
+# Codex / OpenAI
+# 官方直连时填写 OPENAI_API_KEY，并保持 OPENAI_BASE_URL 为官方地址
+OPENAI_API_KEY=
+OPENAI_BASE_URL=https://api.openai.com/v1
+
+# 如果你走公司内部 OpenAI 兼容网关，则改成：
+# OPENAI_API_KEY=your-gateway-token
+# OPENAI_BASE_URL=https://your-openai-compatible-gateway/v1
+
+OPENAI_MODEL=gpt-5.4
+OPENAI_REASONING_EFFORT=high
 ```
+
+- 当 `LLM_PROVIDER=anthropic` 时，Pipeline 使用 Claude / Anthropic SDK。
+- 当 `LLM_PROVIDER=openai` 时，Pipeline 使用 OpenAI Responses API。
+- Anthropic 侧支持 `ANTHROPIC_AUTH_TOKEN + ANTHROPIC_BASE_URL` 网关格式，OpenAI 侧支持 `OPENAI_API_KEY + OPENAI_BASE_URL` 官方地址或兼容网关。
 
 ### 3. 运行 Pipeline
 
-你可以直接运行引擎脚本来模拟一个需求的完整生命周期：
+在 `LarkFlow/` 目录下，你可以直接运行引擎脚本来模拟一个需求的完整生命周期：
 
 ```bash
 python pipeline/engine.py
@@ -112,6 +138,14 @@ python pipeline/engine.py
 ```bash
 uvicorn pipeline.lark_interaction:app --host 0.0.0.0 --port 8000
 ```
+
+在接入真实需求流之前，建议先跑一次最小连通性验证：
+
+```bash
+python3 pipeline/smoke_test.py
+```
+
+这个脚本只会做一次最小模型调用，要求模型返回固定文本，不会触发本地工具，也不会发送飞书消息。
 
 ---
 

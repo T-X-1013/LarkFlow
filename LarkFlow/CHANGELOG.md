@@ -19,3 +19,14 @@
 ### Removed
 - 删除 `mcp-servers.json`、`.claude/`、`hooks/` 等强绑定本地 IDE 的配置文件。
 
+## v1.1.0 (2026-04-15)
+
+### Overview
+修复 Pipeline 交互层的循环依赖问题，并补充 OpenAI provider 支持。
+
+### Changed
+- 修复 `pipeline.engine` 与 `pipeline.lark_interaction` 的模块级循环导入问题，从已有的`pipeline/lark_interaction.py`中拆分出`pipeline/lark_client.py`。
+- 新增 OpenAI provider 适配，Pipeline 现在支持在 Anthropic 与 OpenAI 之间切换。
+- 修复 `README.md` 中的描述问题。 
+
+### Removed

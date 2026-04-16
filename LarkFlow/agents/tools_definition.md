@@ -1,6 +1,6 @@
 # Headless Agent Tools Definition
 
-These are the tools provided by the Pipeline for the Claude API to call.
+These are the tools provided by the Pipeline for the LLM provider to call.
 
 ## 1. mock_db
 - **Description**: Connects to the project's database to query schema or data.
