@@ -67,11 +67,13 @@ def append_user_text(session: Dict[str, Any], text: str):
     session["history"].append({"role": "user", "content": text})
 
     if provider == "anthropic":
+        # Anthropic 直接维护 messages 数组，每轮请求完整传回。
         session["provider_state"].setdefault("messages", []).append({
             "role": "user",
             "content": text
         })
     else:
+        # OpenAI Responses API 采用增量输入，因此维护 pending_inputs 队列。
         session["provider_state"].setdefault("pending_inputs", []).append({
             "role": "user",
             "content": text
@@ -98,6 +100,7 @@ def append_tool_result(session: Dict[str, Any], tool_call: ToolCall, result_text
             }]
         })
     else:
+        # OpenAI 需要把工具结果包装成 function_call_output，供下一轮 Responses 请求续接。
         session["provider_state"].setdefault("pending_inputs", []).append({
             "type": "function_call_output",
             "call_id": tool_call.id,
@@ -110,6 +113,7 @@ def create_turn(session: Dict[str, Any], system_prompt: str) -> AgentTurn:
     provider = session["provider"]
     client = session["client"]
 
+    # 对外暴露统一的 create_turn，内部再按 provider 分发到各自的 SDK 协议。
     if provider == "anthropic":
         return _create_anthropic_turn(session, client, system_prompt)
     return _create_openai_turn(session, client, system_prompt)
@@ -164,6 +168,7 @@ def _create_openai_turn(session: Dict[str, Any], client: Any, system_prompt: str
     model_name = os.getenv("OPENAI_MODEL", "gpt-5-codex")
     reasoning_effort = os.getenv("OPENAI_REASONING_EFFORT", "medium")
 
+    # OpenAI 侧统一走 Responses API；如果存在 previous_response_id，则继续同一条响应链。
     request_args = {
         "model": model_name,
         "instructions": system_prompt,

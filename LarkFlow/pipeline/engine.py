@@ -51,10 +51,44 @@ def execute_local_tool(tool_name: str, tool_args: dict) -> str:
         try:
             if action == "read":
                 with open(path, "r") as f: return f.read()
+
             elif action == "write":
                 os.makedirs(os.path.dirname(path), exist_ok=True)
                 with open(path, "w") as f: f.write(tool_args.get("content", ""))
                 return f"Successfully wrote to {path}"
+
+            elif action == "replace":
+                old_content = tool_args.get("old_content")
+                new_content = tool_args.get("content")
+
+                if not old_content:
+                    return "Replace failed: old_content is required for replace action"
+                if new_content is None:
+                    return "Replace failed: content is required for replace action"
+                if not os.path.exists(path):
+                    return f"Replace failed: file not found: {path}"
+
+
+
+
+                with open(path, "r", encoding="utf-8") as f:
+                    file_content = f.read()
+
+                match_count = file_content.count(old_content)
+                if match_count == 0:
+                    return f"Replace failed: old_content not found in {path}"
+                if match_count > 1:
+                    return (
+                        f"Replace failed: old_content matched {match_count} times in {path}; "
+                        "please provide a more specific snippet"
+                    )
+
+                updated_content = file_content.replace(old_content, new_content, 1)
+
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(updated_content)
+                return f"Successfully replaced content in {path}"
+
             elif action == "list_dir":
                 return "\n".join(os.listdir(path))
             else:
@@ -67,7 +101,9 @@ def execute_local_tool(tool_name: str, tool_args: dict) -> str:
         # 在沙盒/Docker中执行命令
         result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
         return f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
-        
+
+
+
     return f"Unknown tool: {tool_name}"
 
 
@@ -133,6 +169,7 @@ def start_new_demand(demand_id: str, requirement: str):
     入口：飞书多维表格录入新需求，触发 Pipeline
     """
     print(f"========== 启动需求 {demand_id} ==========")
+    # Provider 选择与 SDK client 初始化统一交给 llm_adapter，engine 只负责编排阶段流转。
     provider = get_provider_name()
     client = build_client(provider)
     SESSION_STORE[demand_id] = initialize_session(provider, f"新需求：{requirement}", client)

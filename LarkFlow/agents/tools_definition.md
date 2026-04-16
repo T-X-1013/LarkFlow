@@ -13,6 +13,9 @@ These are the tools provided by the Pipeline for the LLM provider to call.
   - `action` (string): One of `read`, `write`, `replace`, `list_dir`.
   - `path` (string): The relative path to the file or directory.
   - `content` (string, optional): The content to write or replace.
+  - `old_content` (string, optional): The exact old text to be replaced. Required for `replace`.
+- **Notes**:
+  - `replace` only succeeds when `old_content` matches exactly once in the target file.
 
 ## 3. ask_human_approval
 - **Description**: Suspends the AI agent and sends an interactive message card to the human reviewer via Lark (飞书).

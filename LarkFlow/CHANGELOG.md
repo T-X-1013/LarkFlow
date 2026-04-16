@@ -30,3 +30,15 @@
 - 修复 `README.md` 中的描述问题。 
 
 ### Removed
+- 无。
+
+## v1.1.1 (2026-04-15)
+
+### Overview
+修复 `file_editor.replace` 缺失问题，并同步工具文档描述。
+
+### Changed
+- 补齐 `file_editor.replace` 的运行时实现，并同步更新工具文档描述。
+
+### Removed
+- 无。
