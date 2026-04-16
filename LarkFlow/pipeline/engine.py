@@ -119,11 +119,11 @@ def run_agent_loop(demand_id: str, system_prompt: str) -> bool:
                     # 特殊处理：如果调用了 ask_human_approval，则发送飞书卡片并挂起
                     if tool_name == "ask_human_approval":
                         print(f"  [Pipeline] 触发审批节点，发送飞书卡片并挂起...")
-                        webhook_url = os.getenv("LARK_WEBHOOK_URL")
-                        if webhook_url:
-                            send_lark_card(webhook_url, demand_id, tool_args["summary"], tool_args["design_doc"])
+                        chat_id = os.getenv("LARK_CHAT_ID")
+                        if chat_id:
+                            send_lark_card(chat_id, demand_id, tool_args["summary"], tool_args["design_doc"])
                         else:
-                            print("  [Warning] 未配置 LARK_WEBHOOK_URL，跳过发送飞书卡片")
+                            print("  [Warning] 未配置 LARK_CHAT_ID，跳过发送飞书卡片")
                         suspend_pipeline = True
                         break # 跳出工具处理循环
                     
@@ -176,7 +176,7 @@ def resume_after_approval(demand_id: str, approved: bool, feedback: str):
         
     # 找到最后一个 assistant 消息中的 ask_human_approval tool_use_id
     last_msg = messages[-1]
-    tool_use_id = next(b["id"] for b in last_msg["content"] if b["type"] == "tool_use" and b["name"] == "ask_human_approval")
+    tool_use_id = next(b.id for b in last_msg["content"] if b.type == "tool_use" and b.name == "ask_human_approval")
     
     # 注入人类审批结果
     messages.append({
@@ -246,15 +246,15 @@ def deploy_app(demand_id: str):
         subprocess.run(["docker", "run", "-d", "--name", "demo-app-container", "-p", "8080:8080", "demo-app"], check=True)
         
         print(">> 部署成功！")
-        webhook_url = os.getenv("LARK_WEBHOOK_URL")
-        if webhook_url:
-            send_lark_text(webhook_url, f"🎉 需求 {demand_id} 部署成功！\n测试环境已就绪，体验地址：http://localhost:8080")
-            
+        chat_id = os.getenv("LARK_CHAT_ID")
+        if chat_id:
+            send_lark_text(chat_id, f"🎉 需求 {demand_id} 部署成功！\n测试环境已就绪，体验地址：http://localhost:8080")
+
     except subprocess.CalledProcessError as e:
         print(f">> 部署失败: {e}")
-        webhook_url = os.getenv("LARK_WEBHOOK_URL")
-        if webhook_url:
-            send_lark_text(webhook_url, f"❌ 需求 {demand_id} 部署失败，请检查构建日志。")
+        chat_id = os.getenv("LARK_CHAT_ID")
+        if chat_id:
+            send_lark_text(chat_id, f"❌ 需求 {demand_id} 部署失败，请检查构建日志。")
 
 # ==========================================
 # 测试入口 (模拟运行)
