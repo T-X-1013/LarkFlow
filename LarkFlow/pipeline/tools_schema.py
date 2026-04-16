@@ -1,15 +1,12 @@
 from typing import List, Dict, Any
 
-def get_claude_tools() -> List[Dict[str, Any]]:
-    """
-    Returns the list of tools formatted for the Anthropic Claude API.
-    These tools are used by the Headless Agent in different phases of the pipeline.
-    """
+
+def _get_tool_specs() -> List[Dict[str, Any]]:
     return [
         {
             "name": "mock_db",
             "description": "Connects to the project's database to query schema or data. Use this to understand existing table structures before proposing changes.",
-            "input_schema": {
+            "schema": {
                 "type": "object",
                 "properties": {
                     "query": {
@@ -23,7 +20,7 @@ def get_claude_tools() -> List[Dict[str, Any]]:
         {
             "name": "file_editor",
             "description": "A comprehensive tool for file operations in the workspace. Used to read existing code, write new files, modify existing files, or list directories.",
-            "input_schema": {
+            "schema": {
                 "type": "object",
                 "properties": {
                     "action": {
@@ -50,7 +47,7 @@ def get_claude_tools() -> List[Dict[str, Any]]:
         {
             "name": "ask_human_approval",
             "description": "Suspends the AI agent and sends an interactive message card to the human reviewer via Lark (飞书). MUST be called at the end of the Design phase before any coding begins.",
-            "input_schema": {
+            "schema": {
                 "type": "object",
                 "properties": {
                     "summary": {
@@ -68,7 +65,7 @@ def get_claude_tools() -> List[Dict[str, Any]]:
         {
             "name": "run_bash",
             "description": "Executes a bash command in the project's Docker container or sandbox. Useful for running tests ('go test ./...'), building ('go build'), or managing dependencies ('go mod tidy').",
-            "input_schema": {
+            "schema": {
                 "type": "object",
                 "properties": {
                     "command": {
@@ -81,11 +78,43 @@ def get_claude_tools() -> List[Dict[str, Any]]:
         }
     ]
 
+
+def get_anthropic_tools() -> List[Dict[str, Any]]:
+    """
+    Returns the list of tools formatted for the Anthropic API.
+    These tools are used by the Headless Agent in different phases of the pipeline.
+    """
+    return [
+        {
+            "name": tool_spec["name"],
+            "description": tool_spec["description"],
+            "input_schema": tool_spec["schema"]
+        }
+        for tool_spec in _get_tool_specs()
+    ]
+
+
+def get_openai_tools() -> List[Dict[str, Any]]:
+    """
+    Returns the list of tools formatted for the OpenAI Responses API.
+    These tools are used by the Headless Agent in different phases of the pipeline.
+    """
+    return [
+        {
+            "type": "function",
+            "name": tool_spec["name"],
+            "description": tool_spec["description"],
+            "parameters": tool_spec["schema"],
+            "strict": False
+        }
+        for tool_spec in _get_tool_specs()
+    ]
+
 # Example of how to use this with the Anthropic Python SDK:
-# 
+#
 # import anthropic
 # client = anthropic.Anthropic()
-# 
+#
 # response = client.messages.create(
 #     model="claude-3-5-sonnet-20240620",
 #     max_tokens=4096,
@@ -93,5 +122,5 @@ def get_claude_tools() -> List[Dict[str, Any]]:
 #     messages=[
 #         {"role": "user", "content": "We need to add a user registration feature."}
 #     ],
-#     tools=get_claude_tools()
+#     tools=get_anthropic_tools()
 # )
