@@ -111,10 +111,10 @@ def get_openai_tools() -> List[Dict[str, Any]]:
     ]
 
 # Example of how to use this with the Anthropic Python SDK:
-# 
+#
 # import anthropic
 # client = anthropic.Anthropic()
-# 
+#
 # response = client.messages.create(
 #     model="claude-3-5-sonnet-20240620",
 #     max_tokens=4096,

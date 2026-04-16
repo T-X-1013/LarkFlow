@@ -7,7 +7,7 @@ from typing import Dict, Any
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 # 导入我们之前写的模块
-from pipeline.lark_client import send_lark_card, send_lark_text
+from pipeline.lark_interaction import send_lark_card, send_lark_text
 from pipeline.llm_adapter import (
     ToolCall,
     append_tool_result,
@@ -38,71 +38,35 @@ def execute_local_tool(tool_name: str, tool_args: dict) -> str:
     在本地或 Docker 容器中实际执行 Agent 调用的工具
     """
     print(f"  [Tool Execution] 正在执行 {tool_name}，参数: {tool_args}")
-    
+
     if tool_name == "mock_db":
         query = tool_args.get("query", "")
         # 这里可以接入真实的 MySQL/TiDB 查询逻辑
         return f"Mock DB Result for '{query}': Table `users` has columns (id, name, created_at)."
-        
+
     elif tool_name == "file_editor":
         action = tool_args.get("action")
         path = os.path.join(os.path.dirname(__file__), "..", tool_args.get("path", ""))
-        
+
         try:
             if action == "read":
                 with open(path, "r") as f: return f.read()
-
             elif action == "write":
                 os.makedirs(os.path.dirname(path), exist_ok=True)
                 with open(path, "w") as f: f.write(tool_args.get("content", ""))
                 return f"Successfully wrote to {path}"
-
-            elif action == "replace":
-                old_content = tool_args.get("old_content")
-                new_content = tool_args.get("content")
-
-                if not old_content:
-                    return "Replace failed: old_content is required for replace action"
-                if new_content is None:
-                    return "Replace failed: content is required for replace action"
-                if not os.path.exists(path):
-                    return f"Replace failed: file not found: {path}"
-
-
-
-
-                with open(path, "r", encoding="utf-8") as f:
-                    file_content = f.read()
-
-                match_count = file_content.count(old_content)
-                if match_count == 0:
-                    return f"Replace failed: old_content not found in {path}"
-                if match_count > 1:
-                    return (
-                        f"Replace failed: old_content matched {match_count} times in {path}; "
-                        "please provide a more specific snippet"
-                    )
-
-                updated_content = file_content.replace(old_content, new_content, 1)
-
-                with open(path, "w", encoding="utf-8") as f:
-                    f.write(updated_content)
-                return f"Successfully replaced content in {path}"
-
             elif action == "list_dir":
                 return "\n".join(os.listdir(path))
             else:
                 return f"Unsupported file_editor action: {action}"
         except Exception as e:
             return f"File operation failed: {str(e)}"
-            
+
     elif tool_name == "run_bash":
         cmd = tool_args.get("command", "")
         # 在沙盒/Docker中执行命令
         result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
         return f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
-
-
 
     return f"Unknown tool: {tool_name}"
 
@@ -118,7 +82,7 @@ def run_agent_loop(demand_id: str, system_prompt: str) -> bool:
     session = SESSION_STORE.get(demand_id)
     if not session:
         return False
-    
+
     while True:
         print(f"\n[Agent] 正在思考 (Demand: {demand_id}, Provider: {session['provider']})...")
 
@@ -138,16 +102,16 @@ def run_agent_loop(demand_id: str, system_prompt: str) -> bool:
                         "summary": tool_args.get("summary", ""),
                         "design_doc": tool_args.get("design_doc", "")
                     }
-                    webhook_url = os.getenv("LARK_WEBHOOK_URL")
-                    if webhook_url:
+                    chat_id = os.getenv("LARK_CHAT_ID")
+                    if chat_id:
                         send_lark_card(
-                            webhook_url,
+                            chat_id,
                             demand_id,
                             session["pending_approval"]["summary"],
                             session["pending_approval"]["design_doc"]
                         )
                     else:
-                        print("  [Warning] 未配置 LARK_WEBHOOK_URL，跳过发送飞书卡片")
+                        print("  [Warning] 未配置 LARK_CHAT_ID，跳过发送飞书卡片")
                     return False
 
                 # 常规工具执行
@@ -169,15 +133,14 @@ def start_new_demand(demand_id: str, requirement: str):
     入口：飞书多维表格录入新需求，触发 Pipeline
     """
     print(f"========== 启动需求 {demand_id} ==========")
-    # Provider 选择与 SDK client 初始化统一交给 llm_adapter，engine 只负责编排阶段流转。
     provider = get_provider_name()
     client = build_client(provider)
     SESSION_STORE[demand_id] = initialize_session(provider, f"新需求：{requirement}", client)
-    
+
     # 进入 Phase 1: Design
     system_prompt = load_prompt("phase1_design.md")
     completed = run_agent_loop(demand_id, system_prompt)
-    
+
     if not completed:
         print(f"========== 需求 {demand_id} 已挂起，等待人类审批 ==========")
 
@@ -208,27 +171,27 @@ def resume_after_approval(demand_id: str, approved: bool, feedback: str):
         feedback
     )
     session["pending_approval"] = None
-    
+
     if approved:
         # 进入 Phase 2: Coding
         print(">> 进入 Phase 2: Coding")
         system_prompt = load_prompt("phase2_coding.md")
         completed = run_agent_loop(demand_id, system_prompt)
-        
+
         if completed:
             # 自动进入 Phase 3: Test
             print(">> 进入 Phase 3: Test")
             append_user_text(session, "编码已完成，请开始编写测试用例并运行测试。")
             system_prompt = load_prompt("phase3_test.md")
             test_completed = run_agent_loop(demand_id, system_prompt)
-            
+
             if test_completed:
                 # 自动进入 Phase 4: Review
                 print(">> 进入 Phase 4: Review")
                 append_user_text(session, "测试已通过，请作为 Code Reviewer 进行最终的代码审查，并修复任何不符合规范的代码。")
                 system_prompt = load_prompt("phase4_review.md")
                 review_completed = run_agent_loop(demand_id, system_prompt)
-                
+
                 if review_completed:
                     print(f"========== 需求 {demand_id} 全部流程结束，准备部署 ==========")
                     deploy_app(demand_id)
@@ -247,35 +210,35 @@ def deploy_app(demand_id: str):
     """
     print(">> 开始 Docker 部署...")
     app_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "demo-app"))
-    
+
     # 1. 如果 AI 没有写 Dockerfile，我们帮它生成一个极简版的
     dockerfile_path = os.path.join(app_dir, "Dockerfile")
     if not os.path.exists(dockerfile_path):
         with open(dockerfile_path, "w") as f:
             f.write("FROM golang:1.21-alpine\nWORKDIR /app\nCOPY . .\nRUN go mod tidy && go build -o main .\nCMD [\"/app/main\"]\nEXPOSE 8080")
-            
+
     try:
         # 2. 构建镜像
         print("   正在构建镜像 demo-app:latest...")
         subprocess.run(["docker", "build", "-t", "demo-app", "."], cwd=app_dir, check=True)
-        
+
         # 3. 停止旧容器（如果存在）
         subprocess.run(["docker", "rm", "-f", "demo-app-container"], stderr=subprocess.DEVNULL)
-        
+
         # 4. 运行新容器
         print("   正在启动容器 demo-app-container (端口 8080)...")
         subprocess.run(["docker", "run", "-d", "--name", "demo-app-container", "-p", "8080:8080", "demo-app"], check=True)
-        
+
         print(">> 部署成功！")
-        webhook_url = os.getenv("LARK_WEBHOOK_URL")
-        if webhook_url:
-            send_lark_text(webhook_url, f"🎉 需求 {demand_id} 部署成功！\n测试环境已就绪，体验地址：http://localhost:8080")
-            
+        chat_id = os.getenv("LARK_CHAT_ID")
+        if chat_id:
+            send_lark_text(chat_id, f"🎉 需求 {demand_id} 部署成功！\n测试环境已就绪，体验地址：http://localhost:8080")
+
     except subprocess.CalledProcessError as e:
         print(f">> 部署失败: {e}")
-        webhook_url = os.getenv("LARK_WEBHOOK_URL")
-        if webhook_url:
-            send_lark_text(webhook_url, f"❌ 需求 {demand_id} 部署失败，请检查构建日志。")
+        chat_id = os.getenv("LARK_CHAT_ID")
+        if chat_id:
+            send_lark_text(chat_id, f"❌ 需求 {demand_id} 部署失败，请检查构建日志。")
 
 # ==========================================
 # 测试入口 (模拟运行)
@@ -283,7 +246,6 @@ def deploy_app(demand_id: str):
 if __name__ == "__main__":
     # 模拟飞书收到新需求
     start_new_demand("DEMAND-001", "在 users 表中增加一个 age 字段，并提供一个 HTTP 接口来更新用户的 age。")
-    
-    # 模拟用户在飞书点击了“同意”
+
+    # 模拟用户在飞书点击了"同意"
     # resume_after_approval("DEMAND-001", True, "设计合理，同意进入开发阶段。")
-    
