@@ -131,7 +131,7 @@ def send_lark_text(receive_id: str, text: str):
         f"https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type={_receive_id_type()}",
         headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
         json={
-            "receive_id": chat_id,
+            "receive_id": receive_id,
             "msg_type": "text",
             "content": json.dumps({"text": text}),
         },
