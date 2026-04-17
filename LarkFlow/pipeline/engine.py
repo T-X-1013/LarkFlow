@@ -102,16 +102,17 @@ def run_agent_loop(demand_id: str, system_prompt: str) -> bool:
                         "summary": tool_args.get("summary", ""),
                         "design_doc": tool_args.get("design_doc", "")
                     }
-                    chat_id = os.getenv("LARK_CHAT_ID")
-                    if chat_id:
+                    
+                    lark_target = os.getenv("LARK_CHAT_ID") or os.getenv("LARK_WEBHOOK_URL")
+                    if lark_target:
                         send_lark_card(
-                            chat_id,
+                            lark_target,
                             demand_id,
                             session["pending_approval"]["summary"],
                             session["pending_approval"]["design_doc"]
                         )
                     else:
-                        print("  [Warning] 未配置 LARK_CHAT_ID，跳过发送飞书卡片")
+                        print("  [Warning] 未配置 LARK_CHAT_ID 或 LARK_WEBHOOK_URL，跳过发送飞书卡片")
                     return False
 
                 # 常规工具执行
@@ -217,28 +218,28 @@ def deploy_app(demand_id: str):
         with open(dockerfile_path, "w") as f:
             f.write("FROM golang:1.21-alpine\nWORKDIR /app\nCOPY . .\nRUN go mod tidy && go build -o main .\nCMD [\"/app/main\"]\nEXPOSE 8080")
 
-    try:
-        # 2. 构建镜像
-        print("   正在构建镜像 demo-app:latest...")
-        subprocess.run(["docker", "build", "-t", "demo-app", "."], cwd=app_dir, check=True)
-
-        # 3. 停止旧容器（如果存在）
-        subprocess.run(["docker", "rm", "-f", "demo-app-container"], stderr=subprocess.DEVNULL)
-
-        # 4. 运行新容器
-        print("   正在启动容器 demo-app-container (端口 8080)...")
-        subprocess.run(["docker", "run", "-d", "--name", "demo-app-container", "-p", "8080:8080", "demo-app"], check=True)
-
-        print(">> 部署成功！")
-        chat_id = os.getenv("LARK_CHAT_ID")
-        if chat_id:
-            send_lark_text(chat_id, f"🎉 需求 {demand_id} 部署成功！\n测试环境已就绪，体验地址：http://localhost:8080")
-
-    except subprocess.CalledProcessError as e:
-        print(f">> 部署失败: {e}")
-        chat_id = os.getenv("LARK_CHAT_ID")
-        if chat_id:
-            send_lark_text(chat_id, f"❌ 需求 {demand_id} 部署失败，请检查构建日志。")
+        try:
+            # 2. 构建镜像
+            print("   正在构建镜像 demo-app:latest...")
+            subprocess.run(["docker", "build", "-t", "demo-app", "."], cwd=app_dir, check=True)
+            
+            # 3. 停止旧容器（如果存在）
+            subprocess.run(["docker", "rm", "-f", "demo-app-container"], stderr=subprocess.DEVNULL)
+            
+            # 4. 运行新容器
+            print("   正在启动容器 demo-app-container (端口 8080)...")
+            subprocess.run(["docker", "run", "-d", "--name", "demo-app-container", "-p", "8080:8080", "demo-app"], check=True)
+            
+            print(">> 部署成功！")
+            lark_target = os.getenv("LARK_CHAT_ID") or os.getenv("LARK_WEBHOOK_URL")
+            if lark_target:
+                send_lark_text(lark_target, f"🎉 需求 {demand_id} 部署成功！\n测试环境已就绪，体验地址：http://localhost:8080")
+                
+        except subprocess.CalledProcessError as e:
+            print(f">> 部署失败: {e}")
+            lark_target = os.getenv("LARK_CHAT_ID") or os.getenv("LARK_WEBHOOK_URL")
+            if lark_target:
+                send_lark_text(lark_target, f"❌ 需求 {demand_id} 部署失败，请检查构建日志。")
 
 # ==========================================
 # 测试入口 (模拟运行)

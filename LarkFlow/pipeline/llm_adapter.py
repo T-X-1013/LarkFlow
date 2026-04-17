@@ -162,7 +162,6 @@ def _create_openai_turn(session: Dict[str, Any], client: Any, system_prompt: str
     state = session["provider_state"]
     pending_inputs = state.pop("pending_inputs", [])
     model_name = os.getenv("OPENAI_MODEL", "gpt-5-codex")
-    reasoning_effort = os.getenv("OPENAI_REASONING_EFFORT", "medium")
 
     request_args = {
         "model": model_name,
@@ -170,8 +169,12 @@ def _create_openai_turn(session: Dict[str, Any], client: Any, system_prompt: str
         "input": pending_inputs,
         "tools": get_openai_tools(),
         "max_output_tokens": 4096,
-        "reasoning": {"effort": reasoning_effort}
     }
+
+    if _model_supports_reasoning(model_name):
+        reasoning_effort = os.getenv("OPENAI_REASONING_EFFORT", "medium").strip()
+        if reasoning_effort:
+            request_args["reasoning"] = {"effort": reasoning_effort}
 
     if state.get("previous_response_id"):
         request_args["previous_response_id"] = state["previous_response_id"]
@@ -212,6 +215,11 @@ def _create_openai_turn(session: Dict[str, Any], client: Any, system_prompt: str
         finished=len(tool_calls) == 0,
         raw_response=response
     )
+
+
+def _model_supports_reasoning(model_name: str) -> bool:
+    name = (model_name or "").lower()
+    return name.startswith(("gpt-5", "o1", "o3", "o4"))
 
 
 def _extract_openai_message_text(message: Any) -> List[str]:
