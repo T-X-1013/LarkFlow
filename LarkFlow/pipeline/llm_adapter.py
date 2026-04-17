@@ -1,5 +1,7 @@
 import json
 import os
+import re
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, List
 
@@ -164,7 +166,7 @@ def _create_anthropic_turn(session: Dict[str, Any], client: Any, system_prompt: 
 
 def _create_openai_turn(session: Dict[str, Any], client: Any, system_prompt: str) -> AgentTurn:
     state = session["provider_state"]
-    pending_inputs = state.pop("pending_inputs", [])
+    pending_inputs = list(state.get("pending_inputs", []))
     model_name = os.getenv("OPENAI_MODEL", "gpt-5-codex")
 
     # OpenAI 侧统一走 Responses API；如果存在 previous_response_id，则继续同一条响应链。
@@ -184,7 +186,8 @@ def _create_openai_turn(session: Dict[str, Any], client: Any, system_prompt: str
     if state.get("previous_response_id"):
         request_args["previous_response_id"] = state["previous_response_id"]
 
-    response = client.responses.create(**request_args)
+    response = _create_openai_response_with_retry(client, request_args, model_name)
+    state["pending_inputs"] = []
     state["previous_response_id"] = response.id
 
     text_blocks = []
@@ -227,6 +230,31 @@ def _model_supports_reasoning(model_name: str) -> bool:
     return name.startswith(("gpt-5", "o1", "o3", "o4"))
 
 
+def _create_openai_response_with_retry(client: Any, request_args: Dict[str, Any], model_name: str) -> Any:
+    from openai import RateLimitError
+
+    max_retries = int(os.getenv("OPENAI_MAX_RETRIES", "3"))
+    base_delay = float(os.getenv("OPENAI_RETRY_BASE_SECONDS", "5"))
+    max_delay = float(os.getenv("OPENAI_RETRY_MAX_SECONDS", "60"))
+
+    for attempt in range(max_retries + 1):
+        try:
+            return client.responses.create(**request_args)
+        except RateLimitError as exc:
+            if attempt >= max_retries:
+                raise
+
+            retry_after = _extract_retry_after_seconds(str(exc))
+            backoff_delay = min(base_delay * (2 ** attempt), max_delay)
+            sleep_seconds = min(max(retry_after, backoff_delay), max_delay)
+            print(
+                f"[LLM] OpenAI rate limited for model {model_name}; "
+                f"retrying in {sleep_seconds:.1f}s "
+                f"({attempt + 1}/{max_retries})"
+            )
+            time.sleep(sleep_seconds)
+
+
 def _extract_openai_message_text(message: Any) -> List[str]:
     texts = []
     for content_item in getattr(message, "content", []):
@@ -243,3 +271,14 @@ def _safe_json_loads(raw: str) -> dict:
         return json.loads(raw)
     except json.JSONDecodeError:
         return {"raw_arguments": raw}
+
+
+def _extract_retry_after_seconds(error_text: str) -> float:
+    match = re.search(r"Please try again in ([0-9.]+)s", error_text)
+    if not match:
+        return 0.0
+
+    try:
+        return float(match.group(1))
+    except ValueError:
+        return 0.0

@@ -1,6 +1,7 @@
 import os
 import sys
 import subprocess
+import time
 from typing import Dict, Any
 
 # 将项目根目录加入 sys.path，解决直接运行脚本时的模块导入问题
@@ -69,6 +70,97 @@ def execute_local_tool(tool_name: str, tool_args: dict) -> str:
         return f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
 
     return f"Unknown tool: {tool_name}"
+
+
+def _run_checked_command(command: list, cwd: str = None) -> subprocess.CompletedProcess:
+    """执行命令并在失败时保留 stdout/stderr，便于分类部署错误。"""
+    result = subprocess.run(command, cwd=cwd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise subprocess.CalledProcessError(
+            result.returncode,
+            command,
+            output=result.stdout,
+            stderr=result.stderr,
+        )
+    return result
+
+
+def _collect_process_output(exc: subprocess.CalledProcessError) -> str:
+    parts = []
+    if exc.output:
+        parts.append(exc.output.strip())
+    if exc.stderr:
+        parts.append(exc.stderr.strip())
+    return "\n".join(part for part in parts if part).strip()
+
+
+def _tail_text(text: str, max_lines: int = 20) -> str:
+    lines = [line for line in (text or "").splitlines() if line.strip()]
+    if not lines:
+        return ""
+    return "\n".join(lines[-max_lines:])
+
+
+def _classify_deploy_failure(stage: str, details: str) -> str:
+    text = (details or "").lower()
+
+    if (
+        "failed to fetch anonymous token" in text
+        or "auth.docker.io" in text
+        or "registry.docker.io" in text
+        or "deadlineexceeded" in text
+        or "i/o timeout" in text
+    ):
+        return "Docker 外网访问失败，基础镜像或仓库元数据拉取超时。"
+
+    if "apk add" in text and ("temporary error" in text or "fetch " in text):
+        return "Alpine 软件源访问失败，构建依赖安装未完成。"
+
+    if "go mod download" in text or "go mod tidy" in text:
+        return "Go 依赖下载失败。"
+
+    if "requires go >=" in text:
+        return "Go 版本与项目要求不匹配。"
+
+    if "go build" in text or "build failed" in text:
+        return "Go 编译失败。"
+
+    if "requires cgo to work" in text or "cgo_enabled=0" in text:
+        return "SQLite 驱动依赖 CGO，但当前镜像未正确启用。"
+
+    if stage == "docker run":
+        return "容器启动命令执行失败。"
+
+    if stage == "container health":
+        return "容器已启动但应用很快退出。"
+
+    return f"{stage} 失败。"
+
+
+def _inspect_container_failure(container_name: str) -> str:
+    """检查容器是否立即退出；若已退出则返回带分类的错误信息。"""
+    time.sleep(2)
+
+    inspect_result = _run_checked_command(
+        ["docker", "inspect", "-f", "{{.State.Status}}", container_name]
+    )
+    status = inspect_result.stdout.strip()
+    if status == "running":
+        return ""
+
+    logs_result = subprocess.run(
+        ["docker", "logs", container_name],
+        capture_output=True,
+        text=True,
+    )
+    log_text = "\n".join(
+        part.strip() for part in [logs_result.stdout, logs_result.stderr] if part and part.strip()
+    )
+    reason = _classify_deploy_failure("container health", log_text)
+    detail = _tail_text(log_text)
+    if detail:
+        return f"{reason}\n最近日志:\n{detail}"
+    return reason
 
 
 # ==========================================
@@ -216,19 +308,42 @@ def deploy_app(demand_id: str):
     dockerfile_path = os.path.join(app_dir, "Dockerfile")
     if not os.path.exists(dockerfile_path):
         with open(dockerfile_path, "w") as f:
-            f.write("FROM golang:1.22-alpine\nWORKDIR /app\nCOPY . .\nRUN go mod tidy && go build -o main .\nCMD [\"/app/main\"]\nEXPOSE 8080")
+            f.write(
+                "FROM golang:1.22-alpine AS builder\n\n"
+                "RUN apk add --no-cache build-base\n\n"
+                "WORKDIR /src\n\n"
+                "COPY go.mod go.sum ./\n"
+                "RUN go mod download\n\n"
+                "COPY . .\n\n"
+                "RUN CGO_ENABLED=1 GOOS=linux go build -o /out/main .\n\n"
+                "FROM golang:1.22-alpine\n\n"
+                "WORKDIR /app\n\n"
+                "COPY --from=builder /out/main /app/main\n\n"
+                "EXPOSE 8080\n\n"
+                "CMD [\"/app/main\"]\n"
+            )
 
     try:
         # 2. 构建镜像
         print("   正在构建镜像 demo-app:latest...")
-        subprocess.run(["docker", "build", "-t", "demo-app", "."], cwd=app_dir, check=True)
+        _run_checked_command(["docker", "build", "-t", "demo-app", "."], cwd=app_dir)
 
         # 3. 停止旧容器（如果存在）
-        subprocess.run(["docker", "rm", "-f", "demo-app-container"], stderr=subprocess.DEVNULL)
+        subprocess.run(["docker", "rm", "-f", "demo-app-container"], capture_output=True, text=True)
 
         # 4. 运行新容器
         print("   正在启动容器 demo-app-container (端口 8080)...")
-        subprocess.run(["docker", "run", "-d", "--name", "demo-app-container", "-p", "8080:8080", "demo-app"], check=True)
+        run_result = _run_checked_command(
+            ["docker", "run", "-d", "--name", "demo-app-container", "-p", "8080:8080", "demo-app"]
+        )
+
+        container_id = run_result.stdout.strip()
+        if container_id:
+            print(f"   容器已创建: {container_id}")
+
+        container_failure = _inspect_container_failure("demo-app-container")
+        if container_failure:
+            raise RuntimeError(container_failure)
 
         print(">> 部署成功！")
         lark_target = os.getenv("LARK_CHAT_ID") or os.getenv("LARK_WEBHOOK_URL")
@@ -236,10 +351,21 @@ def deploy_app(demand_id: str):
             send_lark_text(lark_target, f"🎉 需求 {demand_id} 部署成功！\n测试环境已就绪，体验地址：http://localhost:8080")
 
     except subprocess.CalledProcessError as e:
-        print(f">> 部署失败: {e}")
+        command_name = " ".join(e.cmd[:2]) if isinstance(e.cmd, (list, tuple)) and len(e.cmd) >= 2 else str(e.cmd)
+        details = _collect_process_output(e)
+        reason = _classify_deploy_failure(command_name, details)
+        print(f">> 部署失败: {reason}")
+        if details:
+            print(_tail_text(details))
         lark_target = os.getenv("LARK_CHAT_ID") or os.getenv("LARK_WEBHOOK_URL")
         if lark_target:
-            send_lark_text(lark_target, f"❌ 需求 {demand_id} 部署失败，请检查构建日志。")
+            send_lark_text(lark_target, f"❌ 需求 {demand_id} 部署失败：{reason}")
+    except RuntimeError as e:
+        reason = str(e)
+        print(f">> 部署失败: {reason}")
+        lark_target = os.getenv("LARK_CHAT_ID") or os.getenv("LARK_WEBHOOK_URL")
+        if lark_target:
+            send_lark_text(lark_target, f"❌ 需求 {demand_id} 部署失败：{reason}")
 
 # ==========================================
 # 测试入口 (模拟运行)

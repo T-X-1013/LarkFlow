@@ -223,10 +223,10 @@ async def lark_webhook(request: Request):
     # 3. 兼容 V1 和 V2 格式的卡片回调解析
     action_data = data.get("action") or data.get("event", {}).get("action") or {}
     
-    # 忽略飞书推送的其他事件（比如机器人进群、有人@机器人等）
-    # 这些事件的 header.event_type 通常是 im.chat.xxx
-    if data.get("header", {}).get("event_type"):
-        event_type = data.get("header").get("event_type")
+    # 忽略飞书推送的其他事件（比如机器人进群、有人@机器人等），
+    # 但必须放行真正的卡片点击事件 card.action.trigger。
+    event_type = data.get("header", {}).get("event_type")
+    if event_type and event_type != "card.action.trigger":
         print(f"[Webhook] 忽略非卡片点击事件: {event_type}")
         return {"code": 0, "msg": "ignored"}
         
