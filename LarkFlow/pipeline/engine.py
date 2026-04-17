@@ -216,30 +216,30 @@ def deploy_app(demand_id: str):
     dockerfile_path = os.path.join(app_dir, "Dockerfile")
     if not os.path.exists(dockerfile_path):
         with open(dockerfile_path, "w") as f:
-            f.write("FROM golang:1.21-alpine\nWORKDIR /app\nCOPY . .\nRUN go mod tidy && go build -o main .\nCMD [\"/app/main\"]\nEXPOSE 8080")
+            f.write("FROM golang:1.22-alpine\nWORKDIR /app\nCOPY . .\nRUN go mod tidy && go build -o main .\nCMD [\"/app/main\"]\nEXPOSE 8080")
 
-        try:
-            # 2. 构建镜像
-            print("   正在构建镜像 demo-app:latest...")
-            subprocess.run(["docker", "build", "-t", "demo-app", "."], cwd=app_dir, check=True)
-            
-            # 3. 停止旧容器（如果存在）
-            subprocess.run(["docker", "rm", "-f", "demo-app-container"], stderr=subprocess.DEVNULL)
-            
-            # 4. 运行新容器
-            print("   正在启动容器 demo-app-container (端口 8080)...")
-            subprocess.run(["docker", "run", "-d", "--name", "demo-app-container", "-p", "8080:8080", "demo-app"], check=True)
-            
-            print(">> 部署成功！")
-            lark_target = os.getenv("LARK_CHAT_ID") or os.getenv("LARK_WEBHOOK_URL")
-            if lark_target:
-                send_lark_text(lark_target, f"🎉 需求 {demand_id} 部署成功！\n测试环境已就绪，体验地址：http://localhost:8080")
-                
-        except subprocess.CalledProcessError as e:
-            print(f">> 部署失败: {e}")
-            lark_target = os.getenv("LARK_CHAT_ID") or os.getenv("LARK_WEBHOOK_URL")
-            if lark_target:
-                send_lark_text(lark_target, f"❌ 需求 {demand_id} 部署失败，请检查构建日志。")
+    try:
+        # 2. 构建镜像
+        print("   正在构建镜像 demo-app:latest...")
+        subprocess.run(["docker", "build", "-t", "demo-app", "."], cwd=app_dir, check=True)
+
+        # 3. 停止旧容器（如果存在）
+        subprocess.run(["docker", "rm", "-f", "demo-app-container"], stderr=subprocess.DEVNULL)
+
+        # 4. 运行新容器
+        print("   正在启动容器 demo-app-container (端口 8080)...")
+        subprocess.run(["docker", "run", "-d", "--name", "demo-app-container", "-p", "8080:8080", "demo-app"], check=True)
+
+        print(">> 部署成功！")
+        lark_target = os.getenv("LARK_CHAT_ID") or os.getenv("LARK_WEBHOOK_URL")
+        if lark_target:
+            send_lark_text(lark_target, f"🎉 需求 {demand_id} 部署成功！\n测试环境已就绪，体验地址：http://localhost:8080")
+
+    except subprocess.CalledProcessError as e:
+        print(f">> 部署失败: {e}")
+        lark_target = os.getenv("LARK_CHAT_ID") or os.getenv("LARK_WEBHOOK_URL")
+        if lark_target:
+            send_lark_text(lark_target, f"❌ 需求 {demand_id} 部署失败，请检查构建日志。")
 
 # ==========================================
 # 测试入口 (模拟运行)
