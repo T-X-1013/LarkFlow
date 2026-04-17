@@ -1,43 +1,51 @@
-# LarkFlow
+# LarkFlow Framework v1.0
 
-LarkFlow 是一个面向 Go 后端研发场景的无头多 Agent 工作流引擎。它用 Python Pipeline 串联设计、编码、测试、审查和部署阶段，并通过飞书卡片把“AI 先设计、人类审批、再进入实现”这条链路跑通。
+LarkFlow 已经从一个依赖本地 IDE 插件的工具，进化为一个**完全无头（Headless）、基于多智能体（Multi-Agent）协作的自动化研发工作流引擎**。
 
-当前仓库里有两个核心部分：
+[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](https://github.com/your-repo/larkflow)
+[![Architecture](https://img.shields.io/badge/architecture-Multi--Agent-orange.svg)](#architecture)
 
-- `LarkFlow/`：工作流引擎本体，包含 Agent Prompt、规则库、技能库、LLM 适配层和飞书交互服务。
-- `demo-app/`：当前工作区里的示例 Go 服务，现有 Agent Prompt 和部署逻辑默认都把它当作目标工程。
+## 🚀 核心架构演进 (v1.0)
 
-## 项目现状
+> **Pipeline 是骨架，Agent 是肌肉，人类是大脑**
 
-这个仓库现在更适合被理解为“可跑通主流程的原型 / 实验框架”，而不是已经产品化的通用平台。代码已经具备以下主干能力：
-
+在 v1.0 版本中，我们实现一个**通用的、API 驱动的开源 Go 后端研发助手**。
+代码已经具备以下主干能力：
 - 支持 `Anthropic` 和 `OpenAI` 两种 LLM Provider。
 - 通过四阶段 Agent Prompt 驱动需求设计、编码、测试和审查。
 - 通过飞书交互卡片挂起审批，再由 Webhook 恢复流程。
 - 能把设计规范拆分为 `rules/` 和 `skills/`，让编码 Agent 按需读取。
 - 在流程结束后，默认尝试对 `demo-app/` 执行 Docker 构建和启动。
 
-同时也有一些当前限制：
+### 1. 整体流转架构
 
-- `mock_db` 仍然只是演示用假实现，不会真正访问数据库。
-- 会话状态保存在进程内存里，重启后会丢失。
-- Python 引擎目录和仓库根目录是分离的，运行命令时需要明确工作目录。
-- 部分辅助文档还没有完全跟上当前代码，本文档已按当前工作区实际情况重写。
+```mermaid
+graph TD
+    subgraph 飞书生态
+        A[多维表格: 录入新需求] --> B
+        H[消息卡片: 人类大脑审批] -.->|点击同意/驳回| I(唤醒 Pipeline)
+    end
 
-## 流程概览
-
-```text
-新需求 -> Phase 1 设计 -> 飞书审批 -> Phase 2 编码 -> Phase 3 测试 -> Phase 4 审查 -> Docker 部署 demo-app
+    subgraph lfe["LarkFlow 核心引擎 (Python Pipeline)"]
+        B[Pipeline启动: 接收需求] --> C{阶段1: Design}
+        C -->|注入 phase1_design.md| D[架构师 Agent]
+        D -.->|调用| T1[mock_db: 查询表结构]
+        D -->|调用 ask_human_approval| E((挂起等待))
+        E -.->|Webhook 触发| H
+        I --> F{阶段2: Coding}
+        F -->|注入 phase2_coding.md| J[高级开发 Agent]
+        J -.->|主动查阅| R[rules/ & skills/ 知识库]
+        J -.->|调用| T2[file_editor: 读写项目代码]
+        J --> L{阶段3: Test}
+        L -->|注入 phase3_test.md| M[测试 Agent]
+        M -.->|调用| T3[run_bash: go test ./...]
+        M --> O{阶段4: Review}
+        O -->|注入 phase4_review.md| P[代码审查 Agent]
+        P --> N[流转完成: 准备部署]
+    end
 ```
 
-对应代码入口：
-
-- 需求状态机：`LarkFlow/pipeline/engine.py`
-- 飞书 Webhook 服务：`LarkFlow/pipeline/lark_interaction.py`
-- 模型适配层：`LarkFlow/pipeline/llm_adapter.py`
-- 工具 Schema：`LarkFlow/pipeline/tools_schema.py`
-
-## 目录结构
+### 2. 目录结构
 
 ```text
 .
@@ -109,125 +117,77 @@ LarkFlow 是一个面向 Go 后端研发场景的无头多 Agent 工作流引擎
 - 读取飞书文档链接内容
 - 唤醒已挂起的 Pipeline
 
-## demo-app 说明
-
-当前工作区中的 `demo-app/` 已经是一个可测试的 Go 示例服务，不再只是空目录。它目前实现了一个最小用户年龄更新流程：
-
-- HTTP 接口：`PUT /users/:id/age`
-- 配置入口：`demo-app/internal/config/config.go`
-- Handler / Service / Repository 分层
-- SQLite 持久化
-- 迁移脚本：`demo-app/db/migrations/001_add_age_to_users.sql`
-- 多个单元测试文件
-
-默认配置来自环境变量：
-
-- `HTTP_ADDR`，默认 `:8080`
-- `SQLITE_DSN`，默认 `file:demo.db?cache=shared&_foreign_keys=on`
-
 ## 快速开始
 
-### 1. 安装 Python 依赖
+### 1. 环境准备
 
-在仓库根目录执行：
+确保你已经安装了 Python 3.9+，并配置了可用的 LLM API Key（Anthropic 或 OpenAI）。
 
 ```bash
-cd LarkFlow
+# 克隆仓库
+git clone https://github.com/your-repo/larkflow.git
+cd larkflow
+
+# 创建虚拟环境
 python3 -m venv venv
 source venv/bin/activate
+
+# 安装依赖
 pip install -r requirements.txt
 ```
 
 ### 2. 配置环境变量
 
-复制并编辑 `LarkFlow/.env.example`：
-
-```bash
-cd LarkFlow
-cp .env.example .env
-```
-
-核心变量如下：
+在 `LarkFlow/` 目录下创建 `.env` 文件（可参考 `.env.example`）：
 
 ```env
 LLM_PROVIDER=anthropic
+LARK_WEBHOOK_URL=https://open.feishu.cn/open-apis/bot/v2/hook/...
 
+# 飞书应用机器人 (Bot API)
 LARK_APP_ID=cli_xxx
 LARK_APP_SECRET=xxx
 LARK_CHAT_ID=ou_xxx
-LARK_RECEIVE_ID_TYPE=open_id
 
+# Claude / Anthropic
 ANTHROPIC_API_KEY=sk-ant-api03-...
 ANTHROPIC_AUTH_TOKEN=
 ANTHROPIC_BASE_URL=
 ANTHROPIC_MODEL=claude-sonnet-4-6
 
+# Codex / OpenAI
 OPENAI_API_KEY=sk-...
 OPENAI_BASE_URL=https://api.openai.com/v1
 OPENAI_MODEL=gpt-5-codex
 OPENAI_REASONING_EFFORT=medium
 ```
 
-补充说明：
+- 当 `LLM_PROVIDER=anthropic` 时，Pipeline 使用 Claude / Anthropic SDK。
+- 当 `LLM_PROVIDER=openai` 时，Pipeline 使用 OpenAI Responses API。
 
-- `LLM_PROVIDER` 只能是 `anthropic` 或 `openai`。
-- 如果你不用飞书开放平台发消息给 `open_id` / `chat_id`，也可以在本地环境中补充 `LARK_WEBHOOK_URL` 作为群机器人 webhook。
-- 如果需求是飞书文档链接，读取文档内容时要求应用具备对应文档权限。
+### 3. 运行 Pipeline
 
-### 3. 启动方式
-
-本项目有两种常用启动方式。
-
-本地模拟一个需求全流程：
+你可以直接运行引擎脚本来模拟一个需求的完整生命周期：
 
 ```bash
-cd LarkFlow
 python pipeline/engine.py
 ```
 
-启动 FastAPI Webhook 服务：
+或者启动 FastAPI 服务来接收真实的飞书 Webhook：
 
 ```bash
-cd LarkFlow
 uvicorn pipeline.lark_interaction:app --host 0.0.0.0 --port 8000
 ```
 
-注意：
+---
 
-- `pipeline/engine.py` 里的 `SESSION_STORE` 是进程内内存存储，只适合本地演示或单进程实验。
-- 如果你从仓库根目录直接运行 Python 模块，路径相对关系容易出错，建议始终先 `cd LarkFlow`。
+## 核心特性：按需检索 (RAG) 知识库
 
-## 常用验证命令
+LarkFlow v1.0 最精华的知识库架构。AI 在写代码前，会强制读取 `rules/skill-routing.md` 路由表。
 
-验证 Python 依赖安装和入口是否可用：
+例如，当需求包含“Redis 缓存”时，AI 会自动调用 `file_editor` 工具读取 `skills/redis.md`，学习团队规定的 Pipeline 批量操作和过期时间规范，从而写出完全符合团队标准的代码。这极大地降低了 Token 消耗并消除了 AI 幻觉。
 
-```bash
-cd LarkFlow
-python -m py_compile pipeline/engine.py pipeline/lark_interaction.py pipeline/llm_adapter.py
-```
-
-验证示例 Go 服务：
-
-```bash
-cd demo-app
-go test ./...
-```
-
-本地启动示例服务：
-
-```bash
-cd demo-app
-go run .
-```
-
-## 当前推荐的使用方式
-
-如果你是第一次接手这个仓库，建议按下面顺序理解：
-
-1. 先看 `README.md`，明确仓库根目录和 `LarkFlow/` 子目录的关系。
-2. 再看 `LarkFlow/LarkFlow.md`，快速理解模块职责。
-3. 然后读 `LarkFlow/pipeline/engine.py` 和 `LarkFlow/pipeline/llm_adapter.py`，掌握主流程和 Provider 适配方式。
-4. 最后再看 `agents/`、`rules/`、`skills/`，理解 Agent 是如何被约束的。
+---
 
 ## 已知问题
 
@@ -242,3 +202,11 @@ go run .
 - `LarkFlow/LarkFlow.md`：引擎模块速览。
 - `LarkFlow/CHANGELOG.md`：版本变更记录。
 - `LarkFlow/LOCAL_ISSUES_TRACKER.md`：本地问题跟踪，含部分历史结论，阅读时要以当前代码为准。
+
+## 🔮 未来展望
+
+本框架具备极强的可扩展性与业务适应能力：
+- **规范无缝迁移**：未来可轻松接入并适配各公司内部的专属中间件规范与代码风格指南。
+- **基建深度打通**：支持通过内部 MCP (Model Context Protocol) 协议，直连生产/测试环境的数据库、缓存及配置中心。
+- **CI/CD 自动化闭环**：可直接对接自动化部署流水线，实现测试环境的一键部署，并将详尽的自动化测试报告与运行效果实时回传至飞书卡片。
+- **加入业务规则代码**：轻松加入业务规则代码，更加简单的写业务
