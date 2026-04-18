@@ -8,6 +8,8 @@ def build_approval_card(demand_id: str, summary: str, design_doc: str) -> dict:
     """
     构建飞书交互式消息卡片 JSON
     """
+    # todo 目前文档的展示超过500就被截断了，用户观感不好，后续需要优化
+    # todo 目前“同意并进入编码阶段”被多次点击后会产生多个请求，这会导致报错
     # 截断过长的设计文档，避免卡片超长
     display_doc = design_doc[:500] + "..." if len(design_doc) > 500 else design_doc
 
