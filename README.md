@@ -165,18 +165,28 @@ OPENAI_REASONING_EFFORT=medium
 - 当 `LLM_PROVIDER=anthropic` 时，Pipeline 使用 Claude / Anthropic SDK。
 - 当 `LLM_PROVIDER=openai` 时，Pipeline 使用 OpenAI Responses API。
 
-### 3. 运行 Pipeline
+### 3. 运行
 
-你可以直接运行引擎脚本来模拟一个需求的完整生命周期：
-
-```bash
-python pipeline/engine.py
-```
-
-或者启动 FastAPI 服务来接收真实的飞书 Webhook：
+启动 FastAPI 服务来接收真实的飞书 Webhook：
 
 ```bash
 uvicorn pipeline.lark_interaction:app --host 0.0.0.0 --port 8000
+```
+
+飞书webhook可以使用ngrok隧道地址；
+
+配置飞书机器人（事件和回调），并开通相关权限（表格，消息等）；
+
+通过飞书表格即可启动需求：
+
+![image-20260418163029819](/Users/liuhaha/Library/Application Support/typora-user-images/image-20260418163029819.png)
+
+### 4.简单测试
+
+简单测试：你可以直接运行引擎脚本来模拟一个需求的完整生命周期：（不会向飞书发送技术方案卡片）
+
+```bash
+python pipeline/engine.py
 ```
 
 ---
