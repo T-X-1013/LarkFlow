@@ -33,3 +33,6 @@ bin/
 *.dll
 *.so
 *.dylib
+
+# 内部协作文档（不提交）
+docs/ownership.md

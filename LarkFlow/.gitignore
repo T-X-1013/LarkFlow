@@ -16,6 +16,7 @@ env/
 # Logs
 logs/
 *.log
+docs/
 
 # OS generated files
 .DS_Store
