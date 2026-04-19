@@ -18,6 +18,7 @@ from pipeline.llm_adapter import (
     get_provider_name,
     initialize_session,
 )
+from pipeline.tools_runtime import ToolContext, execute as execute_local_tool
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -26,50 +27,13 @@ load_dotenv()
 SESSION_STORE: Dict[str, Dict[str, Any]] = {}
 
 # ==========================================
-# 1. 辅助函数：加载 Prompt 和 执行本地工具
+# 1. 辅助函数：加载 Prompt
 # ==========================================
 def load_prompt(phase_filename: str) -> str:
     """从 agents 目录加载 System Prompt"""
     path = os.path.join(os.path.dirname(__file__), "..", "agents", phase_filename)
     with open(path, "r", encoding="utf-8") as f:
         return f.read()
-
-def execute_local_tool(tool_name: str, tool_args: dict) -> str:
-    """
-    在本地或 Docker 容器中实际执行 Agent 调用的工具
-    """
-    print(f"  [Tool Execution] 正在执行 {tool_name}，参数: {tool_args}")
-
-    if tool_name == "mock_db":
-        query = tool_args.get("query", "")
-        # 这里可以接入真实的 MySQL/TiDB 查询逻辑
-        return f"Mock DB Result for '{query}': Table `users` has columns (id, name, created_at)."
-
-    elif tool_name == "file_editor":
-        action = tool_args.get("action")
-        path = os.path.join(os.path.dirname(__file__), "..", tool_args.get("path", ""))
-
-        try:
-            if action == "read":
-                with open(path, "r") as f: return f.read()
-            elif action == "write":
-                os.makedirs(os.path.dirname(path), exist_ok=True)
-                with open(path, "w") as f: f.write(tool_args.get("content", ""))
-                return f"Successfully wrote to {path}"
-            elif action == "list_dir":
-                return "\n".join(os.listdir(path))
-            else:
-                return f"Unsupported file_editor action: {action}"
-        except Exception as e:
-            return f"File operation failed: {str(e)}"
-
-    elif tool_name == "run_bash":
-        cmd = tool_args.get("command", "")
-        # 在沙盒/Docker中执行命令
-        result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-        return f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
-
-    return f"Unknown tool: {tool_name}"
 
 
 def _run_checked_command(command: list, cwd: str = None) -> subprocess.CompletedProcess:
@@ -208,7 +172,18 @@ def run_agent_loop(demand_id: str, system_prompt: str) -> bool:
                     return False
 
                 # 常规工具执行
-                result_text = execute_local_tool(tool_name, tool_args)
+                workspace_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+                target_dir = session.get(
+                    "target_dir",
+                    os.path.abspath(os.path.join(workspace_root, "..", "demo-app")),
+                )
+                tool_ctx = ToolContext(
+                    demand_id=demand_id,
+                    workspace_root=workspace_root,
+                    target_dir=target_dir,
+                    logger=session.get("logger"),
+                )
+                result_text = execute_local_tool(tool_name, tool_args, tool_ctx)
                 append_tool_result(session, tool_call, result_text)
 
         elif turn.finished:
