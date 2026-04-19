@@ -71,6 +71,14 @@ def _get_tool_specs() -> List[Dict[str, Any]]:
                     "command": {
                         "type": "string",
                         "description": "The bash command to run."
+                    },
+                    "cwd": {
+                        "type": "string",
+                        "description": "Optional working directory, resolved relative to the workspace root. If omitted, the command runs in the current target project directory."
+                    },
+                    "timeout": {
+                        "type": "integer",
+                        "description": "Optional timeout in seconds. Defaults to 60 and is capped at 300."
                     }
                 },
                 "required": ["command"]
