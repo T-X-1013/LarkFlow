@@ -27,3 +27,5 @@ These are the tools provided by the Pipeline for the LLM provider to call.
 - **Description**: Executes a bash command in the project's Docker container/sandbox. Useful for testing and building.
 - **Parameters**:
   - `command` (string): The bash command to run (e.g., `go test ./...`, `go mod tidy`).
+  - `cwd` (string, optional): The working directory, resolved relative to the workspace root. Defaults to the current target project directory.
+  - `timeout` (integer, optional): Timeout in seconds. Defaults to `60` and is capped at `300`.
