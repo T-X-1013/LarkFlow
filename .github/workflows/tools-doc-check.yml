@@ -41,4 +41,4 @@ jobs:
         run: python scripts/gen_tools_doc.py --check
 
       - name: Run tools doc tests
-        run: python -m unittest tests.test_tools_doc_generation
+        run: python -m unittest discover -s tests -p 'test_tools_doc_generation.py'
