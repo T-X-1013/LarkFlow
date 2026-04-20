@@ -10,5 +10,6 @@
 | Error, Exception, Wrap, fmt.Errorf, Sentinel Error | `skills/error.md` | Error handling, wrapping, and standard error definitions |
 | Goroutine, Concurrency, Async, WaitGroup, errgroup, Channel | `skills/concurrency.md` | Safe concurrency, avoiding goroutine leaks, context cancellation |
 | 订单, 下单, 支付, 购物车, Order, Payment, Checkout | `skills/biz/order.md` | 电商订单状态机、接口幂等性要求、防超卖库存扣减规范 |
+| Python, pipeline, tests, 注释, docstring, dataclass, 常量注释 | `skills/python-comments.md` | LarkFlow Python 代码的注释与 docstring 规范，覆盖 `pipeline/` 与 `tests/` |
 
 **Path Prefix**: `skills/` (relative to the workspace root)

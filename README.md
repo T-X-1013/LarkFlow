@@ -179,7 +179,7 @@ uvicorn pipeline.lark_interaction:app --host 0.0.0.0 --port 8000
 
 通过飞书表格即可启动需求：
 
-![image-20260418163029819](/Users/liuhaha/Library/Application Support/typora-user-images/image-20260418163029819.png)
+![image-20260418163029819](./image/image.png)
 
 ### 4.简单测试
 
