@@ -4,7 +4,7 @@ from typing import List, Dict, Any
 def _get_tool_specs() -> List[Dict[str, Any]]:
     return [
         {
-            "name": "mock_db",
+            "name": "inspect_db",
             "description": "Connects to the project's database to query schema or data. Use this to understand existing table structures before proposing changes.",
             "schema": {
                 "type": "object",
