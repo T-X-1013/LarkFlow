@@ -29,7 +29,7 @@ graph TD
     subgraph lfe["LarkFlow 核心引擎 (Python Pipeline)"]
         B[Pipeline启动: 接收需求] --> C{阶段1: Design}
         C -->|注入 phase1_design.md| D[架构师 Agent]
-        D -.->|调用| T1[mock_db: 查询表结构]
+        D -.->|调用| T1[inspect_db: 查询表结构]
         D -->|调用 ask_human_approval| E((挂起等待))
         E -.->|Webhook 触发| H
         I --> F{阶段2: Coding}
@@ -160,10 +160,17 @@ OPENAI_API_KEY=sk-...
 OPENAI_BASE_URL=https://api.openai.com/v1
 OPENAI_MODEL=gpt-5-codex
 OPENAI_REASONING_EFFORT=medium
+
+# Database
+DATABASE_URL=sqlite:///demo-app/app.db
+# DATABASE_URL=mysql://root:password@127.0.0.1:3306/larkflow_demo
+# DATABASE_URL=mysql+pymysql://root:password@127.0.0.1:3306/larkflow_demo
 ```
 
 - 当 `LLM_PROVIDER=anthropic` 时，Pipeline 使用 Claude / Anthropic SDK。
 - 当 `LLM_PROVIDER=openai` 时，Pipeline 使用 OpenAI Responses API。
+- `inspect_db` 依赖 `DATABASE_URL` 读取真实数据库 schema，目前支持 SQLite 和 MySQL，只允许只读查询。
+- 若要执行真实 MySQL 集成测试，可额外设置 `MYSQL_TEST_DATABASE_URL`，然后运行 `python -m unittest tests.test_inspect_db_mysql_integration`。
 
 ### 3. 运行
 
@@ -203,7 +210,7 @@ LarkFlow v1.0 最精华的知识库架构。AI 在写代码前，会强制读取
 
 按当前代码状态，以下问题仍然存在：
 
-- `mock_db` 只返回固定文本，设计阶段不能依赖它做真实 schema 判断。
+- `inspect_db` 目前仅支持 SQLite 和 MySQL；若后续引入其他数据库引擎，还需要继续补适配。
 - `file_editor` 的文档与工具 schema 提到了 `replace`，但当前 `engine.py` 运行时并没有实现这个动作。
 - `LarkFlow/Dockerfile` 里的启动命令仍然没有对齐当前 FastAPI 入口，容器化运行前需要先修正。
 

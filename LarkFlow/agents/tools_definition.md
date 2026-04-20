@@ -2,7 +2,7 @@
 
 These are the tools provided by the Pipeline for the LLM provider to call.
 
-## 1. mock_db
+## 1. inspect_db
 - **Description**: Connects to the project's database to query schema or data.
 - **Parameters**:
   - `query` (string): The SQL query to execute (e.g., `SHOW CREATE TABLE users`).
