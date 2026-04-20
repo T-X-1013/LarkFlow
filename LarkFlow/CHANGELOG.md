@@ -59,6 +59,23 @@
 ### Removed
 - **旧飞书配置方式弱化**：不再以单一 `LARK_WEBHOOK_URL` 作为主要消息发送方式，推荐改用飞书应用机器人配置。
 
+## v1.3.0 (2026-04-20)
+
+### Overview
+补齐本地工具运行时与受控执行边界，增强文件编辑和命令执行能力，并将数据库探查工具升级为连接真实 SQLite / MySQL 的只读实现
+
+### Changed
+- **本地工具运行时接入**：新增 `pipeline/tools_runtime.py`，统一承接 `inspect_db`、`file_editor`、`run_bash` 的本地执行，并在 `pipeline/engine.py` 中接入 `ToolContext` 与工具分发逻辑
+- **文件编辑权限收敛**：完善 `file_editor` 的 `read`、`write`、`replace`、`list_dir` 运行时实现；允许读取 `WORKSPACE_ROOT` 与 `target_dir` 下的项目知识和目标代码，写入与替换严格限制在 `target_dir`；同时补齐相对路径规范化、绝对路径拒绝与 `replace` 精确单次匹配校验
+- **受控命令执行增强**：为 `run_bash` 新增 `cwd` 与 `timeout` 参数支持，默认超时 60 秒、上限 300 秒；增加危险命令黑名单、超时进程组强杀与 stdout / stderr 输出截断，降低测试和构建阶段的失控风险
+- **数据库探查能力升级**：将原有伪造数据库工具替换为真实数据库只读探查工具 `inspect_db`，支持通过 `DATABASE_URL` 连接 SQLite 与 MySQL，并兼容 `SHOW CREATE TABLE`、`DESCRIBE`、`SHOW COLUMNS FROM`、`SHOW TABLES` 等常见 schema 探查语句
+- **MySQL 真实联调支持**：新增 MySQL 连接参数解析、`PyMySQL`/`cryptography` 依赖说明与 `MYSQL_TEST_DATABASE_URL` 集成测试入口，支持本地真实 MySQL schema 与样例数据校验
+- **测试补齐**：新增并通过 `tests/test_tools_runtime.py`、`tests/test_run_bash.py`、`tests/test_engine_loop_b1.py`、`tests/test_inspect_db.py` 与 `tests/test_inspect_db_mysql_integration.py`，覆盖权限边界、命令执行控制、受控集成链路与 SQLite/MySQL 数据库读取路径
+- **文档与规范同步**：更新 `agents/tools_definition.md`、`agents/phase1_design.md`、`README.md`、`.env.example`、`doc/ownership-b.md`，并新增 `doc/python-comment-style.md` 及对应运行时代码注释补齐，统一工具协议、配置示例与注释规范
+
+### Removed
+- **废弃旧工具命名**：对外工具名不再使用 `mock_db`，统一改为 `inspect_db`，避免名称继续误导为“伪造数据库”
+
 ## v1.3.1 (2026-04-21)
 
 ### Overview
@@ -97,4 +114,4 @@ Agent 能力与规范知识库扩充：skills 库从 6 个扩到 13 个、路由
 - **Phase 4 审查输出**：要求 Reviewer 对每个"可沉淀为规则"的发现输出 `<skill-feedback>` 块，供后续回灌 skills 库。
 
 ### Removed
-- 无。 
+- 无。
