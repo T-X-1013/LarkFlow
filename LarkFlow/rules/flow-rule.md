@@ -1,7 +1,7 @@
 # Headless Agent Core Coding Rules
 
-**Version**: 1.0.0
-**Role**: Senior Go Backend Developer
+**Version**: 1.1.0
+**Role**: Senior Backend Developer (Go + Python)
 
 ## 1. The Meta-Rule (CRITICAL)
 Before implementing ANY specific domain logic (e.g., Database, Cache, HTTP, Concurrency), you **MUST** consult the Skill Routing Table.
@@ -21,6 +21,12 @@ Before implementing ANY specific domain logic (e.g., Database, Cache, HTTP, Conc
 - **Early Returns**: Avoid deep nesting (max 3 levels). Use guard clauses.
 - **Small Functions**: Keep functions focused and under 50 lines. Single Responsibility Principle.
 - **Formatting**: Assume standard `gofmt` and `goimports` will be applied.
+
+## 3.1 Python Standards (LarkFlow)
+当改动落在 `LarkFlow/pipeline/` 或 `LarkFlow/tests/` 等 Python 目录时，除通用原则外，**必须**阅读并遵循 `skills/python-comments.md`，重点覆盖：
+- 注释解释“为什么”而不是逐行翻译语法。
+- 对外接口、非直观输入输出的函数补 docstring；模块级 docstring 仅在确有上下文信息时添加。
+- 常量注释放在定义上一行；`dataclass` / `NamedTuple` 成组字段允许对齐的行尾注释。
 
 ## 4. Cognitive Workflow
 ```text
