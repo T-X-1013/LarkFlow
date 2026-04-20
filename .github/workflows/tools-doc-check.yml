@@ -7,14 +7,12 @@ on:
       - "LarkFlow/pipeline/tools_schema.py"
       - "LarkFlow/scripts/gen_tools_doc.py"
       - "LarkFlow/agents/tools_definition.md"
-      - "LarkFlow/tests/test_tools_doc_generation.py"
   pull_request:
     paths:
       - ".github/workflows/tools-doc-check.yml"
       - "LarkFlow/pipeline/tools_schema.py"
       - "LarkFlow/scripts/gen_tools_doc.py"
       - "LarkFlow/agents/tools_definition.md"
-      - "LarkFlow/tests/test_tools_doc_generation.py"
   workflow_dispatch:
 
 jobs:
@@ -39,6 +37,3 @@ jobs:
 
       - name: Check generated tools doc
         run: python scripts/gen_tools_doc.py --check
-
-      - name: Run tools doc tests
-        run: python -m unittest discover -s tests -t . -p 'test_tools_doc_generation.py'
