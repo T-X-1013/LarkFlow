@@ -31,4 +31,3 @@ These are the tools provided by the Pipeline for the LLM provider to call.
   - `command` (string, required): The bash command to run.
   - `cwd` (string, optional): Optional working directory, resolved relative to the workspace root. If omitted, the command runs in the current target project directory.
   - `timeout` (integer, optional): Optional timeout in seconds. Defaults to 60 and is capped at 300.
-
