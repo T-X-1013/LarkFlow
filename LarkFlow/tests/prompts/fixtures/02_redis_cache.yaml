@@ -4,7 +4,7 @@ requirement: |
   TTL 10 分钟，缓存穿透用空值短 TTL，缓存击穿用分布式锁防止并发回源。
 
 expect_phase1_tools:
-  - mock_db
+  - inspect_db
   - ask_human_approval
 
 expect_phase2_skills_read:

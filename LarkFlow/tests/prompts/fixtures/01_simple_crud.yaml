@@ -4,7 +4,7 @@ requirement: |
   接口允许更新。需要数据库 migration 和对应的 handler。
 
 expect_phase1_tools:
-  - mock_db
+  - inspect_db
   - ask_human_approval
 
 expect_phase2_skills_read:

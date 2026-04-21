@@ -7,7 +7,7 @@ requirement: |
   4. 返回渠道要求的成功响应
 
 expect_phase1_tools:
-  - mock_db
+  - inspect_db
   - ask_human_approval
 
 expect_phase2_skills_read:
