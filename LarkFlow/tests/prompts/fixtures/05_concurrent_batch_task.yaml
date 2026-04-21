@@ -1,0 +1,29 @@
+name: concurrent_batch_notification
+requirement: |
+  实现一个批量发送通知的任务：
+  给定用户 ID 列表（最多 1000 个），并发调用第三方推送接口发送消息。
+  要求：
+  - 并发度 10（不能无限 goroutine）
+  - 单次推送超时 3 秒
+  - 任一失败不影响其余，但最终需要返回失败列表
+  - 整个任务支持 context 取消
+
+expect_phase1_tools:
+  - ask_human_approval
+
+expect_phase2_skills_read:
+  - skills/concurrency.md
+  - skills/error.md
+  - skills/http.md
+  - skills/logging.md
+
+expect_phase2_files_written_patterns:
+  - "internal/service/*.go"
+  - "internal/handler/*.go"
+
+expect_phase2_required_patterns:
+  - 'errgroup'              # must use errgroup or semaphore pattern
+  - 'context'               # must propagate ctx
+
+expect_phase2_forbidden_patterns:
+  - '^\s*go func\(\)'       # naked `go func()` at line start is forbidden

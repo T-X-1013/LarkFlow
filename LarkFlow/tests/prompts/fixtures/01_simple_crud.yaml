@@ -1,0 +1,20 @@
+name: simple_crud_add_age
+requirement: |
+  在 users 表增加 age 字段 (int, 可为空)，并提供一个 PATCH /users/:id/age
+  接口允许更新。需要数据库 migration 和对应的 handler。
+
+expect_phase1_tools:
+  - mock_db
+  - ask_human_approval
+
+expect_phase2_skills_read:
+  - skills/database.md
+  - skills/http.md
+
+expect_phase2_files_written_patterns:
+  - "internal/handler/*.go"
+  - "db/migrations/*.sql"
+
+expect_phase2_forbidden_patterns:
+  - 'fmt\.Sprintf\("UPDATE'   # no SQL injection via string concat
+  - 'db\.Raw\(fmt\.Sprintf'
