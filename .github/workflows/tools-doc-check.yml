@@ -1,0 +1,39 @@
+name: Tools Doc Check
+
+on:
+  push:
+    paths:
+      - ".github/workflows/tools-doc-check.yml"
+      - "LarkFlow/pipeline/tools_schema.py"
+      - "LarkFlow/scripts/gen_tools_doc.py"
+      - "LarkFlow/agents/tools_definition.md"
+  pull_request:
+    paths:
+      - ".github/workflows/tools-doc-check.yml"
+      - "LarkFlow/pipeline/tools_schema.py"
+      - "LarkFlow/scripts/gen_tools_doc.py"
+      - "LarkFlow/agents/tools_definition.md"
+  workflow_dispatch:
+
+jobs:
+  check-tools-doc:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: LarkFlow
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Check generated tools doc
+        run: python scripts/gen_tools_doc.py --check

@@ -1,19 +1,19 @@
-# LarkFlow Framework v1.0
+# LarkFlow Framework
 
 LarkFlow 已经从一个依赖本地 IDE 插件的工具，进化为一个**完全无头（Headless）、基于多智能体（Multi-Agent）协作的自动化研发工作流引擎**。
 
-[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](https://github.com/your-repo/larkflow)
+[![Version](https://img.shields.io/badge/version-1.3.0-blue.svg)](https://github.com/your-repo/larkflow)
 [![Architecture](https://img.shields.io/badge/architecture-Multi--Agent-orange.svg)](#architecture)
 
-## 🚀 核心架构演进 (v1.0)
+## 🚀 核心架构演进
 
 > **Pipeline 是骨架，Agent 是肌肉，人类是大脑**
 
-在 v1.0 版本中，我们实现一个**通用的、API 驱动的开源 Go 后端研发助手**。
+当前版本实现了一个**通用的、API 驱动的开源 Go 后端研发助手**。
 代码已经具备以下主干能力：
 - 支持 `Anthropic` 和 `OpenAI` 两种 LLM Provider。
 - 通过四阶段 Agent Prompt 驱动需求设计、编码、测试和审查。
-- 通过飞书交互卡片挂起审批，再由 Webhook 恢复流程。
+- 通过飞书交互卡片挂起审批，再由带签名校验与事件幂等的 Webhook 恢复流程。
 - 能把设计规范拆分为 `rules/` 和 `skills/`，让编码 Agent 按需读取。
 - 在流程结束后，默认尝试对 `demo-app/` 执行 Docker 构建和启动。
 
@@ -66,15 +66,16 @@ graph TD
 │   │   ├── lark_client.py
 │   │   ├── lark_interaction.py
 │   │   ├── llm_adapter.py
+│   │   ├── tools_runtime.py
 │   │   ├── tools_schema.py
 │   │   └── utils/lark_doc.py
 │   ├── rules/
-│   └── skills/
-└── demo-app/
-    ├── main.go
-    ├── go.mod
-    ├── internal/
-    └── db/migrations/
+│   ├── scripts/
+│   │   └── gen_tools_doc.py
+│   ├── skills/
+│   └── tests/
+├── demo-app/                  # 目标产物目录；当前仓库未默认提交该目录
+└── image/
 ```
 
 ## LarkFlow 引擎结构
@@ -112,10 +113,13 @@ graph TD
 
 `LarkFlow/pipeline/lark_interaction.py` 提供 FastAPI Webhook 服务，负责：
 
+- 校验飞书回调 token、签名与加密载荷
 - 接收飞书卡片按钮点击
 - 接收“开始执行”这类 HTTP 触发
 - 读取飞书文档链接内容
 - 唤醒已挂起的 Pipeline
+
+`LarkFlow/pipeline/lark_client.py` 负责统一构建和发送飞书卡片/文本消息。
 
 ## 快速开始
 
@@ -126,7 +130,7 @@ graph TD
 ```bash
 # 克隆仓库
 git clone https://github.com/your-repo/larkflow.git
-cd larkflow
+cd LarkFlow/LarkFlow
 
 # 创建虚拟环境
 python3 -m venv venv
@@ -142,12 +146,19 @@ pip install -r requirements.txt
 
 ```env
 LLM_PROVIDER=anthropic
-LARK_WEBHOOK_URL=https://open.feishu.cn/open-apis/bot/v2/hook/...
+
+# Database
+DATABASE_URL=sqlite:///demo-app/app.db
+# DATABASE_URL=mysql://root:password@127.0.0.1:3306/larkflow_demo
+# DATABASE_URL=mysql+pymysql://root:password@127.0.0.1:3306/larkflow_demo
 
 # 飞书应用机器人 (Bot API)
 LARK_APP_ID=cli_xxx
 LARK_APP_SECRET=xxx
 LARK_CHAT_ID=ou_xxx
+LARK_RECEIVE_ID_TYPE=open_id
+LARK_VERIFICATION_TOKEN=verify_xxx
+LARK_ENCRYPT_KEY=encrypt_xxx
 
 # Claude / Anthropic
 ANTHROPIC_API_KEY=sk-ant-api03-...
@@ -160,17 +171,18 @@ OPENAI_API_KEY=sk-...
 OPENAI_BASE_URL=https://api.openai.com/v1
 OPENAI_MODEL=gpt-5-codex
 OPENAI_REASONING_EFFORT=medium
-
-# Database
-DATABASE_URL=sqlite:///demo-app/app.db
-# DATABASE_URL=mysql://root:password@127.0.0.1:3306/larkflow_demo
-# DATABASE_URL=mysql+pymysql://root:password@127.0.0.1:3306/larkflow_demo
+OPENAI_MAX_RETRIES=3
+OPENAI_RETRY_BASE_SECONDS=5
+OPENAI_RETRY_MAX_SECONDS=60
 ```
 
 - 当 `LLM_PROVIDER=anthropic` 时，Pipeline 使用 Claude / Anthropic SDK。
 - 当 `LLM_PROVIDER=openai` 时，Pipeline 使用 OpenAI Responses API。
 - `inspect_db` 依赖 `DATABASE_URL` 读取真实数据库 schema，目前支持 SQLite 和 MySQL，只允许只读查询。
 - 若要执行真实 MySQL 集成测试，可额外设置 `MYSQL_TEST_DATABASE_URL`，然后运行 `python -m unittest tests.test_inspect_db_mysql_integration`。
+- `agents/tools_definition.md` 由 `pipeline/tools_schema.py` 单源生成；修改工具协议后执行 `python scripts/gen_tools_doc.py`，校验一致性可执行 `python scripts/gen_tools_doc.py --check`。
+- 飞书回调入口支持 `LARK_VERIFICATION_TOKEN` 与 `LARK_ENCRYPT_KEY` 校验；同一个 `header.event_id` 在 24 小时内只会触发一次 pipeline 恢复。
+- LLM 适配层会在 `AgentTurn.usage` 中统一输出 `prompt_tokens`、`completion_tokens`、`total_tokens`、`latency_ms`；OpenAI 调用支持 `OPENAI_MAX_RETRIES`、`OPENAI_RETRY_BASE_SECONDS`、`OPENAI_RETRY_MAX_SECONDS` 控制重试。
 
 ### 3. 运行
 
@@ -179,6 +191,15 @@ DATABASE_URL=sqlite:///demo-app/app.db
 ```bash
 uvicorn pipeline.lark_interaction:app --host 0.0.0.0 --port 8000
 ```
+
+也可以通过 Docker 构建并启动服务：
+
+```bash
+docker build -t larkflow LarkFlow/
+docker run --rm -p 8000:8000 larkflow
+```
+
+如果构建时拉取 `python:3.11-slim` 超时，可先执行 `docker pull python:3.11-slim`，或检查 Docker Desktop 代理/网络配置。
 
 飞书webhook可以使用ngrok隧道地址；
 
@@ -200,25 +221,23 @@ python pipeline/engine.py
 
 ## 核心特性：按需检索 (RAG) 知识库
 
-LarkFlow v1.0 最精华的知识库架构。AI 在写代码前，会强制读取 `rules/skill-routing.md` 路由表。
+LarkFlow 的知识库架构会让 AI 在写代码前强制读取 `rules/skill-routing.md` 路由表。
 
 例如，当需求包含“Redis 缓存”时，AI 会自动调用 `file_editor` 工具读取 `skills/redis.md`，学习团队规定的 Pipeline 批量操作和过期时间规范，从而写出完全符合团队标准的代码。这极大地降低了 Token 消耗并消除了 AI 幻觉。
 
 ---
 
-## 已知问题
+## 当前能力边界
 
-按当前代码状态，以下问题仍然存在：
+按当前代码状态，以下边界仍然存在：
 
 - `inspect_db` 目前仅支持 SQLite 和 MySQL；若后续引入其他数据库引擎，还需要继续补适配。
-- `file_editor` 的文档与工具 schema 提到了 `replace`，但当前 `engine.py` 运行时并没有实现这个动作。
-- `LarkFlow/Dockerfile` 里的启动命令仍然没有对齐当前 FastAPI 入口，容器化运行前需要先修正。
+- 默认部署目标仍是仓库根下的 `demo-app/`；如果本地没有该目录，需要先准备目标产物目录或在 session 中显式设置 `target_dir`。
 
 ## 相关文档
 
 - `LarkFlow/LarkFlow.md`：引擎模块速览。
 - `LarkFlow/CHANGELOG.md`：版本变更记录。
-- `LarkFlow/LOCAL_ISSUES_TRACKER.md`：本地问题跟踪，含部分历史结论，阅读时要以当前代码为准。
 
 ## 🔮 未来展望
 

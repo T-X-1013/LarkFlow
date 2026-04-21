@@ -1,7 +1,25 @@
-from typing import List, Dict, Any
+"""
+LarkFlow 工具定义唯一源
+
+负责：
+1. 声明 Pipeline 暴露给模型的工具清单
+2. 将同一份工具定义适配到 Anthropic 与 OpenAI 协议
+3. 为工具文档生成脚本提供稳定输入
+"""
+
+from typing import Any, Dict, List
 
 
-def _get_tool_specs() -> List[Dict[str, Any]]:
+def get_tool_specs() -> List[Dict[str, Any]]:
+    """
+    返回 Pipeline 的原始工具定义列表
+
+    @params:
+        无入参
+
+    @return:
+        返回工具定义列表；这是工具协议与文档生成的唯一真相源
+    """
     return [
         {
             "name": "inspect_db",
@@ -89,8 +107,13 @@ def _get_tool_specs() -> List[Dict[str, Any]]:
 
 def get_anthropic_tools() -> List[Dict[str, Any]]:
     """
-    Returns the list of tools formatted for the Anthropic API.
-    These tools are used by the Headless Agent in different phases of the pipeline.
+    将工具定义转换为 Anthropic API 所需格式
+
+    @params:
+        无入参
+
+    @return:
+        返回可直接传给 Anthropic Messages API 的 tools 列表
     """
     return [
         {
@@ -98,14 +121,19 @@ def get_anthropic_tools() -> List[Dict[str, Any]]:
             "description": tool_spec["description"],
             "input_schema": tool_spec["schema"]
         }
-        for tool_spec in _get_tool_specs()
+        for tool_spec in get_tool_specs()
     ]
 
 
 def get_openai_tools() -> List[Dict[str, Any]]:
     """
-    Returns the list of tools formatted for the OpenAI Responses API.
-    These tools are used by the Headless Agent in different phases of the pipeline.
+    将工具定义转换为 OpenAI Responses API 所需格式
+
+    @params:
+        无入参
+
+    @return:
+        返回可直接传给 OpenAI Responses API 的 tools 列表
     """
     return [
         {
@@ -115,7 +143,7 @@ def get_openai_tools() -> List[Dict[str, Any]]:
             "parameters": tool_spec["schema"],
             "strict": False
         }
-        for tool_spec in _get_tool_specs()
+        for tool_spec in get_tool_specs()
     ]
 
 # Example of how to use this with the Anthropic Python SDK:
