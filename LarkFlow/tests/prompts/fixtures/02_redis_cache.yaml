@@ -1,0 +1,21 @@
+name: redis_cache_product_detail
+requirement: |
+  为 GET /products/:id 接口增加 Redis 缓存，key 格式 product:{id}，
+  TTL 10 分钟，缓存穿透用空值短 TTL，缓存击穿用分布式锁防止并发回源。
+
+expect_phase1_tools:
+  - inspect_db
+  - ask_human_approval
+
+expect_phase2_skills_read:
+  - skills/redis.md
+  - skills/http.md
+  - skills/concurrency.md   # distributed lock involves concurrency
+
+expect_phase2_files_written_patterns:
+  - "internal/handler/*.go"
+  - "internal/cache/*.go"
+
+expect_phase2_required_patterns:
+  - 'SetNX'         # must use SETNX for the distributed lock
+  - 'Expire'        # must set TTL

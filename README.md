@@ -70,10 +70,18 @@ graph TD
 │   │   ├── tools_schema.py
 │   │   └── utils/lark_doc.py
 │   ├── rules/
+│   │   ├── flow-rule.md
+│   │   ├── skill-routing.yaml      # 路由唯一真源
+│   │   ├── skill-routing.md        # 人类可读镜像
+│   │   └── skill-feedback-loop.md  # Review → Skills 回灌闭环
 │   ├── scripts/
 │   │   └── gen_tools_doc.py
-│   ├── skills/
+│   ├── skills/                     # 13 个 md：6 个横切 + 3 个业务 + 4 个既有
+│   │   └── biz/                    # order / user / payment
 │   └── tests/
+│       └── prompts/                # Prompt 评测集
+│           ├── fixtures/*.yaml     # 5 个 fixture
+│           └── eval.py
 ├── demo-app/                  # 目标产物目录；当前仓库未默认提交该目录
 └── image/
 ```
@@ -91,11 +99,12 @@ graph TD
 
 ### 2. Rules 和 Skills
 
-这部分是编码 Agent 的“检索式规范库”：
+这部分是编码 Agent 的"检索式规范库"：
 
 - `rules/flow-rule.md`：总规则，要求先查路由表再编码。
-- `rules/skill-routing.md`：按数据库、Redis、HTTP、错误处理、并发等关键词，把任务映射到具体 skill。
-- `skills/*.md`：团队约束和最佳实践，例如 SQL 注入防护、统一 JSON 响应、错误包装、并发安全。
+- `rules/skill-routing.yaml`：**路由表唯一真源**，结构为 `keywords / skill / weight` 列表，业务 skill 默认 `weight=1.2` 优先于横切 1.0；Phase 2 Agent 按权重取 Top 5 读取。`rules/skill-routing.md` 作为人类可读镜像并在顶部声明以 YAML 为准。
+- `rules/skill-feedback-loop.md`：Phase 4 Reviewer 输出 `<skill-feedback>` 块 → 周度 triage → PR 回灌 `skills/*.md` 的四步闭环。
+- `skills/*.md`：13 份 md 覆盖数据库、Redis、HTTP、错误处理、并发、日志、配置、认证、限流、幂等、分页、Python 注释；`skills/biz/` 下覆盖订单、用户、支付三类业务规范。每份 md 保持 🔴 CRITICAL / 🟡 HIGH 分级 + Go ❌/✅ 代码对照结构。
 
 ### 3. Pipeline
 
@@ -221,9 +230,16 @@ python pipeline/engine.py
 
 ## 核心特性：按需检索 (RAG) 知识库
 
-LarkFlow 的知识库架构会让 AI 在写代码前强制读取 `rules/skill-routing.md` 路由表。
+LarkFlow 的知识库架构会让 AI 在写代码前强制读取 `rules/skill-routing.yaml` 路由表，按关键词匹配并按 `weight` 降序取 Top 5 skill。
 
-例如，当需求包含“Redis 缓存”时，AI 会自动调用 `file_editor` 工具读取 `skills/redis.md`，学习团队规定的 Pipeline 批量操作和过期时间规范，从而写出完全符合团队标准的代码。这极大地降低了 Token 消耗并消除了 AI 幻觉。
+例如，当需求包含"Redis 缓存"时，AI 会自动调用 `file_editor` 工具读取 `skills/redis.md`，学习团队规定的 Pipeline 批量操作和过期时间规范，从而写出完全符合团队标准的代码。这极大地降低了 Token 消耗并消除了 AI 幻觉。
+
+路由命中质量由 `tests/prompts/` 下的评测集保证：5 个 fixture 覆盖 CRUD / Redis 缓存 / 分页列表 / 幂等支付回调 / 并发批任务，断言每个需求应触发的工具、应读取的 skill 以及代码产物的正则黑白名单。CI 友好的 mock 模式可用：
+
+```bash
+python tests/prompts/eval.py --mock      # 全量跑
+python tests/prompts/eval.py --only redis_cache_product_detail
+```
 
 ---
 

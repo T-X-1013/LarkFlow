@@ -1,0 +1,25 @@
+name: paginated_order_list
+requirement: |
+  提供 GET /orders 接口，支持按 status 过滤和分页。
+  单页最多 100 条，支持 cursor 分页（?cursor=&page_size=），
+  按 id DESC 返回，响应包含 has_next。
+
+expect_phase1_tools:
+  - inspect_db
+  - ask_human_approval
+
+expect_phase2_skills_read:
+  - skills/pagination.md
+  - skills/database.md
+  - skills/http.md
+
+expect_phase2_files_written_patterns:
+  - "internal/handler/*.go"
+  - "internal/repo/*.go"
+
+expect_phase2_required_patterns:
+  - 'Limit\('       # LIMIT bound
+  - 'has_next'      # cursor response must expose has_next
+
+expect_phase2_forbidden_patterns:
+  - 'db\.Find\(&'   # unbounded find without Limit is forbidden for list endpoints
