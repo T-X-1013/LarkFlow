@@ -1,4 +1,4 @@
-# LarkFlow 框架 v1.0
+# LarkFlow 框架
 
 LarkFlow 是一个专为 Go 后端开发设计的无头（Headless）、多智能体（Multi-Agent）全自动编程框架。
 
@@ -18,7 +18,8 @@ LarkFlow 作为一个由 Python Pipeline 驱动的状态机运行，它协调多
 ### 3. 调度引擎 (`pipeline/`)
 这是一个 Python 引擎，负责处理 Anthropic 或 OpenAI API 的调用，执行本地工具（如文件读写、Bash 命令执行），并通过飞书（Lark）交互式消息卡片来管理整个工作流的挂起（等待人类审批）与唤醒。其中：
 - `pipeline/llm_adapter.py` 负责统一 Anthropic 与 OpenAI 两种 provider 的调用接口与会话状态。
-- `pipeline/lark_interaction.py` 负责飞书卡片构建、消息发送，以及接收飞书 Webhook 回调并调用状态机恢复已挂起的 Pipeline。
+- `pipeline/lark_client.py` 负责飞书卡片构建与消息发送。
+- `pipeline/lark_interaction.py` 负责飞书 Webhook 校验、事件幂等、回调解析，并调用状态机恢复已挂起的 Pipeline。
 
 ## 快速参考
 关于环境配置与部署说明，请参阅 `README.md` 文件。
