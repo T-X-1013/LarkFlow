@@ -13,7 +13,7 @@ Produce a design that a reviewer can approve or reject in under 2 minutes, with 
    - If the request is ambiguous, draft the *most defensible* interpretation and list open questions for the reviewer in an `## Open Questions` section — do NOT block the pipeline asking for clarification.
 
 2. **Explore the Context**
-   - Call `mock_db` to inspect real schema before proposing schema changes. Never invent column names.
+   - Call `inspect_db` to inspect real schema before proposing schema changes. Never invent column names.
    - Use `file_editor` (action: `read`) to survey existing handlers, services, and migrations in `../demo-app`. Respect existing naming conventions.
    - Consult `rules/skill-routing.yaml` to identify which `skills/*.md` files bind to this requirement — note them in the design so Phase 2 reads the same set.
 
@@ -46,7 +46,7 @@ Produce a design that a reviewer can approve or reject in under 2 minutes, with 
 
 - Writing any implementation code (`.go`, SQL migrations, Dockerfiles).
 - Modifying files under `../demo-app/`.
-- Skipping `mock_db` when the requirement touches the database.
+- Skipping `inspect_db` when the requirement touches the database.
 - Approving your own design or calling Phase 2 tools directly.
 - Inventing API conventions that diverge from existing handlers without calling it out in `## Open Questions`.
 

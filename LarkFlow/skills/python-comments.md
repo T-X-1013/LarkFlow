@@ -110,7 +110,7 @@ def execute(tool_name: str, args: dict, ctx: ToolContext) -> str:
     执行本地工具调用，并返回可回填给 Agent 的文本结果
 
     @params:
-        tool_name: 工具名称，例如 mock_db、file_editor
+        tool_name: 工具名称，例如 inspect_db、file_editor
         args: 工具参数字典
         ctx: 当前需求的运行时上下文，包含工作区与目标产物目录
 

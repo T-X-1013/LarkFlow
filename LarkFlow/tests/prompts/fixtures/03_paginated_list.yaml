@@ -5,7 +5,7 @@ requirement: |
   按 id DESC 返回，响应包含 has_next。
 
 expect_phase1_tools:
-  - mock_db
+  - inspect_db
   - ask_human_approval
 
 expect_phase2_skills_read:
