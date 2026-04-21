@@ -146,6 +146,25 @@ def get_openai_tools() -> List[Dict[str, Any]]:
         for tool_spec in get_tool_specs()
     ]
 
+
+def get_chat_completion_tools() -> List[Dict[str, Any]]:
+    """
+    Returns the tools formatted for OpenAI-compatible Chat Completions APIs.
+    DashScope/Qwen currently exposes its OpenAI-compatible tool calling through
+    the Chat Completions shape rather than the Responses API shape.
+    """
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": tool_spec["name"],
+                "description": tool_spec["description"],
+                "parameters": tool_spec["schema"],
+            },
+        }
+        for tool_spec in get_tool_specs()
+    ]
+
 # Example of how to use this with the Anthropic Python SDK:
 #
 # import anthropic
