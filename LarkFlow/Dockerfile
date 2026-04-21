@@ -23,6 +23,5 @@ COPY . .
 # 暴露 FastAPI 默认端口
 EXPOSE 8000
 
-# 启动命令（后续可以根据 main.py 的实际入口进行调整）
-# CMD ["uvicorn", "engine.main:app", "--host", "0.0.0.0", "--port", "8000"]
-CMD ["python", "-m", "engine.main"]
+# 启动 FastAPI Webhook 服务
+CMD ["uvicorn", "pipeline.lark_interaction:app", "--host", "0.0.0.0", "--port", "8000"]
