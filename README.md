@@ -192,6 +192,15 @@ OPENAI_RETRY_MAX_SECONDS=60
 uvicorn pipeline.lark_interaction:app --host 0.0.0.0 --port 8000
 ```
 
+也可以通过 Docker 构建并启动服务：
+
+```bash
+docker build -t larkflow LarkFlow/
+docker run --rm -p 8000:8000 larkflow
+```
+
+如果构建时拉取 `python:3.11-slim` 超时，可先执行 `docker pull python:3.11-slim`，或检查 Docker Desktop 代理/网络配置。
+
 飞书webhook可以使用ngrok隧道地址；
 
 配置飞书机器人（事件和回调），并开通相关权限（表格，消息等）；
