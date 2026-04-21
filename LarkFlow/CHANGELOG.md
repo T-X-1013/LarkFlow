@@ -58,3 +58,23 @@
 
 ### Removed
 - **旧飞书配置方式弱化**：不再以单一 `LARK_WEBHOOK_URL` 作为主要消息发送方式，推荐改用飞书应用机器人配置。
+
+## v1.3.0 (2026-04-21)
+
+### Overview
+Agent 能力与规范知识库扩充：skills 库从 6 个扩到 13 个、路由表升级为 YAML 单一真源、四阶段 prompt 统一结构化重写、新增 prompt 评测集与 Reviewer → Skills 回灌闭环。
+
+### Added
+- **横切 skills**：新增 `skills/logging.md`、`skills/config.md`、`skills/auth.md`、`skills/rate_limit.md`、`skills/idempotency.md`、`skills/pagination.md`，与既有 `database.md` 等保持 🔴/🟡 分级 + Go ❌/✅ 代码对照结构。
+- **业务 skills**：`skills/biz/` 目录下补充 `user.md`（密码 bcrypt、登录防爆破、注册幂等、风控钩子）与 `payment.md`（回调验签 + 幂等、金额 `int64` 分、状态机、对账），风格对齐 `biz/order.md`。
+- **路由表 YAML 化**：新增 `rules/skill-routing.yaml` 作为唯一真源，包含 15 条路由与 `defaults` 兜底，业务 skill `weight: 1.2` 优先于横切 1.0。`rules/skill-routing.md` 保留为人类可读镜像并在顶部声明以 YAML 为准。
+- **Prompt 评测集**：新增 `tests/prompts/fixtures/` 下 5 个 fixture（简单 CRUD / Redis 缓存 / 分页列表 / 幂等支付回调 / 并发批任务），覆盖工具调用、skills 命中、文件落地、代码正则黑白名单四类断言；配套 `tests/prompts/eval.py` 支持 `--mock`（CI 自检）与真跑入口。
+- **Skill 回灌闭环文档**：新增 `rules/skill-feedback-loop.md`，定义 Phase 4 Reviewer 输出 `<skill-feedback>` 结构化块 → 周度 triage → PR 回灌 `skills/*.md` + 路由表 + 评测 fixture 的四步流程。
+
+### Changed
+- **四阶段 prompt 全面重写**：`agents/phase1_design.md` / `phase2_coding.md` / `phase3_test.md` / `phase4_review.md` 由 11–24 行扩写到 82–100 行，统一结构为「角色 / 目标 / 工作流 / 禁止事项 / 输出格式 / 示例」。
+- **Phase 2 路由行为**：要求 agent 先读 `rules/skill-routing.yaml`，按权重取 Top 5，无匹配时走 defaults，并在写码前报告所选 skill 以便审计。
+- **Phase 4 审查输出**：要求 Reviewer 对每个"可沉淀为规则"的发现输出 `<skill-feedback>` 块，供后续回灌 skills 库。
+
+### Removed
+- 无。 
