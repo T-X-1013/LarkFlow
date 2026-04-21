@@ -1,0 +1,83 @@
+# Skill Routing Table (canonical source)
+#
+# This YAML is the single source of truth for keyword -> skill routing.
+# The Markdown file `skill-routing.md` is kept as a human-readable mirror.
+# Phase 2 agent MUST read this file, match the demand text against `keywords`
+# (case-insensitive, substring), and read every matched skill BEFORE writing code.
+#
+# Scoring: when multiple entries match, sort by `weight` DESC and read the top-N
+# (N = 5 unless the caller specifies otherwise). Higher weight = higher priority.
+# Business skills (biz/*) default to weight 1.2 so they outrank generic ones.
+#
+# Path is relative to the LarkFlow workspace root.
+
+routes:
+  # ---------- Generic / cross-cutting ----------
+  - keywords: [mysql, postgresql, sql, gorm, database, 数据库, orm, transaction, 事务, migration]
+    skill: skills/database.md
+    weight: 1.0
+
+  - keywords: [redis, cache, 缓存, 分布式锁, distributed lock, pipeline, expiration, ttl]
+    skill: skills/redis.md
+    weight: 1.0
+
+  - keywords: [http, api, rest, gin, router, middleware, 路由, 中间件, request, response]
+    skill: skills/http.md
+    weight: 1.0
+
+  - keywords: [error, 错误, exception, 异常, wrap, errors.is, errors.as, fmt.errorf, sentinel]
+    skill: skills/error.md
+    weight: 1.0
+
+  - keywords: [goroutine, concurrency, 并发, async, 异步, waitgroup, errgroup, channel, context]
+    skill: skills/concurrency.md
+    weight: 1.0
+
+  - keywords: [log, logging, 日志, slog, zap, zerolog, trace_id, 结构化日志]
+    skill: skills/logging.md
+    weight: 1.0
+
+  - keywords: [config, 配置, env, environment, secret, 密钥, dotenv, .env]
+    skill: skills/config.md
+    weight: 1.0
+
+  - keywords: [auth, 认证, 授权, login, 登录, jwt, session, oauth, rbac, 权限]
+    skill: skills/auth.md
+    weight: 1.0
+
+  - keywords: [rate limit, 限流, throttle, 令牌桶, token bucket, 429, quota]
+    skill: skills/rate_limit.md
+    weight: 1.0
+
+  - keywords: [idempotency, 幂等, idempotent, dedup, 去重, retry, 重放, webhook]
+    skill: skills/idempotency.md
+    weight: 1.0
+
+  - keywords: [pagination, 分页, page, cursor, offset, limit, list endpoint]
+    skill: skills/pagination.md
+    weight: 1.0
+
+  - keywords: [python, pipeline, tests, 注释, docstring, dataclass, 常量注释]
+    skill: skills/python-comments.md
+    weight: 0.8
+
+  # ---------- Business skills (higher weight) ----------
+  - keywords: [order, 订单, 下单, 购物车, checkout, 超卖, 库存]
+    skill: skills/biz/order.md
+    weight: 1.2
+
+  - keywords: [user, 用户, account, 账户, register, 注册, signup, 密码, password, 爆破]
+    skill: skills/biz/user.md
+    weight: 1.2
+
+  - keywords: [payment, 支付, 付款, refund, 退款, 对账, reconciliation, 回调, callback, stripe, 微信支付, 支付宝]
+    skill: skills/biz/payment.md
+    weight: 1.2
+
+# When no route matches, Phase 2 agent should still read at least:
+#   - skills/error.md
+#   - skills/http.md
+# These are baseline skills assumed for any Go service work.
+defaults:
+  - skills/error.md
+  - skills/http.md
