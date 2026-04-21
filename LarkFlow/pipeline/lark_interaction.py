@@ -1,300 +1,526 @@
+"""
+LarkFlow 飞书 Webhook 入口
+
+负责：
+1. 校验飞书回调的 verification token、签名与可选加密载荷
+2. 对 event_id 做 24 小时幂等，避免重复点击或重复推送多次触发 pipeline
+3. 接收飞书回调与启动请求，并唤醒对应的需求流程
+"""
+
+import hashlib
 import json
-import requests
-from fastapi import FastAPI, Request, HTTPException
-from pydantic import BaseModel
+import os
+import re
+import sqlite3
+import threading
+import time
+from pathlib import Path
+from typing import Any, Callable
+
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+from lark_oapi.core.const import (
+    LARK_REQUEST_NONCE,
+    LARK_REQUEST_SIGNATURE,
+    LARK_REQUEST_TIMESTAMP,
+    URL_VERIFICATION,
+)
+from lark_oapi.core.utils.decryptor import AESCipher
+
+from pipeline.utils.lark_doc import fetch_lark_doc_content
+
 
 app = FastAPI()
 
-# ==========================================
-# 0. 飞书消息发送工具 (移至顶部，避免循环导入)
-# ==========================================
-def build_approval_card(demand_id: str, summary: str, design_doc: str) -> dict:
-    """
-    构建飞书交互式消息卡片 JSON
-    """
-    # 截断过长的设计文档，避免卡片超长
-    display_doc = design_doc[:500] + "..." if len(design_doc) > 500 else design_doc
-    
-    return {
-        "config": {
-            "wide_screen_mode": True
-        },
-        "header": {
-            "title": {
-                "tag": "plain_text",
-                "content": f"🚀 AI 架构设计审批 (需求 ID: {demand_id})"
-            },
-            "template": "blue"
-        },
-        "elements": [
-            {
-                "tag": "markdown",
-                "content": f"**AI 助手已完成技术方案设计，请审批：**\n\n**📝 方案摘要**\n{summary}\n\n**📄 详细设计 (部分)**\n{display_doc}"
-            },
-            {
-                "tag": "hr"
-            },
-            {
-                "tag": "action",
-                "actions": [
-                    {
-                        "tag": "button",
-                        "text": {
-                            "tag": "plain_text",
-                            "content": "✅ 同意并进入编码阶段"
-                        },
-                        "type": "primary",
-                        "value": {
-                            "action": "approve",
-                            "demand_id": demand_id
-                        }
-                    },
-                    {
-                        "tag": "button",
-                        "text": {
-                            "tag": "plain_text",
-                            "content": "❌ 驳回并要求修改"
-                        },
-                        "type": "danger",
-                        "value": {
-                            "action": "reject",
-                            "demand_id": demand_id
-                        }
-                    }
-                ]
-            }
-        ]
-    }
+# 飞书回调事件默认保留 24 小时，确保同一事件重复投递时不会再次触发 pipeline
+EVENT_ID_TTL_SECONDS = 24 * 60 * 60
 
-def send_lark_card(webhook_url: str, demand_id: str, summary: str, design_doc: str):
+
+def _project_root() -> Path:
     """
-    发送卡片到飞书群聊或个人
+    返回 LarkFlow Python 项目根目录
+
+    @params:
+        无入参
+
+    @return:
+        返回当前文件所在的 LarkFlow 项目根目录路径
     """
-    card_json = build_approval_card(demand_id, summary, design_doc)
-    
-    # 如果 webhook_url 是以 http 开头的，说明是群机器人的 webhook
-    if webhook_url.startswith("http"):
-        payload = {
-            "msg_type": "interactive",
-            "card": card_json
-        }
-        response = requests.post(webhook_url, json=payload)
-        return response.json()
-    
-    # 如果 webhook_url 不是 http 开头的（比如是一个 open_id），说明你想通过 API 发送给个人或群
-    # 这需要调用飞书的发送消息 API
-    else:
-        from pipeline.utils.lark_doc import get_tenant_access_token
-        
+    return Path(__file__).resolve().parents[1]
+
+
+def _event_store_path() -> Path:
+    """
+    解析飞书事件幂等存储路径
+
+    @params:
+        无入参
+
+    @return:
+        返回用于保存 event_id 的 SQLite 文件路径
+    """
+    configured_path = (os.getenv("LARK_EVENT_STORE_PATH") or "").strip()
+    if configured_path:
+        return Path(configured_path).expanduser().resolve()
+    return _project_root() / "tmp" / "lark_event_store.db"
+
+
+def _ensure_event_store() -> Path:
+    """
+    确保飞书事件幂等 SQLite 表存在
+
+    @params:
+        无入参
+
+    @return:
+        返回可直接使用的 SQLite 数据库文件路径
+    """
+    store_path = _event_store_path()
+    store_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with sqlite3.connect(str(store_path)) as connection:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS lark_event_dedup (
+                event_id TEXT PRIMARY KEY,
+                created_at INTEGER NOT NULL,
+                expires_at INTEGER NOT NULL
+            )
+            """
+        )
+        connection.commit()
+
+    return store_path
+
+
+def _remember_event_id(event_id: str) -> bool:
+    """
+    记录 event_id，并判断是否首次出现
+
+    @params:
+        event_id: 飞书回调 header 中的事件 ID
+
+    @return:
+        首次写入返回 True；已处理过的重复事件返回 False
+    """
+    if not event_id:
+        return True
+
+    store_path = _ensure_event_store()
+    now = int(time.time())
+    expires_at = now + EVENT_ID_TTL_SECONDS
+
+    with sqlite3.connect(str(store_path)) as connection:
+        # 每次写入前顺手清理过期事件，保持 24h TTL 语义稳定
+        connection.execute(
+            "DELETE FROM lark_event_dedup WHERE expires_at <= ?",
+            (now,),
+        )
         try:
-            access_token = get_tenant_access_token()
-            api_url = "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=open_id"
-            
-            # 检查是否配置了 LARK_RECEIVE_ID_TYPE
-            import os
-            receive_id_type = os.getenv("LARK_RECEIVE_ID_TYPE", "open_id")
-            api_url = f"https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type={receive_id_type}"
-            
-            headers = {
-                "Authorization": f"Bearer {access_token}",
-                "Content-Type": "application/json"
-            }
-            
-            payload = {
-                "receive_id": webhook_url, # 这里 webhook_url 实际上是 chat_id 或 open_id
-                "msg_type": "interactive",
-                "content": json.dumps(card_json)
-            }
-            
-            response = requests.post(api_url, headers=headers, json=payload)
-            return response.json()
-        except Exception as e:
-            print(f"[Error] 发送飞书卡片失败: {e}")
-            return {"code": -1, "msg": str(e)}
+            connection.execute(
+                """
+                INSERT INTO lark_event_dedup (event_id, created_at, expires_at)
+                VALUES (?, ?, ?)
+                """,
+                (event_id, now, expires_at),
+            )
+            connection.commit()
+            return True
+        except sqlite3.IntegrityError:
+            return False
 
-def send_lark_text(webhook_url: str, text: str):
-    """
-    发送普通文本消息到飞书
-    """
-    if webhook_url.startswith("http"):
-        payload = {
-            "msg_type": "text",
-            "content": {"text": text}
-        }
-        response = requests.post(webhook_url, json=payload)
-        return response.json()
-    else:
-        from pipeline.utils.lark_doc import get_tenant_access_token
-        
-        try:
-            access_token = get_tenant_access_token()
-            import os
-            receive_id_type = os.getenv("LARK_RECEIVE_ID_TYPE", "open_id")
-            api_url = f"https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type={receive_id_type}"
-            
-            headers = {
-                "Authorization": f"Bearer {access_token}",
-                "Content-Type": "application/json"
-            }
-            
-            payload = {
-                "receive_id": webhook_url,
-                "msg_type": "text",
-                "content": json.dumps({"text": text})
-            }
-            
-            response = requests.post(api_url, headers=headers, json=payload)
-            return response.json()
-        except Exception as e:
-            print(f"[Error] 发送飞书文本失败: {e}")
-            return {"code": -1, "msg": str(e)}
 
-# ==========================================
-# 1. 飞书 Webhook 回调处理 (接收用户点击)
-# ==========================================
-@app.post("/lark/webhook")
-async def lark_webhook(request: Request):
+def _decrypt_lark_payload(raw_body: bytes, encrypt_key: str) -> str:
     """
-    接收飞书卡片按钮点击的回调
+    解密飞书 encrypt 载荷
+
+    @params:
+        raw_body: 飞书回调原始请求体
+        encrypt_key: 飞书事件订阅配置中的加密密钥
+
+    @return:
+        返回解密后的 JSON 文本
     """
-    data = await request.json()
-    
-    # 1. 飞书 URL 验证挑战 (首次配置 Webhook 时需要)
-    if "challenge" in data:
-        return {"challenge": data["challenge"]}
-        
-    # 2. 检查是否是多维表格的“开始执行”按钮触发
-    if data.get("action") == "start_demand":
-        # 飞书多维表格传过来的参数可能在 data.get("demand_id") 或者嵌套在别的地方
-        # 我们需要更灵活地解析它
-        demand_id = str(data.get("demand_id", ""))
-        doc_url = data.get("doc_url", "")
-        
-        # 打印出飞书传过来的最原始的 doc_url 数据结构，方便排查
-        print(f"[Debug] 原始 doc_url 数据: type={type(doc_url)}, value={doc_url}")
-        
-        # 飞书多维表格如果配置了“文档链接”类型的字段，它传过来的可能是一个包含 link 和 text 的列表/字典
-        # 例如: [{"text": "需求", "link": "https://..."}]
-        if isinstance(doc_url, list) and len(doc_url) > 0 and isinstance(doc_url[0], dict):
-            doc_url = doc_url[0].get("link", doc_url[0].get("text", ""))
-        elif isinstance(doc_url, dict):
-            doc_url = doc_url.get("link", doc_url.get("text", ""))
-            
-        doc_url = str(doc_url)
-        
-        # 兼容飞书多维表格未替换成功的变量格式 (如 "{{1}}", "{{需求}}")
-        import re
-        import time
-        if not demand_id or re.match(r'^\{\{.*\}\}$', demand_id):
-            demand_id = "DEMAND-" + str(int(time.time()))
-            
-        if not doc_url or re.match(r'^\{\{.*\}\}$', doc_url):
-            doc_url = "未提供具体文档链接，请根据后续对话补充需求。"
-            
-        # 兼容飞书多维表格传过来的纯文本 "需求" (如果你在表格里填的是文字而不是链接)
-        if doc_url == "需求" or doc_url == "[{'text': '需求'}]":
-            doc_url = "未提供具体文档链接，请根据后续对话补充需求。"
-            
-        # 如果 doc_url 不是完整的 http 链接，但你希望它能被当做文档处理
-        # 飞书多维表格在发送“关联文档”字段时，如果配置不当，可能只会发送文档标题（比如"需求"）
-        # 解决方案：在飞书多维表格的“发送HTTP请求”配置中，不要选择“需求文档”，而是选择“需求文档.链接”或“需求文档.URL”
-        
-        print(f"[Webhook] 收到多维表格触发，开始处理新需求: {demand_id}, 文档: {doc_url}")
-        
-        import threading
-        import time
-        def run_start():
-            from pipeline.engine import start_new_demand
-            
-            # 如果 doc_url 是一个飞书链接，尝试读取其内容
-            if "feishu.cn" in doc_url or "larksuite.com" in doc_url:
-                from pipeline.utils.lark_doc import fetch_lark_doc_content
-                print(f"[Webhook] 检测到飞书文档链接，尝试读取内容: {doc_url}")
-                doc_content = fetch_lark_doc_content(doc_url)
-                requirement = f"请查阅此需求文档并进行技术方案设计：\n\n【文档链接】\n{doc_url}\n\n【文档内容】\n{doc_content}"
-            else:
-                requirement = f"请查阅此需求文档并进行技术方案设计：{doc_url}"
-                
-            start_new_demand(demand_id, requirement)
-            
-        threading.Thread(target=run_start).start()
-        return {"code": 0, "msg": "success"}
-    
-    # 3. 兼容 V1 和 V2 格式的卡片回调解析
-    action_data = data.get("action") or data.get("event", {}).get("action") or {}
-    
-    # 忽略飞书推送的其他事件（比如机器人进群、有人@机器人等），
-    # 但必须放行真正的卡片点击事件 card.action.trigger。
-    event_type = data.get("header", {}).get("event_type")
-    if event_type and event_type != "card.action.trigger":
-        print(f"[Webhook] 忽略非卡片点击事件: {event_type}")
-        return {"code": 0, "msg": "ignored"}
-        
-    # 如果 action_data 是字符串（比如其他未知的按钮触发），直接忽略
-    if isinstance(action_data, str):
-        return {"error": "Unknown action format"}
-        
-    action_value = action_data.get("value", {})
-    action_type = action_value.get("action")
-    demand_id = action_value.get("demand_id")
-    
-    if not action_type or not demand_id:
-        print("[Webhook] 收到无效的 action 数据:", data)
-        # 飞书要求必须返回合法的卡片 JSON，否则会报 200340
-        return update_card_status(f"解析失败，收到的数据: {json.dumps(data)}")
+    body = json.loads(raw_body.decode("utf-8"))
+    encrypted_text = body.get("encrypt")
+    if not encrypted_text:
+        return raw_body.decode("utf-8")
+    if not encrypt_key:
+        raise ValueError("LARK_ENCRYPT_KEY is required for encrypted webhook payloads")
+    return AESCipher(encrypt_key).decrypt_str(encrypted_text)
 
-    # 4. 根据用户操作，恢复 Agent Pipeline
-    if action_type == "approve":
-        print(f"[Webhook] 需求 {demand_id} 已通过审批，准备进入 Coding 阶段...")
-        
-        # 异步执行，避免阻塞飞书回调导致超时报错
-        import threading
-        
-        def run_resume():
-            # 延迟 1 秒执行，确保 FastAPI 能先给飞书返回 200 OK
-            import time
-            time.sleep(1)
-            from pipeline.engine import resume_after_approval
-            resume_after_approval(demand_id, approved=True, feedback="人类已同意该设计方案。请进入 Phase 2: Coding 阶段，开始编写代码。")
-            
-        threading.Thread(target=run_resume).start()
-        
-        # 返回更新后的卡片内容（将按钮替换为“已通过”）
-        return update_card_status("✅ 已通过审批，AI 正在疯狂编码中...")
-        
-    elif action_type == "reject":
-        print(f"[Webhook] 需求 {demand_id} 被驳回，要求 AI 重新设计...")
-        
-        import threading
-        def run_reject():
-            import time
-            time.sleep(1)
-            from pipeline.engine import resume_after_approval
-            resume_after_approval(demand_id, approved=False, feedback="人类驳回了该方案。请重新检查需求并修改你的设计文档。")
-            
-        threading.Thread(target=run_reject).start()
-        
-        return update_card_status("❌ 已驳回，AI 正在重新设计...")
 
-def update_card_status(message: str) -> dict:
-    """返回用于更新原飞书卡片的 JSON"""
-    # 飞书要求：如果要更新卡片，直接返回卡片的 JSON 结构即可，不能包在 "card" 字段里。
+def _load_lark_payload(raw_body: bytes) -> dict[str, Any]:
+    """
+    解析飞书回调 JSON，并在需要时做解密
+
+    @params:
+        raw_body: 飞书回调原始请求体
+
+    @return:
+        返回统一的回调 JSON 字典
+    """
+    encrypt_key = (os.getenv("LARK_ENCRYPT_KEY") or "").strip()
+    plaintext = _decrypt_lark_payload(raw_body, encrypt_key)
+    return json.loads(plaintext)
+
+
+def _extract_event_type(payload: dict[str, Any]) -> str:
+    """
+    提取飞书事件类型
+
+    @params:
+        payload: 已解析的飞书回调 JSON
+
+    @return:
+        返回事件类型字符串；无法识别时返回空字符串
+    """
+    return (
+        payload.get("header", {}).get("event_type")
+        or payload.get("type")
+        or ""
+    )
+
+
+def _extract_verification_token(payload: dict[str, Any]) -> str:
+    """
+    提取飞书回调用于校验的 token
+
+    @params:
+        payload: 已解析的飞书回调 JSON
+
+    @return:
+        返回回调 token；无法识别时返回空字符串
+    """
+    return (
+        payload.get("header", {}).get("token")
+        or payload.get("token")
+        or ""
+    )
+
+
+def _extract_event_id(payload: dict[str, Any]) -> str:
+    """
+    提取飞书事件 ID
+
+    @params:
+        payload: 已解析的飞书回调 JSON
+
+    @return:
+        返回事件 ID；v2 用 header.event_id，v1 回退到 uuid
+    """
+    return (
+        payload.get("header", {}).get("event_id")
+        or payload.get("uuid")
+        or ""
+    )
+
+
+def _is_legacy_start_request(payload: dict[str, Any]) -> bool:
+    """
+    判断是否为旧版 start_demand 启动请求
+
+    @params:
+        payload: 已解析的请求 JSON
+
+    @return:
+        是旧版启动请求时返回 True，否则返回 False
+    """
+    return payload.get("action") == "start_demand" and not payload.get("header")
+
+
+def _validate_lark_token(payload: dict[str, Any]) -> None:
+    """
+    校验飞书 verification token
+
+    @params:
+        payload: 已解析的飞书回调 JSON
+
+    @return:
+        校验通过时无返回；校验失败时抛出异常
+    """
+    expected_token = (os.getenv("LARK_VERIFICATION_TOKEN") or "").strip()
+    if not expected_token:
+        return
+
+    token = _extract_verification_token(payload)
+    if token != expected_token:
+        raise ValueError("invalid verification token")
+
+
+def _validate_lark_signature(request: Request, raw_body: bytes, payload: dict[str, Any]) -> None:
+    """
+    校验飞书回调签名
+
+    @params:
+        request: FastAPI 请求对象
+        raw_body: 飞书回调原始请求体
+        payload: 已解析的飞书回调 JSON
+
+    @return:
+        校验通过时无返回；校验失败时抛出异常
+    """
+    encrypt_key = (os.getenv("LARK_ENCRYPT_KEY") or "").strip()
+    if not encrypt_key:
+        return
+
+    # URL 验证事件只需要通过 token 校验并回传 challenge，不要求验签
+    if _extract_event_type(payload) == URL_VERIFICATION:
+        return
+
+    timestamp = request.headers.get(LARK_REQUEST_TIMESTAMP)
+    nonce = request.headers.get(LARK_REQUEST_NONCE)
+    signature = request.headers.get(LARK_REQUEST_SIGNATURE)
+    if not timestamp or not nonce or not signature:
+        raise ValueError("missing lark signature headers")
+
+    expected_signature = hashlib.sha256(
+        (timestamp + nonce + encrypt_key).encode("utf-8") + raw_body
+    ).hexdigest()
+    if signature != expected_signature:
+        raise ValueError("signature verification failed")
+
+
+def _launch_background_task(target: Callable[[], None]) -> None:
+    """
+    启动后台线程执行耗时逻辑
+
+    @params:
+        target: 需要在后台执行的无参函数
+
+    @return:
+        无返回值；函数会在守护线程中异步执行
+    """
+    threading.Thread(target=target, daemon=True).start()
+
+
+def _resolve_requirement_text(doc_url: str) -> str:
+    """
+    根据文档链接或文本构造需求描述
+
+    @params:
+        doc_url: 启动请求中携带的文档链接或文本
+
+    @return:
+        返回传给 pipeline 的最终需求文本
+    """
+    if "feishu.cn" in doc_url or "larksuite.com" in doc_url:
+        doc_content = fetch_lark_doc_content(doc_url)
+        return (
+            "请查阅此需求文档并进行技术方案设计：\n\n"
+            f"【文档链接】\n{doc_url}\n\n"
+            f"【文档内容】\n{doc_content}"
+        )
+    return f"请查阅此需求文档并进行技术方案设计：{doc_url}"
+
+
+def _normalize_start_payload(payload: dict[str, Any]) -> tuple[str, str]:
+    """
+    标准化 start_demand 请求中的 demand_id 与 doc_url
+
+    @params:
+        payload: 启动请求 JSON
+
+    @return:
+        返回标准化后的 demand_id 与 doc_url
+    """
+    demand_id = str(payload.get("demand_id", ""))
+    doc_url = payload.get("doc_url", "")
+
+    if isinstance(doc_url, list) and doc_url and isinstance(doc_url[0], dict):
+        doc_url = doc_url[0].get("link", doc_url[0].get("text", ""))
+    elif isinstance(doc_url, dict):
+        doc_url = doc_url.get("link", doc_url.get("text", ""))
+
+    doc_url = str(doc_url)
+    if not demand_id or re.match(r"^\{\{.*\}\}$", demand_id):
+        demand_id = f"DEMAND-{int(time.time())}"
+
+    if not doc_url or re.match(r"^\{\{.*\}\}$", doc_url):
+        doc_url = "未提供具体文档链接，请根据后续对话补充需求。"
+
+    if doc_url in {"需求", "[{'text': '需求'}]"}:
+        doc_url = "未提供具体文档链接，请根据后续对话补充需求。"
+
+    return demand_id, doc_url
+
+
+def _handle_start_request(payload: dict[str, Any]) -> dict[str, Any]:
+    """
+    处理启动新需求的入口请求
+
+    @params:
+        payload: 启动请求 JSON
+
+    @return:
+        返回启动成功的统一响应
+    """
+    demand_id, doc_url = _normalize_start_payload(payload)
+    print(f"[Webhook] 收到启动请求，开始处理新需求: {demand_id}, 文档: {doc_url}")
+
+    def run_start() -> None:
+        from pipeline.engine import start_new_demand
+
+        start_new_demand(demand_id, _resolve_requirement_text(doc_url))
+
+    _launch_background_task(run_start)
+    return {"code": 0, "msg": "success"}
+
+
+def update_card_status(message: str) -> dict[str, Any]:
+    """
+    返回用于更新飞书卡片状态的 JSON
+
+    @params:
+        message: 需要展示在卡片中的状态文本
+
+    @return:
+        返回符合飞书卡片更新格式的 JSON 结构
+    """
     return {
         "schema": "2.0",
         "config": {
-            "wide_screen_mode": True
+            "wide_screen_mode": True,
         },
         "header": {
             "title": {
                 "tag": "plain_text",
-                "content": "🚀 状态已更新"
+                "content": "🚀 状态已更新",
             },
-            "template": "green"
+            "template": "green",
         },
         "elements": [
             {
                 "tag": "markdown",
-                "content": f"**{message}**"
+                "content": f"**{message}**",
             }
-        ]
+        ],
     }
+
+
+@app.middleware("http")
+async def validate_lark_webhook(request: Request, call_next: Callable[[Request], Any]):
+    """
+    对飞书 webhook 做统一校验与载荷标准化
+
+    @params:
+        request: 当前 FastAPI 请求对象
+        call_next: 继续向下游路由传递请求的回调
+
+    @return:
+        返回后续路由响应；校验失败时直接返回 403
+    """
+    if request.method != "POST" or request.url.path != "/lark/webhook":
+        return await call_next(request)
+
+    raw_body = await request.body()
+    try:
+        payload = _load_lark_payload(raw_body)
+
+        # 历史上这里承接过多维表格的裸 HTTP 触发；为了不破坏现有流量，继续兼容这种非事件请求
+        if _is_legacy_start_request(payload):
+            request.state.lark_payload = payload
+            return await call_next(request)
+
+        _validate_lark_token(payload)
+        _validate_lark_signature(request, raw_body, payload)
+        request.state.lark_payload = payload
+        request.state.lark_event_id = _extract_event_id(payload)
+    except Exception as exc:
+        return JSONResponse(status_code=403, content={"code": 403, "msg": str(exc)})
+
+    return await call_next(request)
+
+
+@app.post("/start")
+async def start_demand(request: Request):
+    """
+    兼容外部系统直接启动新需求
+
+    @params:
+        request: FastAPI 请求对象
+
+    @return:
+        返回启动结果 JSON
+    """
+    payload = await request.json()
+    if payload.get("action") != "start_demand":
+        return {"code": 400, "msg": "invalid start action"}
+    return _handle_start_request(payload)
+
+
+@app.post("/lark/webhook")
+async def lark_webhook(request: Request):
+    """
+    接收飞书回调并驱动审批流恢复
+
+    @params:
+        request: FastAPI 请求对象
+
+    @return:
+        返回飞书要求的 challenge、卡片更新 JSON 或普通成功响应
+    """
+    payload = getattr(request.state, "lark_payload", None)
+    if payload is None:
+        payload = await request.json()
+
+    if _extract_event_type(payload) == URL_VERIFICATION or "challenge" in payload:
+        return {"challenge": payload.get("challenge", "")}
+
+    if _is_legacy_start_request(payload):
+        return _handle_start_request(payload)
+
+    event_type = _extract_event_type(payload)
+    if event_type and event_type != "card.action.trigger":
+        print(f"[Webhook] 忽略非卡片点击事件: {event_type}")
+        return {"code": 0, "msg": "ignored"}
+
+    event_id = getattr(request.state, "lark_event_id", "") or _extract_event_id(payload)
+    if event_id and not _remember_event_id(event_id):
+        print(f"[Webhook] 忽略重复事件: {event_id}")
+        return update_card_status("⏳ 请求已处理，请勿重复点击")
+
+    action_data = payload.get("action") or payload.get("event", {}).get("action") or {}
+    if isinstance(action_data, str):
+        return {"code": 400, "msg": "unknown action format"}
+
+    action_value = action_data.get("value", {})
+    action_type = action_value.get("action")
+    demand_id = action_value.get("demand_id")
+    if not action_type or not demand_id:
+        print(f"[Webhook] 收到无效的 action 数据: {payload}")
+        return update_card_status(f"解析失败，收到的数据: {json.dumps(payload, ensure_ascii=False)}")
+
+    if action_type == "approve":
+        print(f"[Webhook] 需求 {demand_id} 已通过审批，准备进入 Coding 阶段...")
+
+        def run_resume() -> None:
+            time.sleep(1)
+            from pipeline.engine import resume_after_approval
+
+            resume_after_approval(
+                demand_id,
+                approved=True,
+                feedback="人类已同意该设计方案。请进入 Phase 2: Coding 阶段，开始编写代码。",
+            )
+
+        _launch_background_task(run_resume)
+        return update_card_status("✅ 已通过审批，AI 正在疯狂编码中...")
+
+    if action_type == "reject":
+        print(f"[Webhook] 需求 {demand_id} 被驳回，要求 AI 重新设计...")
+
+        def run_reject() -> None:
+            time.sleep(1)
+            from pipeline.engine import resume_after_approval
+
+            resume_after_approval(
+                demand_id,
+                approved=False,
+                feedback="人类驳回了该方案。请重新检查需求并修改你的设计文档。",
+            )
+
+        _launch_background_task(run_reject)
+        return update_card_status("❌ 已驳回，AI 正在重新设计...")
+
+    return {"code": 400, "msg": f"unsupported action: {action_type}"}

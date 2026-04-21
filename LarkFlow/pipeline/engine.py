@@ -8,7 +8,7 @@ from typing import Dict, Any
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 # 导入我们之前写的模块
-from pipeline.lark_interaction import send_lark_card, send_lark_text
+from pipeline.lark_client import send_lark_card, send_lark_text
 from pipeline.llm_adapter import (
     ToolCall,
     append_tool_result,

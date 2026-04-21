@@ -172,6 +172,7 @@ DATABASE_URL=sqlite:///demo-app/app.db
 - `inspect_db` 依赖 `DATABASE_URL` 读取真实数据库 schema，目前支持 SQLite 和 MySQL，只允许只读查询。
 - 若要执行真实 MySQL 集成测试，可额外设置 `MYSQL_TEST_DATABASE_URL`，然后运行 `python -m unittest tests.test_inspect_db_mysql_integration`。
 - `agents/tools_definition.md` 由 `pipeline/tools_schema.py` 单源生成；修改工具协议后执行 `python scripts/gen_tools_doc.py`，校验一致性可执行 `python scripts/gen_tools_doc.py --check`。
+- 飞书回调入口支持 `LARK_VERIFICATION_TOKEN` 与 `LARK_ENCRYPT_KEY` 校验；同一个 `header.event_id` 在 24 小时内只会触发一次 pipeline 恢复。
 
 ### 3. 运行
 
