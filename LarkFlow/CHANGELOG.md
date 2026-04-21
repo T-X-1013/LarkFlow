@@ -75,3 +75,23 @@
 
 ### Removed
 - **废弃旧工具命名**：对外工具名不再使用 `mock_db`，统一改为 `inspect_db`，避免名称继续误导为“伪造数据库”
+
+## v1.3.1 (2026-04-21)
+
+### Overview
+收口工具定义文档的生成链路，增强飞书回调安全性与幂等处理，补齐 LLM 调用 usage 观测字段，并让 Docker 镜像能够直接启动当前 FastAPI 服务
+
+### Changed
+- **工具定义单源化**：将工具协议定义收敛到 `pipeline/tools_schema.py`，`agents/tools_definition.md` 改为由 `scripts/gen_tools_doc.py` 自动生成，避免工具 schema 与 Markdown 文档长期人工双写
+- **工具文档一致性校验**：新增 `.github/workflows/tools-doc-check.yml`，在 GitHub Actions 中执行 `python scripts/gen_tools_doc.py --check`，用于发现手工修改 `agents/tools_definition.md` 或忘记重新生成文档的问题
+- **飞书回调安全增强**：完善 `pipeline/lark_interaction.py` 的飞书回调处理，补齐 verification token 校验、签名校验、加密 payload 解密与 `/start` 启动入口兼容
+- **飞书事件幂等处理**：基于事件 ID 增加交互回调去重，避免用户多次点击同一张卡片时重复推进同一个审批动作
+- **飞书消息发送收口**：将飞书文本消息与卡片消息构造发送逻辑集中到 `pipeline/lark_client.py`，减少 `pipeline/engine.py` 对飞书 API 细节的直接依赖
+- **LLM usage 归一记录**：在 `pipeline/llm_adapter.py` 中统一记录 Anthropic 与 OpenAI 返回的 `prompt_tokens`、`completion_tokens`、`total_tokens` 与 `latency_ms`，并写入会话历史，便于后续成本与性能排查
+- **OpenAI 重试策略增强**：补充 OpenAI provider 的可配置重试参数，支持通过 `OPENAI_MAX_RETRIES`、`OPENAI_RETRY_BASE_SECONDS`、`OPENAI_RETRY_MAX_SECONDS` 调整限流和临时异常重试行为
+- **Docker 运行入口修正**：新增并完善 `Dockerfile`，镜像启动命令统一为 `uvicorn pipeline.lark_interaction:app --host 0.0.0.0 --port 8000`，使容器运行后能够直接提供飞书回调服务
+- **部署文档同步**：更新 `README.md` 与 `.env.example`，补充 Docker 构建运行命令、`python:3.11-slim` 预拉取提示、飞书安全配置项和 OpenAI 重试配置项
+- **测试覆盖补齐**：新增飞书交互、LLM usage、工具文档生成与 Dockerfile 相关测试，覆盖回调校验、重复事件处理、usage 字段归一、文档生成一致性和容器入口配置
+
+### Removed
+- **旧容器启动方式移除**：不再使用过期的 Python 模块启动命令作为 Docker 默认入口，统一通过 Uvicorn 启动 FastAPI 应用
