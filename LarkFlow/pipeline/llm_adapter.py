@@ -2,7 +2,7 @@ import json
 import os
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
 from pipeline.tools_schema import get_anthropic_tools, get_openai_tools
@@ -21,6 +21,7 @@ class AgentTurn:
     tool_calls: List[ToolCall]
     finished: bool
     raw_response: Any
+    usage: Dict[str, int] = field(default_factory=dict)
 
 
 def get_provider_name() -> str:
@@ -125,6 +126,7 @@ def _create_anthropic_turn(session: Dict[str, Any], client: Any, system_prompt: 
     messages = session["provider_state"].setdefault("messages", [])
     model_name = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
 
+    started_at = time.monotonic()
     response = client.messages.create(
         model=model_name,
         max_tokens=4096,
@@ -132,6 +134,8 @@ def _create_anthropic_turn(session: Dict[str, Any], client: Any, system_prompt: 
         messages=messages,
         tools=get_anthropic_tools()
     )
+    latency_ms = _elapsed_ms(started_at)
+    usage = _normalize_usage(getattr(response, "usage", None), latency_ms)
 
     messages.append({"role": "assistant", "content": response.content})
 
@@ -153,14 +157,16 @@ def _create_anthropic_turn(session: Dict[str, Any], client: Any, system_prompt: 
         "tool_calls": [
             {"id": tool_call.id, "name": tool_call.name, "arguments": tool_call.arguments}
             for tool_call in tool_calls
-        ]
+        ],
+        "usage": usage,
     })
 
     return AgentTurn(
         text_blocks=text_blocks,
         tool_calls=tool_calls,
         finished=response.stop_reason == "end_turn",
-        raw_response=response
+        raw_response=response,
+        usage=usage,
     )
 
 
@@ -186,7 +192,10 @@ def _create_openai_turn(session: Dict[str, Any], client: Any, system_prompt: str
     if state.get("previous_response_id"):
         request_args["previous_response_id"] = state["previous_response_id"]
 
+    started_at = time.monotonic()
     response = _create_openai_response_with_retry(client, request_args, model_name)
+    latency_ms = _elapsed_ms(started_at)
+    usage = _normalize_usage(getattr(response, "usage", None), latency_ms)
     state["pending_inputs"] = []
     state["previous_response_id"] = response.id
 
@@ -214,15 +223,86 @@ def _create_openai_turn(session: Dict[str, Any], client: Any, system_prompt: str
         "tool_calls": [
             {"id": tool_call.id, "name": tool_call.name, "arguments": tool_call.arguments}
             for tool_call in tool_calls
-        ]
+        ],
+        "usage": usage,
     })
 
     return AgentTurn(
         text_blocks=text_blocks,
         tool_calls=tool_calls,
         finished=len(tool_calls) == 0,
-        raw_response=response
+        raw_response=response,
+        usage=usage,
     )
+
+
+def _elapsed_ms(started_at: float) -> int:
+    """
+    计算模型调用耗时
+
+    @params:
+        started_at: 调用开始时的 monotonic 时间戳
+
+    @return:
+        返回毫秒级耗时，最小值为 0
+    """
+    return max(0, int((time.monotonic() - started_at) * 1000))
+
+
+def _read_usage_value(raw_usage: Any, *names: str) -> int:
+    """
+    从不同 SDK usage 对象中读取 token 字段
+
+    @params:
+        raw_usage: Anthropic 或 OpenAI SDK 返回的 usage 对象
+        names: 候选字段名列表
+
+    @return:
+        返回第一个可解析为整数的字段值；读取不到时返回 0
+    """
+    if raw_usage is None:
+        return 0
+
+    for name in names:
+        if isinstance(raw_usage, dict):
+            value = raw_usage.get(name)
+        else:
+            value = getattr(raw_usage, name, None)
+
+        if value is None:
+            continue
+
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            continue
+
+    return 0
+
+
+def _normalize_usage(raw_usage: Any, latency_ms: int) -> Dict[str, int]:
+    """
+    归一 Anthropic 与 OpenAI 的 usage 字段
+
+    @params:
+        raw_usage: SDK 响应中的 usage 对象
+        latency_ms: 本轮模型调用耗时
+
+    @return:
+        返回稳定结构：prompt_tokens、completion_tokens、total_tokens、latency_ms
+    """
+    prompt_tokens = _read_usage_value(raw_usage, "prompt_tokens", "input_tokens")
+    completion_tokens = _read_usage_value(raw_usage, "completion_tokens", "output_tokens")
+    total_tokens = _read_usage_value(raw_usage, "total_tokens")
+    if not total_tokens:
+        total_tokens = prompt_tokens + completion_tokens
+
+    return {
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": total_tokens,
+        "latency_ms": latency_ms,
+    }
 
 
 def _model_supports_reasoning(model_name: str) -> bool:
@@ -245,14 +325,65 @@ def _create_openai_response_with_retry(client: Any, request_args: Dict[str, Any]
                 raise
 
             retry_after = _extract_retry_after_seconds(str(exc))
-            backoff_delay = min(base_delay * (2 ** attempt), max_delay)
-            sleep_seconds = min(max(retry_after, backoff_delay), max_delay)
-            print(
-                f"[LLM] OpenAI rate limited for model {model_name}; "
-                f"retrying in {sleep_seconds:.1f}s "
-                f"({attempt + 1}/{max_retries})"
-            )
+            sleep_seconds = _openai_retry_delay(attempt, base_delay, max_delay, retry_after)
+            _log_openai_retry("rate limited", model_name, sleep_seconds, attempt, max_retries)
             time.sleep(sleep_seconds)
+        except Exception:
+            if attempt >= max_retries:
+                raise
+
+            sleep_seconds = _openai_retry_delay(attempt, base_delay, max_delay)
+            _log_openai_retry("request failed", model_name, sleep_seconds, attempt, max_retries)
+            time.sleep(sleep_seconds)
+
+
+def _openai_retry_delay(
+    attempt: int,
+    base_delay: float,
+    max_delay: float,
+    retry_after: float = 0.0,
+) -> float:
+    """
+    计算 OpenAI 重试等待时间
+
+    @params:
+        attempt: 当前重试序号，从 0 开始
+        base_delay: 指数退避的基础秒数
+        max_delay: 单次等待上限秒数
+        retry_after: 服务端返回的建议等待秒数
+
+    @return:
+        返回本次重试前需要等待的秒数
+    """
+    backoff_delay = min(base_delay * (2 ** attempt), max_delay)
+    return min(max(retry_after, backoff_delay), max_delay)
+
+
+def _log_openai_retry(
+    reason: str,
+    model_name: str,
+    sleep_seconds: float,
+    attempt: int,
+    max_retries: int,
+) -> None:
+    """
+    输出 OpenAI 重试日志
+
+    @params:
+        reason: 重试原因
+        model_name: 当前调用的模型名称
+        sleep_seconds: 本次重试前等待秒数
+        attempt: 当前重试序号，从 0 开始
+        max_retries: 最大重试次数
+
+    @return:
+        无返回值；直接输出日志到 stdout
+    """
+    print(
+        f"[LLM] OpenAI {reason} for model {model_name}; "
+        f"retrying in {sleep_seconds:.1f}s "
+        f"({attempt + 1}/{max_retries})"
+    )
 
 
 def _extract_openai_message_text(message: Any) -> List[str]:
