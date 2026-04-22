@@ -37,7 +37,7 @@ make run         # 本地启动：-conf ../../configs
 
 ## Docker 构建
 
-`Dockerfile` 两阶段：builder 用 `golang:1.21-alpine`，自带 codegen 工具，一次性 `make api && make wire && make build`；runtime 用 `alpine:3.19`。
+`Dockerfile` 两阶段：builder 用 `golang:1.22-alpine`（Kratos cmd 子模块的 @latest 要求 Go ≥ 1.22），自带 codegen 工具，一次性 `make api && make wire && make build`；runtime 用 `alpine:3.19`。
 
 ```bash
 docker build -t demo-app .
@@ -49,4 +49,5 @@ HTTP 端口 `8080`，gRPC 端口 `9000`。
 ## 已知事项
 
 - **未提交生成物**：`*.pb.go` / `*_grpc.pb.go` / `*_http.pb.go` / `wire_gen.go` 全部通过 `make api` / `make wire` 实时生成。首次构建必须先 `make init && make api && make wire`。
-- **宿主 Go 版本**：本骨架需 Go ≥ 1.21；如果宿主只有旧版本，使用 Docker 构建或在容器内跑测试（Phase B 会在 engine 里统一处理）。
+- **宿主 Go 版本**：本骨架 `go.mod` 声明 `go 1.21`，但 Kratos codegen 工具 @latest 需要 Go ≥ 1.22。Docker 构建走 `golang:1.22-alpine` 不受影响；本地 `make init` / `make test` 建议宿主同样升到 Go 1.22+（Phase B 会在 engine 里统一处理）。
+- **Kratos codegen 工具版本**：`protoc-gen-go-http` / `protoc-gen-go-errors` / `kratos` CLI 在仓库里是独立 Go module，tag 节奏与主库不同步（主库有 `v2.7.3` 但这些 cmd 子模块没有对应 tag）。因此 `Makefile` 和 `Dockerfile` 统一使用 `@latest`；主库 Kratos v2.7.3 仍在 `go.mod` 中锁定，运行时行为稳定。

@@ -13,13 +13,16 @@ VERSION=$(shell git describe --tags --always 2>/dev/null || echo v0.0.0)
 #   make run     # 本地运行（需先 make api && make wire）
 # ===========================================================
 
+# Kratos cmd 子模块（protoc-gen-go-http / protoc-gen-go-errors / kratos CLI）在仓库里是独立 Go module，
+# 其 tag 与主库不同步（例如主库 v2.7.3 但 cmd/protoc-gen-go-http 并没有对应 v2.7.3 tag），因此这里统一用 @latest。
+# 生成的 *.pb.go 只在代码生成期使用，不会进入运行时，对 go.mod 里 Kratos v2.7.3 主库没有污染。
 .PHONY: init
 init:
 	go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.33.0
 	go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.3.0
-	go install github.com/go-kratos/kratos/cmd/kratos/v2@v2.7.3
-	go install github.com/go-kratos/kratos/cmd/protoc-gen-go-http/v2@v2.7.3
-	go install github.com/go-kratos/kratos/cmd/protoc-gen-go-errors/v2@v2.7.3
+	go install github.com/go-kratos/kratos/cmd/kratos/v2@latest
+	go install github.com/go-kratos/kratos/cmd/protoc-gen-go-http/v2@latest
+	go install github.com/go-kratos/kratos/cmd/protoc-gen-go-errors/v2@latest
 	go install github.com/google/wire/cmd/wire@v0.6.0
 
 .PHONY: api
@@ -28,6 +31,7 @@ api:
 	if [ -n "$$proto_files" ]; then \
 		protoc --proto_path=. \
 		       --proto_path=./third_party \
+		       --proto_path=/usr/include \
 		       --go_out=paths=source_relative:. \
 		       --go-grpc_out=paths=source_relative:. \
 		       --go-http_out=paths=source_relative:. \
