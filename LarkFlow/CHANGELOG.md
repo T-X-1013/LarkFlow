@@ -75,3 +75,56 @@
 
 ### Removed
 - **废弃旧工具命名**：对外工具名不再使用 `mock_db`，统一改为 `inspect_db`，避免名称继续误导为“伪造数据库”
+
+## v1.3.1 (2026-04-21)
+
+### Overview
+收口工具定义文档的生成链路，增强飞书回调安全性与幂等处理，补齐 LLM 调用 usage 观测字段，并让 Docker 镜像能够直接启动当前 FastAPI 服务
+
+### Changed
+- **工具定义单源化**：将工具协议定义收敛到 `pipeline/tools_schema.py`，`agents/tools_definition.md` 改为由 `scripts/gen_tools_doc.py` 自动生成，避免工具 schema 与 Markdown 文档长期人工双写
+- **工具文档一致性校验**：新增 `.github/workflows/tools-doc-check.yml`，在 GitHub Actions 中执行 `python scripts/gen_tools_doc.py --check`，用于发现手工修改 `agents/tools_definition.md` 或忘记重新生成文档的问题
+- **飞书回调安全增强**：完善 `pipeline/lark_interaction.py` 的飞书回调处理，补齐 verification token 校验、签名校验、加密 payload 解密与 `/start` 启动入口兼容
+- **飞书事件幂等处理**：基于事件 ID 增加交互回调去重，避免用户多次点击同一张卡片时重复推进同一个审批动作
+- **飞书消息发送收口**：将飞书文本消息与卡片消息构造发送逻辑集中到 `pipeline/lark_client.py`，减少 `pipeline/engine.py` 对飞书 API 细节的直接依赖
+- **LLM usage 归一记录**：在 `pipeline/llm_adapter.py` 中统一记录 Anthropic 与 OpenAI 返回的 `prompt_tokens`、`completion_tokens`、`total_tokens` 与 `latency_ms`，并写入会话历史，便于后续成本与性能排查
+- **OpenAI 重试策略增强**：补充 OpenAI provider 的可配置重试参数，支持通过 `OPENAI_MAX_RETRIES`、`OPENAI_RETRY_BASE_SECONDS`、`OPENAI_RETRY_MAX_SECONDS` 调整限流和临时异常重试行为
+- **Docker 运行入口修正**：新增并完善 `Dockerfile`，镜像启动命令统一为 `uvicorn pipeline.lark_interaction:app --host 0.0.0.0 --port 8000`，使容器运行后能够直接提供飞书回调服务
+- **部署文档同步**：更新 `README.md` 与 `.env.example`，补充 Docker 构建运行命令、`python:3.11-slim` 预拉取提示、飞书安全配置项和 OpenAI 重试配置项
+- **测试覆盖补齐**：新增飞书交互、LLM usage、工具文档生成与 Dockerfile 相关测试，覆盖回调校验、重复事件处理、usage 字段归一、文档生成一致性和容器入口配置
+
+### Removed
+- **旧容器启动方式移除**：不再使用过期的 Python 模块启动命令作为 Docker 默认入口，统一通过 Uvicorn 启动 FastAPI 应用
+
+## v1.3.2 (2026-04-22)                                                                                                                                                       
+                                                                                                                                                                            
+### Overview                                                                                                                                                                 
+新增 Qwen provider 支持，补充 Qwen/DashScope 模型提供方说明，让项目文档与当前 `LLM_PROVIDER=qwen` 的实现保持一致                                                                                      
+                                                                                                                                                                           
+### Changed                                                                                                                                                                  
+- **Qwen Provider 文档同步**：更新 `README.md` 与 `LarkFlow.md`，将 LLM Provider 说明从 Anthropic/OpenAI 两类扩展为 Anthropic、OpenAI、Qwen/DashScope 三类                   
+- **Qwen 环境变量说明**：在 README 配置示例中补充 `QWEN_API_KEY`、`QWEN_BASE_URL`、`QWEN_MODEL`，并说明兼容 `DASHSCOPE_API_KEY`、`DASHSCOPE_BASE_URL`、`DASHSCOPE_MODEL`     
+- **Qwen 调用协议说明**：明确 Qwen 通过 DashScope 的 OpenAI-compatible Chat Completions API 接入，工具调用使用 Chat Completions 的 `tools` 与 `role=tool` 回填格式           
+                                                                                                                                                                            
+### Removed                                                                                                                                                                  
+无  
+
+## v1.4.0 (2026-04-21)
+
+### Overview
+Agent 能力与规范知识库扩充：skills 库从 6 个扩到 13 个、路由表升级为 YAML 单一真源、四阶段 prompt 统一结构化重写、新增 prompt 评测集与 Reviewer → Skills 回灌闭环。
+
+### Added
+- **横切 skills**：新增 `skills/logging.md`、`skills/config.md`、`skills/auth.md`、`skills/rate_limit.md`、`skills/idempotency.md`、`skills/pagination.md`，与既有 `database.md` 等保持 🔴/🟡 分级 + Go ❌/✅ 代码对照结构。
+- **业务 skills**：`skills/biz/` 目录下补充 `user.md`（密码 bcrypt、登录防爆破、注册幂等、风控钩子）与 `payment.md`（回调验签 + 幂等、金额 `int64` 分、状态机、对账），风格对齐 `biz/order.md`。
+- **路由表 YAML 化**：新增 `rules/skill-routing.yaml` 作为唯一真源，包含 15 条路由与 `defaults` 兜底，业务 skill `weight: 1.2` 优先于横切 1.0。`rules/skill-routing.md` 保留为人类可读镜像并在顶部声明以 YAML 为准。
+- **Prompt 评测集**：新增 `tests/prompts/fixtures/` 下 5 个 fixture（简单 CRUD / Redis 缓存 / 分页列表 / 幂等支付回调 / 并发批任务），覆盖工具调用、skills 命中、文件落地、代码正则黑白名单四类断言；配套 `tests/prompts/eval.py` 支持 `--mock`（CI 自检）与真跑入口。
+- **Skill 回灌闭环文档**：新增 `rules/skill-feedback-loop.md`，定义 Phase 4 Reviewer 输出 `<skill-feedback>` 结构化块 → 周度 triage → PR 回灌 `skills/*.md` + 路由表 + 评测 fixture 的四步流程。
+
+### Changed
+- **四阶段 prompt 全面重写**：`agents/phase1_design.md` / `phase2_coding.md` / `phase3_test.md` / `phase4_review.md` 由 11–24 行扩写到 82–100 行，统一结构为「角色 / 目标 / 工作流 / 禁止事项 / 输出格式 / 示例」。
+- **Phase 2 路由行为**：要求 agent 先读 `rules/skill-routing.yaml`，按权重取 Top 5，无匹配时走 defaults，并在写码前报告所选 skill 以便审计。
+- **Phase 4 审查输出**：要求 Reviewer 对每个"可沉淀为规则"的发现输出 `<skill-feedback>` 块，供后续回灌 skills 库。
+
+### Removed
+- 无。
