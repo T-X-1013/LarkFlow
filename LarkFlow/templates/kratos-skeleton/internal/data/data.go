@@ -3,9 +3,9 @@ package data
 import (
 	"demo-app/internal/conf"
 
+	"github.com/glebarez/sqlite"
 	"github.com/go-kratos/kratos/v2/log"
 	"github.com/google/wire"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
 

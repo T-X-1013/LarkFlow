@@ -203,3 +203,12 @@ Agent 能力与规范知识库扩充：skills 库从 6 个扩到 13 个、路由
 ### Notes
 - `eval.py --mock` 6/6 fixtures 通过；pytest 全量 45 passed。
 - rpc.md / observability.md / resilience.md / service_discovery.md 留给后续 PR#5（同步 PR#2a）——本次只聚焦 Kratos 本身。
+
+## v1.4.5 (2026-04-22)
+
+### Fixed
+- **Kratos 骨架 CGO 陷阱**：模板 `gorm.io/driver/sqlite`（底层 mattn/go-sqlite3）依赖 CGO，在 `golang:1.22-alpine` builder 下因未安装 gcc 默认编译为 stub，容器启动时 `gorm.Open` panic：`go-sqlite3 requires cgo to work. This is a stub`。切换到纯 Go 实现的 `github.com/glebarez/sqlite v1.11.0`（drop-in 替换，GORM API 完全兼容），Dockerfile 零改动、alpine 镜像无 gcc 也能正常运行。
+- 修改范围：`templates/kratos-skeleton/go.mod`、`templates/kratos-skeleton/internal/data/data.go`。
+
+### Notes
+- 五道坑合集（Go 版本 / protobuf-dev / go.sum / 空 ProviderSet / CGO）已沉淀到 memory，下次做 Kratos 骨架直接规避。
