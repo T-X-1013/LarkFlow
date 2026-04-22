@@ -144,7 +144,7 @@ Agent 能力与规范知识库扩充：skills 库从 6 个扩到 13 个、路由
 - **路由与文档同步**：`rules/skill-routing.yaml`、`rules/skill-routing.md`、`rules/skill-feedback-loop.md`、`agents/phase1_design.md`、`agents/phase2_coding.md`、`agents/phase4_review.md`、`tests/prompts/fixtures/*.yaml`、`README.md` 全量更新为新路径
 - **代码侧零改动**：`pipeline/tools_runtime.py` 的 ACL 只校验 `workspace_root` 深度无关，无需适配
 
-## v1.5.0 (2026-04-22)
+## v1.4.2 (2026-04-22)
 
 ### Overview
 引入 Kratos 骨架模板作为每次需求启动时的只读模具，为后续 Agent 按 Kratos 四层布局生成代码铺路。本次仅引入模板（PR#2 / Phase A），不改 pipeline 与 Agent prompt。
