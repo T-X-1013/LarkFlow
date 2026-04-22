@@ -16,8 +16,8 @@ LarkFlow 作为一个由 Python Pipeline 驱动的状态机运行，它协调多
 本框架采用类似 RAG（检索增强生成）的机制。它不会将所有几万字的规范一股脑塞进 System Prompt 中，而是强制编码 Agent 首先读取 `rules/skill-routing.md` 路由表，根据当前任务的上下文（例如：只有当任务涉及缓存时，才去读取 `skills/redis.md`）来动态发现并学习具体的最佳实践。
 
 ### 3. 调度引擎 (`pipeline/`)
-这是一个 Python 引擎，负责处理 Anthropic 或 OpenAI API 的调用，执行本地工具（如文件读写、Bash 命令执行），并通过飞书（Lark）交互式消息卡片来管理整个工作流的挂起（等待人类审批）与唤醒。其中：
-- `pipeline/llm_adapter.py` 负责统一 Anthropic 与 OpenAI 两种 provider 的调用接口与会话状态。
+这是一个 Python 引擎，负责处理 Anthropic、OpenAI 或 Qwen/DashScope API 的调用，执行本地工具（如文件读写、Bash 命令执行），并通过飞书（Lark）交互式消息卡片来管理整个工作流的挂起（等待人类审批）与唤醒。其中：
+- `pipeline/llm_adapter.py` 负责统一 Anthropic、OpenAI 与 Qwen/DashScope 三种 provider 的调用接口与会话状态；Qwen 通过 DashScope 的 OpenAI-compatible Chat Completions API 接入。
 - `pipeline/lark_client.py` 负责飞书卡片构建与消息发送。
 - `pipeline/lark_interaction.py` 负责飞书 Webhook 校验、事件幂等、回调解析，并调用状态机恢复已挂起的 Pipeline。
 

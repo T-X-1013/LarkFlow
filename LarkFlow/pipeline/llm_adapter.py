@@ -5,7 +5,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
-from pipeline.tools_schema import get_anthropic_tools, get_openai_tools
+from pipeline.tools_schema import get_anthropic_tools, get_chat_completion_tools, get_openai_tools
 
 
 @dataclass
@@ -27,7 +27,7 @@ class AgentTurn:
 def get_provider_name() -> str:
     """读取当前配置的模型提供方"""
     provider = os.getenv("LLM_PROVIDER", "anthropic").strip().lower()
-    if provider not in {"anthropic", "openai"}:
+    if provider not in {"anthropic", "openai", "qwen"}:
         raise ValueError(f"Unsupported LLM_PROVIDER: {provider}")
     return provider
 
@@ -46,6 +46,17 @@ def build_client(provider: str) -> Any:
 
         api_key = os.getenv("OPENAI_API_KEY")
         base_url = os.getenv("OPENAI_BASE_URL") or None
+        return OpenAI(api_key=api_key, base_url=base_url)
+
+    if provider == "qwen":
+        from openai import OpenAI
+
+        api_key = os.getenv("QWEN_API_KEY") or os.getenv("DASHSCOPE_API_KEY")
+        base_url = (
+            os.getenv("QWEN_BASE_URL")
+            or os.getenv("DASHSCOPE_BASE_URL")
+            or "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        )
         return OpenAI(api_key=api_key, base_url=base_url)
 
     raise ValueError(f"Unsupported provider: {provider}")
@@ -75,9 +86,15 @@ def append_user_text(session: Dict[str, Any], text: str):
             "role": "user",
             "content": text
         })
-    else:
+    elif provider == "openai":
         # OpenAI Responses API 采用增量输入，因此维护 pending_inputs 队列。
         session["provider_state"].setdefault("pending_inputs", []).append({
+            "role": "user",
+            "content": text
+        })
+    else:
+        # Qwen/DashScope 走 OpenAI-compatible Chat Completions，维护 messages 数组。
+        session["provider_state"].setdefault("messages", []).append({
             "role": "user",
             "content": text
         })
@@ -102,12 +119,20 @@ def append_tool_result(session: Dict[str, Any], tool_call: ToolCall, result_text
                 "content": result_text
             }]
         })
-    else:
+    elif provider == "openai":
         # OpenAI 需要把工具结果包装成 function_call_output，供下一轮 Responses 请求续接。
         session["provider_state"].setdefault("pending_inputs", []).append({
             "type": "function_call_output",
             "call_id": tool_call.id,
             "output": result_text
+        })
+    else:
+        # OpenAI-compatible Chat Completions 使用 role=tool 回填工具结果。
+        session["provider_state"].setdefault("messages", []).append({
+            "role": "tool",
+            "tool_call_id": tool_call.id,
+            "name": tool_call.name,
+            "content": result_text
         })
 
 
@@ -119,7 +144,9 @@ def create_turn(session: Dict[str, Any], system_prompt: str) -> AgentTurn:
     # 对外暴露统一的 create_turn，内部再按 provider 分发到各自的 SDK 协议。
     if provider == "anthropic":
         return _create_anthropic_turn(session, client, system_prompt)
-    return _create_openai_turn(session, client, system_prompt)
+    if provider == "openai":
+        return _create_openai_turn(session, client, system_prompt)
+    return _create_qwen_turn(session, client, system_prompt)
 
 
 def _create_anthropic_turn(session: Dict[str, Any], client: Any, system_prompt: str) -> AgentTurn:
@@ -303,6 +330,73 @@ def _normalize_usage(raw_usage: Any, latency_ms: int) -> Dict[str, int]:
         "total_tokens": total_tokens,
         "latency_ms": latency_ms,
     }
+
+
+def _create_qwen_turn(session: Dict[str, Any], client: Any, system_prompt: str) -> AgentTurn:
+    state = session["provider_state"]
+    messages = state.setdefault("messages", [])
+    model_name = os.getenv("QWEN_MODEL") or os.getenv("DASHSCOPE_MODEL") or "qwen-plus"
+
+    started_at = time.monotonic()
+    response = client.chat.completions.create(
+        model=model_name,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            *messages,
+        ],
+        tools=get_chat_completion_tools(),
+        tool_choice="auto",
+    )
+    latency_ms = _elapsed_ms(started_at)
+    usage = _normalize_usage(getattr(response, "usage", None), latency_ms)
+
+    choice = response.choices[0]
+    message = choice.message
+    assistant_message = {
+        "role": "assistant",
+        "content": message.content or "",
+    }
+
+    tool_calls = []
+    if message.tool_calls:
+        assistant_message["tool_calls"] = [
+            {
+                "id": tool_call.id,
+                "type": "function",
+                "function": {
+                    "name": tool_call.function.name,
+                    "arguments": tool_call.function.arguments,
+                },
+            }
+            for tool_call in message.tool_calls
+        ]
+        for tool_call in message.tool_calls:
+            tool_calls.append(ToolCall(
+                id=tool_call.id,
+                name=tool_call.function.name,
+                arguments=_safe_json_loads(tool_call.function.arguments or "{}"),
+            ))
+
+    messages.append(assistant_message)
+
+    text_blocks = [message.content] if message.content else []
+    session["history"].append({
+        "role": "assistant",
+        "content": "\n".join(text_blocks),
+        "tool_calls": [
+            {"id": tool_call.id, "name": tool_call.name, "arguments": tool_call.arguments}
+            for tool_call in tool_calls
+        ],
+        "usage": usage,
+    })
+
+    return AgentTurn(
+        text_blocks=text_blocks,
+        tool_calls=tool_calls,
+        finished=len(tool_calls) == 0,
+        raw_response=response,
+        usage=usage,
+    )
 
 
 def _model_supports_reasoning(model_name: str) -> bool:
