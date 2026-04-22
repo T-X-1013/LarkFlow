@@ -82,6 +82,8 @@ graph TD
 │   │   ├── infra/                  # database / redis / config
 │   │   ├── governance/             # auth / rate_limit / idempotency / logging
 │   │   └── domain/                 # order / user / payment
+│   ├── templates/
+│   │   └── kratos-skeleton/        # Kratos 精简骨架：每次需求启动时 copy 到 demo-app/
 │   └── tests/
 │       └── prompts/                # Prompt 评测集
 │           ├── fixtures/*.yaml     # 5 个 fixture

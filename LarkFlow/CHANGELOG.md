@@ -143,3 +143,20 @@ Agent 能力与规范知识库扩充：skills 库从 6 个扩到 13 个、路由
   - `skills/domain/`：原 `skills/biz/`，改名避免与 Kratos `internal/biz` 语义冲突
 - **路由与文档同步**：`rules/skill-routing.yaml`、`rules/skill-routing.md`、`rules/skill-feedback-loop.md`、`agents/phase1_design.md`、`agents/phase2_coding.md`、`agents/phase4_review.md`、`tests/prompts/fixtures/*.yaml`、`README.md` 全量更新为新路径
 - **代码侧零改动**：`pipeline/tools_runtime.py` 的 ACL 只校验 `workspace_root` 深度无关，无需适配
+
+## v1.5.0 (2026-04-22)
+
+### Overview
+引入 Kratos 骨架模板作为每次需求启动时的只读模具，为后续 Agent 按 Kratos 四层布局生成代码铺路。本次仅引入模板（PR#2 / Phase A），不改 pipeline 与 Agent prompt。
+
+### Added
+- **`LarkFlow/templates/kratos-skeleton/`**：精简版 Kratos v2.7.3 骨架，覆盖 `api/` / `cmd/server/` / `configs/` / `internal/{biz,conf,data,server,service}` / `third_party/` 目录与 `go.mod` / `Makefile` / `Dockerfile` / `README.md`。
+  - 四层 `ProviderSet` 占位（`biz` / `data` / `service` / `server`），`cmd/server/wire.go` 正确汇聚，Agent 只需向对应层追加 provider。
+  - `Makefile` 目标：`init` / `api` / `wire` / `build` / `test` / `run` / `all`；`Dockerfile` 两阶段（`golang:1.21-alpine` builder → `alpine:3.19` runtime），HTTP 8080 + gRPC 9000。
+  - 默认数据栈：GORM + SQLite（`configs/config.yaml`），与现有 `skills/infra/database.md` 约定一致。
+  - 生成物（`*.pb.go` / `wire_gen.go`）不提交，统一由 `make api && make wire` 实时生成。
+- **根 `.gitignore` 补充**：排除 `demo-app/`（per-demand 产物目录）以及 demo-app/templates 下的 Kratos 生成物。
+
+### Notes
+- 本次**未**改动 `pipeline/engine.py`、Agent prompt、路由表；Phase B（engine 对接 copy-in 钩子）与 Phase C（Agent prompt + `skills/framework/kratos.md`）将在后续 PR 推进。
+- 模板 `gofmt -l` 清零；`docker build` 的端到端验证需要宿主能拉取 `golang:1.21-alpine`，留给使用者本地或 CI 侧完成。
