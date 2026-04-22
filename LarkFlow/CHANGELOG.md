@@ -183,7 +183,7 @@ Agent 能力与规范知识库扩充：skills 库从 6 个扩到 13 个、路由
 - 仅影响 pipeline 启动行为；Agent prompt 与 skills 未改动（PR#4 / Phase C 处理）。
 - 全量回归测试 45 passed（40 旧 + 5 新 scaffold）。
 
-## v1.6.0 (2026-04-22)
+## v1.4.4 (2026-04-22)
 
 ### Overview
 让 Agent 完整理解 Kratos 骨架——新增 `skills/framework/kratos.md` 作为架构级硬约束（weight=1.3，进 defaults），四阶段 prompt 全部接入 Kratos 分层规则（PR#4 / Phase C）。至此 PR#2→#4 三步闭环，Phase 2 从完整 Kratos 布局起步、按五步流程补业务代码，Phase 4 把跨层违规列为 🔴 红线。
