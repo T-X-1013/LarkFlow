@@ -23,7 +23,7 @@ Before implementing ANY specific domain logic (e.g., Database, Cache, HTTP, Conc
 - **Formatting**: Assume standard `gofmt` and `goimports` will be applied.
 
 ## 3.1 Python Standards (LarkFlow)
-当改动落在 `LarkFlow/pipeline/` 或 `LarkFlow/tests/` 等 Python 目录时，除通用原则外，**必须**阅读并遵循 `skills/python-comments.md`，重点覆盖：
+当改动落在 `LarkFlow/pipeline/` 或 `LarkFlow/tests/` 等 Python 目录时，除通用原则外，**必须**阅读并遵循 `skills/lang/python-comments.md`，重点覆盖：
 - 注释解释“为什么”而不是逐行翻译语法。
 - 对外接口、非直观输入输出的函数补 docstring；模块级 docstring 仅在确有上下文信息时添加。
 - 常量注释放在定义上一行；`dataclass` / `NamedTuple` 成组字段允许对齐的行尾注释。

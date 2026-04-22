@@ -75,7 +75,7 @@ PATCH /users/me/nickname — body `{ "nickname": "string <=30" }`, returns 200 w
 4. Return refreshed user row.
 
 ## Relevant Skills
-skills/database.md, skills/http.md, skills/auth.md
+skills/infra/database.md, skills/transport/http.md, skills/governance/auth.md
 
 ## Open Questions
 Should empty string clear the nickname, or require explicit NULL? (Assuming: empty string → NULL.)

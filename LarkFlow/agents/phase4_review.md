@@ -79,7 +79,7 @@ Code Review Approved | Code Review Blocked
 ```
 ## Review Summary
 Scope: 4 files inspected
-Skills consulted: skills/biz/order.md, skills/idempotency.md, skills/redis.md, skills/database.md, skills/http.md
+Skills consulted: skills/domain/order.md, skills/governance/idempotency.md, skills/infra/redis.md, skills/infra/database.md, skills/transport/http.md
 
 ## Findings
 - [🔴] internal/service/order.go:42 — Idempotency key stored in process memory, lost on restart.
@@ -92,7 +92,7 @@ Skills consulted: skills/biz/order.md, skills/idempotency.md, skills/redis.md, s
   <severity>critical</severity>
   <summary>Idempotency must be backed by shared storage, not in-process map.</summary>
   <evidence>internal/service/order.go:42 — `var seen = map[string]bool{}`</evidence>
-  <suggested-skill>skills/idempotency.md</suggested-skill>
+  <suggested-skill>skills/governance/idempotency.md</suggested-skill>
 </skill-feedback>
 
 ## Verdict

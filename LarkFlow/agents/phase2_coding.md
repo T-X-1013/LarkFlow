@@ -14,8 +14,8 @@ Deliver code that (a) implements the approved design exactly, (b) passes every r
 2. **Consult the Rules & Skills (CRITICAL)**
    - Read `rules/flow-rule.md` for pipeline-level constraints.
    - Read `rules/skill-routing.yaml` — this is the **canonical routing table**. (`skill-routing.md` is a human-readable mirror.)
-   - Scan the design text (case-insensitive, substring match) against every entry's `keywords` list. Collect all matches, sort by `weight` DESC, and read the top 5 `skill` files. Ties: business skills (`skills/biz/*`) win.
-   - If **no** entry matches, fall back to the `defaults` list in the YAML (currently `skills/error.md` and `skills/http.md`).
+   - Scan the design text (case-insensitive, substring match) against every entry's `keywords` list. Collect all matches, sort by `weight` DESC, and read the top 5 `skill` files. Ties: business skills (`skills/domain/*`) win.
+   - If **no** entry matches, fall back to the `defaults` list in the YAML (currently `skills/lang/error.md` and `skills/transport/http.md`).
    - Before writing any code, briefly state which skills you matched and why so the reviewer can audit the routing.
 
 3. **Implement**
@@ -33,12 +33,12 @@ Deliver code that (a) implements the approved design exactly, (b) passes every r
 ## Forbidden
 
 - Writing outside `../demo-app/`.
-- Using `fmt.Sprintf` to build SQL. Use parameterized queries (`skills/database.md`).
-- Starting naked goroutines. Use `errgroup` / `sync.WaitGroup` with panic recovery (`skills/concurrency.md`).
-- Storing or logging secrets, tokens, full PII (`skills/logging.md`, `skills/config.md`).
-- Using `float64` for money (`skills/biz/payment.md`).
-- Unbounded `db.Find(&xs)` on list endpoints (`skills/pagination.md`).
-- Hardcoding credentials, URLs, or secrets — they come from env (`skills/config.md`).
+- Using `fmt.Sprintf` to build SQL. Use parameterized queries (`skills/infra/database.md`).
+- Starting naked goroutines. Use `errgroup` / `sync.WaitGroup` with panic recovery (`skills/lang/concurrency.md`).
+- Storing or logging secrets, tokens, full PII (`skills/governance/logging.md`, `skills/infra/config.md`).
+- Using `float64` for money (`skills/domain/payment.md`).
+- Unbounded `db.Find(&xs)` on list endpoints (`skills/transport/pagination.md`).
+- Hardcoding credentials, URLs, or secrets — they come from env (`skills/infra/config.md`).
 - Rewriting code that is out of the design's scope.
 
 ## Output Format
@@ -69,11 +69,11 @@ Design calls for a `POST /orders` endpoint with Redis-backed idempotency.
 ```
 ## Skill Routing
 Matched (by weight):
-- skills/biz/order.md — keyword "order" (w=1.2)
-- skills/idempotency.md — keyword "idempotency" (w=1.0)
-- skills/redis.md — keyword "redis" (w=1.0)
-- skills/http.md — keyword "http" (w=1.0)
-- skills/database.md — keyword "database" (w=1.0)
+- skills/domain/order.md — keyword "order" (w=1.2)
+- skills/governance/idempotency.md — keyword "idempotency" (w=1.0)
+- skills/infra/redis.md — keyword "redis" (w=1.0)
+- skills/transport/http.md — keyword "http" (w=1.0)
+- skills/infra/database.md — keyword "database" (w=1.0)
 
 [… writes files …]
 

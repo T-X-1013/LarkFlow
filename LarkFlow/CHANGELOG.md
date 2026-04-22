@@ -128,3 +128,18 @@ Agent 能力与规范知识库扩充：skills 库从 6 个扩到 13 个、路由
 
 ### Removed
 - 无。
+
+## v1.4.1 (2026-04-22)
+
+### Overview
+按关注点分层重构 `skills/` 目录（PR#1，纯迁移无内容变化），为后续引入 Kratos 相关 skill 打基础。
+
+### Changed
+- **skills 目录分层**：从扁平结构迁移为五层结构，使用 `git mv` 保留历史
+  - `skills/lang/`：concurrency / error / python-comments
+  - `skills/transport/`：http / pagination
+  - `skills/infra/`：database / redis / config
+  - `skills/governance/`：auth / rate_limit / idempotency / logging
+  - `skills/domain/`：原 `skills/biz/`，改名避免与 Kratos `internal/biz` 语义冲突
+- **路由与文档同步**：`rules/skill-routing.yaml`、`rules/skill-routing.md`、`rules/skill-feedback-loop.md`、`agents/phase1_design.md`、`agents/phase2_coding.md`、`agents/phase4_review.md`、`tests/prompts/fixtures/*.yaml`、`README.md` 全量更新为新路径
+- **代码侧零改动**：`pipeline/tools_runtime.py` 的 ACL 只校验 `workspace_root` 深度无关，无需适配
