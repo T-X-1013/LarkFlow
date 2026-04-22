@@ -160,3 +160,25 @@ Agent 能力与规范知识库扩充：skills 库从 6 个扩到 13 个、路由
 ### Notes
 - 本次**未**改动 `pipeline/engine.py`、Agent prompt、路由表；Phase B（engine 对接 copy-in 钩子）与 Phase C（Agent prompt + `skills/framework/kratos.md`）将在后续 PR 推进。
 - 模板 `gofmt -l` 清零；`docker build` 的端到端验证需要宿主能拉取 `golang:1.21-alpine`，留给使用者本地或 CI 侧完成。
+
+## v1.4.3 (2026-04-22)
+
+### Overview
+把 Kratos 骨架接入 pipeline：新需求启动时自动把 `templates/kratos-skeleton/` 物化到 `target_dir`（demo-app/），Phase 2 Agent 从完整 Kratos 布局起步（PR#3 / Phase B）。
+
+### Added
+- **`_ensure_target_scaffold()` 钩子**：在 `pipeline/engine.py` 的 `start_new_demand` 起点调用；幂等处理四种场景：
+  - target_dir 不存在 → `shutil.copytree` 物化模板
+  - target_dir 存在但为空 → 先 rmdir 再 copytree
+  - target_dir 已有 `go.mod`（resume / 多次 demand） → 原样保留，不覆盖
+  - target_dir 非空但缺 `go.mod`（状态不明） → 抛 `RuntimeError` 拒绝覆盖
+- **`_resolve_workspace_and_target()`**：统一解析 workspace_root / target_dir，消除 `run_agent_loop` 里的重复计算；start 阶段把两个路径固化进 session，工具调用直接读取。
+- **`tests/test_engine_scaffold.py`**：5 个 unittest，覆盖空目录物化、已物化幂等、模板缺失报错、脏状态拒绝四个分支。
+
+### Changed
+- `start_new_demand`：物化骨架 → initialize_session → 写入 `target_dir` / `workspace_root` 到 session → 进入 Phase 1。
+- `run_agent_loop`：工具执行时从 session 读 `target_dir`（原先是每次重算）。
+
+### Notes
+- 仅影响 pipeline 启动行为；Agent prompt 与 skills 未改动（PR#4 / Phase C 处理）。
+- 全量回归测试 45 passed（40 旧 + 5 新 scaffold）。
