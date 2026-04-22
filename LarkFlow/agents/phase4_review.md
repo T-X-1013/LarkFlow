@@ -22,6 +22,15 @@ Block any merge that violates a 🔴 rule in the matched `skills/*.md`. Fix 🟡
    - Also read the test files — unrealistic mocks or weak assertions are in scope.
 
 4. **Enforce Standards — checklist**
+   - **🔴 Kratos layering** (BLOCK on violation, see `skills/framework/kratos.md`):
+     - `internal/service/*.go` does not import `gorm`, `redis`, or `internal/data/*`; it calls biz usecases only.
+     - `internal/biz/*.go` does not import `internal/data/*` concrete types; it depends on Repo interfaces it defines itself.
+     - `internal/data/*.go` does not import `internal/biz/*` or `internal/service/*` (only uses `biz.XxxRepo` interface references at method signature level).
+     - `internal/server/*.go` only registers proto services; no direct biz/data access.
+     - No `.go` files at `demo-app/` root or outside `cmd/` / `internal/` / `api/`.
+   - **🔴 Kratos codegen consistency**:
+     - If any `.proto` changed, the corresponding `*.pb.go` / `*_grpc.pb.go` / `*_http.pb.go` must exist and match (check `make api` ran). Stale generated files = block.
+     - If any `ProviderSet` or `wire.go` changed, `wire_gen.go` must reflect it (check `make wire` ran).
    - **Database**: no string-concatenated SQL; transactions have `defer rollback`; list queries have `LIMIT`.
    - **Concurrency**: no naked `go func()`; every goroutine has lifecycle control and panic recovery; `context` propagated.
    - **Auth**: middleware on groups not handlers; JWT `alg` pinned; constant-time compares for signatures.

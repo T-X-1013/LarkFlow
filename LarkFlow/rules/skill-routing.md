@@ -4,10 +4,11 @@
 > human-readable mirror — if the two disagree, the YAML wins. When adding or
 > changing a route, edit the YAML first, then update this table to match.
 
-**Rule**: When the user's requirement or the technical design involves the following keywords, you **MUST IMMEDIATELY** use the `file_editor` tool to read the corresponding `Ref File` before writing any code. When multiple routes match, read them in descending order of `weight` (business skills default to 1.2, generic to 1.0).
+**Rule**: When the user's requirement or the technical design involves the following keywords, you **MUST IMMEDIATELY** use the `file_editor` tool to read the corresponding `Ref File` before writing any code. When multiple routes match, read them in descending order of `weight` (framework skills 1.3, business 1.2, generic 1.0).
 
 | Keywords / Domain | Ref File | Weight | Description |
 |-------------------|----------|--------|-------------|
+| Kratos, Wire, 分层, API 层, internal/biz, internal/data, internal/service, Proto, 骨架, Scaffold | `skills/framework/kratos.md` | **1.3** | Kratos 四层布局、跨层禁例、新 domain 5 步流程、wire/make 工具链 |
 | MySQL, PostgreSQL, SQL, GORM, Database, 数据库, ORM, Transaction, 事务, Migration | `skills/infra/database.md` | 1.0 | SQL injection prevention, transactions, resource leaks |
 | Redis, Cache, 缓存, 分布式锁, Pipeline, Expiration, TTL | `skills/infra/redis.md` | 1.0 | Redis client, key expiration, pipelines |
 | HTTP, API, REST, Gin, Router, 路由, 中间件, Request, Response | `skills/transport/http.md` | 1.0 | HTTP framework, JSON responses, parameter binding |
@@ -26,4 +27,4 @@
 
 **Path Prefix**: `skills/` (relative to the workspace root)
 
-**Defaults** (read when nothing else matches): `skills/lang/error.md`, `skills/transport/http.md`
+**Defaults** (read when nothing else matches): `skills/framework/kratos.md`, `skills/lang/error.md`, `skills/transport/http.md`

@@ -1,0 +1,39 @@
+name: grpc_order_service
+requirement: |
+  用 Kratos 骨架的 gRPC + HTTP 双协议同时暴露订单创建接口：
+  1. 在 api/order/v1/order.proto 新增 service Order，rpc CreateOrder；
+     HTTP 通过 google.api.http 注解暴露为 POST /v1/orders。
+  2. biz 层实现 OrderUsecase + OrderRepo 接口（放 biz），data 层实现 Repo。
+  3. service 层把 proto handler 接到 biz usecase，server 层注册。
+  4. cmd/server/wire.go 激活 biz/data/service 三个 ProviderSet。
+  5. 并发下单必须幂等，金额用 int64 分，禁止超卖。
+
+expect_phase1_tools:
+  - inspect_db
+  - ask_human_approval
+
+expect_phase2_skills_read:
+  - skills/framework/kratos.md
+  - skills/domain/order.md
+  - skills/governance/idempotency.md
+  - skills/lang/concurrency.md
+  - skills/infra/database.md
+
+expect_phase2_files_written_patterns:
+  - "api/order/v1/*.proto"
+  - "internal/biz/*.go"
+  - "internal/data/*.go"
+  - "internal/service/*.go"
+  - "cmd/server/wire.go"
+
+expect_phase2_required_patterns:
+  - 'package biz'                  # biz 层文件存在
+  - 'OrderRepo'                    # Repo 接口命名按 Kratos 约定
+  - 'biz\.ProviderSet'             # wire.go 激活了 biz.ProviderSet
+  - 'google\.api\.http'            # proto 有 HTTP 注解
+  - 'AmountCents.*int64'           # 金额 int64，不用 float
+
+expect_phase2_forbidden_patterns:
+  - 'float64.*Amount'              # 金额禁止 float
+  - 'service.*gorm\.DB'            # service 层禁止直接持有 *gorm.DB
+  - 'biz.*internal/data'           # biz 层禁止 import 具体 data 包

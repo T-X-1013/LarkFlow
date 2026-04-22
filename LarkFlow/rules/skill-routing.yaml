@@ -61,6 +61,11 @@ routes:
     skill: skills/lang/python-comments.md
     weight: 0.8
 
+  # ---------- Framework skills (highest weight: 架构级硬约束) ----------
+  - keywords: [kratos, wire, 分层, api 层, internal/biz, internal/data, internal/service, proto, 骨架, scaffold]
+    skill: skills/framework/kratos.md
+    weight: 1.3
+
   # ---------- Business skills (higher weight) ----------
   - keywords: [order, 订单, 下单, 购物车, checkout, 超卖, 库存]
     skill: skills/domain/order.md
@@ -75,9 +80,11 @@ routes:
     weight: 1.2
 
 # When no route matches, Phase 2 agent should still read at least:
+#   - skills/framework/kratos.md   # 骨架布局是所有 demo-app 产物的前提，必读
 #   - skills/lang/error.md
 #   - skills/transport/http.md
 # These are baseline skills assumed for any Go service work.
 defaults:
+  - skills/framework/kratos.md
   - skills/lang/error.md
   - skills/transport/http.md

@@ -182,3 +182,24 @@ Agent 能力与规范知识库扩充：skills 库从 6 个扩到 13 个、路由
 ### Notes
 - 仅影响 pipeline 启动行为；Agent prompt 与 skills 未改动（PR#4 / Phase C 处理）。
 - 全量回归测试 45 passed（40 旧 + 5 新 scaffold）。
+
+## v1.6.0 (2026-04-22)
+
+### Overview
+让 Agent 完整理解 Kratos 骨架——新增 `skills/framework/kratos.md` 作为架构级硬约束（weight=1.3，进 defaults），四阶段 prompt 全部接入 Kratos 分层规则（PR#4 / Phase C）。至此 PR#2→#4 三步闭环，Phase 2 从完整 Kratos 布局起步、按五步流程补业务代码，Phase 4 把跨层违规列为 🔴 红线。
+
+### Added
+- **`skills/framework/kratos.md`** 🆕：四层依赖方向矩阵 + 跨层禁例 + 新增 domain 五步流程（proto → biz → data → service → wire 激活）+ wire ProviderSet 累积规则 + Repo interface 放 biz 层的正反例 + proto/errors 组织约定 + Makefile 命令对照 + 常见错配地雷。
+- **`tests/prompts/fixtures/06_grpc_order_service.yaml`** 🆕：覆盖 gRPC+HTTP 双协议 + Kratos 五层文件落地 + wire 激活的端到端断言，验证 `skills/framework/kratos.md` 路由命中。
+
+### Changed
+- **`rules/skill-routing.yaml` / `skill-routing.md`**：新增 `kratos / wire / 分层 / api 层 / internal/biz|data|service / proto / 骨架 / scaffold` 路由，`weight: 1.3`（高于 business 1.2，高于 generic 1.0）；`defaults` 头条追加 `skills/framework/kratos.md`，保证任何需求都会读到布局规范。
+- **`agents/phase1_design.md`**：设计模板新增 `## Kratos Layering` 必填小节，要求每个 usecase 明确拆解到 api/biz/data/service/server/wire 各文件职责；worked example 同步按 user 域重写。
+- **`agents/phase2_coding.md`**：Implement 步骤改写为「Kratos 四层布局 + 5 步流程」，明确 `make api` / `make wire` 的触发时机；Forbidden 列表新增跨层调用、根目录平铺、跳过 codegen 三类硬约束。
+- **`agents/phase3_test.md`**：Run Tests 顺序强制 `make api && make wire && go test ./...`；worked example 示范 codegen 步骤输出。
+- **`agents/phase4_review.md`**：Enforce Standards checklist 新增两组 🔴 红线——跨层 import 违规 + codegen 一致性（proto/ProviderSet 改动后生成物必须同步）。
+- **`rules/flow-rule.md`**：General Go Standards 增一条 Kratos 布局硬约束，禁止 `demo-app/` 根目录平铺 .go 文件。
+
+### Notes
+- `eval.py --mock` 6/6 fixtures 通过；pytest 全量 45 passed。
+- rpc.md / observability.md / resilience.md / service_discovery.md 留给后续 PR#5（同步 PR#2a）——本次只聚焦 Kratos 本身。
