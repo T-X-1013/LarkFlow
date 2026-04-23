@@ -55,3 +55,11 @@ LarkFlow/templates/kratos-skeleton/**/*_http.pb.go
 LarkFlow/templates/kratos-skeleton/**/*_errors.pb.go
 *.db
 *.db-journal
+
+# LarkFlow 会话持久化 (A1, pipeline/persistence.py 默认写入 .larkflow/sessions.db)
+.larkflow/
+
+# pytest-cov 本地覆盖率数据
+.coverage
+htmlcov/
+coverage.xml

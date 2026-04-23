@@ -1,7 +1,8 @@
+import concurrent.futures
 import os
+import random
 import shutil
 import sys
-import subprocess
 import time
 from typing import Dict, Any
 
@@ -20,12 +21,31 @@ from pipeline.llm_adapter import (
     initialize_session,
 )
 from pipeline.tools_runtime import ToolContext, execute as execute_local_tool
+from pipeline.persistence import SessionStore, default_store
+from pipeline.observability import accumulate_metrics, get_logger, log_turn_metrics
+from pipeline.deploy_strategy import get_strategy
 
 from dotenv import load_dotenv
 load_dotenv()
 
-# 模拟数据库/Redis 存储对话上下文
-SESSION_STORE: Dict[str, Dict[str, Any]] = {}
+# 会话持久化 (A1)：替代原先的进程内存 dict，支持进程重启恢复
+STORE: SessionStore = default_store()
+
+
+def _load_session(demand_id: str) -> Dict[str, Any] | None:
+    """从 STORE 读取 session 并重建 transient 字段 (client / logger)。"""
+    session = STORE.get(demand_id)
+    if session is None:
+        return None
+    # transient 字段在持久化时被剥离，此处按需重建
+    if "client" not in session and session.get("provider"):
+        session["client"] = build_client(session["provider"])
+    session["logger"] = get_logger(demand_id, session.get("phase"))
+    return session
+
+
+def _save_session(demand_id: str, session: Dict[str, Any]) -> None:
+    STORE.save(demand_id, session)
 
 # ==========================================
 # 1. 辅助函数：加载 Prompt
@@ -97,113 +117,110 @@ def _resolve_workspace_and_target(session_target: str = None) -> tuple:
     return workspace_root, target_dir
 
 
-def _run_checked_command(command: list, cwd: str = None) -> subprocess.CompletedProcess:
-    """执行命令并在失败时保留 stdout/stderr，便于分类部署错误。"""
-    result = subprocess.run(command, cwd=cwd, capture_output=True, text=True)
-    if result.returncode != 0:
-        raise subprocess.CalledProcessError(
-            result.returncode,
-            command,
-            output=result.stdout,
-            stderr=result.stderr,
-        )
-    return result
-
-
-def _collect_process_output(exc: subprocess.CalledProcessError) -> str:
-    parts = []
-    if exc.output:
-        parts.append(exc.output.strip())
-    if exc.stderr:
-        parts.append(exc.stderr.strip())
-    return "\n".join(part for part in parts if part).strip()
-
-
-def _tail_text(text: str, max_lines: int = 20) -> str:
-    lines = [line for line in (text or "").splitlines() if line.strip()]
-    if not lines:
-        return ""
-    return "\n".join(lines[-max_lines:])
-
-
-def _classify_deploy_failure(stage: str, details: str) -> str:
-    text = (details or "").lower()
-
-    if (
-        "failed to fetch anonymous token" in text
-        or "auth.docker.io" in text
-        or "registry.docker.io" in text
-        or "deadlineexceeded" in text
-        or "i/o timeout" in text
-    ):
-        return "Docker 外网访问失败，基础镜像或仓库元数据拉取超时。"
-
-    if "apk add" in text and ("temporary error" in text or "fetch " in text):
-        return "Alpine 软件源访问失败，构建依赖安装未完成。"
-
-    if "go mod download" in text or "go mod tidy" in text:
-        return "Go 依赖下载失败。"
-
-    if "requires go >=" in text:
-        return "Go 版本与项目要求不匹配。"
-
-    if "go build" in text or "build failed" in text:
-        return "Go 编译失败。"
-
-    if "requires cgo to work" in text or "cgo_enabled=0" in text:
-        return "SQLite 驱动依赖 CGO，但当前镜像未正确启用。"
-
-    if stage == "docker run":
-        return "容器启动命令执行失败。"
-
-    if stage == "container health":
-        return "容器已启动但应用很快退出。"
-
-    return f"{stage} 失败。"
-
-
-def _inspect_container_failure(container_name: str) -> str:
-    """检查容器是否立即退出；若已退出则返回带分类的错误信息。"""
-    time.sleep(2)
-
-    inspect_result = _run_checked_command(
-        ["docker", "inspect", "-f", "{{.State.Status}}", container_name]
-    )
-    status = inspect_result.stdout.strip()
-    if status == "running":
-        return ""
-
-    logs_result = subprocess.run(
-        ["docker", "logs", container_name],
-        capture_output=True,
-        text=True,
-    )
-    log_text = "\n".join(
-        part.strip() for part in [logs_result.stdout, logs_result.stderr] if part and part.strip()
-    )
-    reason = _classify_deploy_failure("container health", log_text)
-    detail = _tail_text(log_text)
-    if detail:
-        return f"{reason}\n最近日志:\n{detail}"
-    return reason
-
-
 # ==========================================
 # 2. 核心 Agent 循环 (处理 Tool Calling)
 # ==========================================
+# A3 可靠性参数：从环境变量读取，给出生产友好的默认值
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if not raw:
+        return default
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return default
+
+
+def _create_turn_with_retry(session, system_prompt, logger, phase):
+    """
+    封装 create_turn：单轮超时 + 指数退避重试。
+
+    超时: 环境变量 AGENT_TURN_TIMEOUT (默认 120s)，单位秒。
+    重试: AGENT_MAX_RETRIES (默认 3)，遇到超时或任何异常都退避后重试。
+    退避: 2^attempt 秒 + jitter；与 llm_adapter.py 内部 RateLimit 重试解耦。
+    """
+    timeout = _env_int("AGENT_TURN_TIMEOUT", 120)
+    max_retries = _env_int("AGENT_MAX_RETRIES", 3)
+
+    last_exc: Exception | None = None
+    for attempt in range(max_retries):
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(create_turn, session, system_prompt)
+                return future.result(timeout=timeout)
+        except concurrent.futures.TimeoutError as exc:
+            last_exc = TimeoutError(f"create_turn exceeded {timeout}s")
+            logger.warning(
+                f"agent turn timeout (attempt {attempt + 1}/{max_retries})",
+                extra={"event": "agent_turn_timeout", "phase": phase},
+            )
+        except Exception as exc:  # noqa: BLE001 — 重试覆盖所有 LLM/网络异常
+            last_exc = exc
+            logger.warning(
+                f"agent turn error (attempt {attempt + 1}/{max_retries}): {exc}",
+                extra={"event": "agent_turn_error", "phase": phase},
+            )
+
+        if attempt < max_retries - 1:
+            backoff = 2 ** attempt + random.uniform(0, 0.5)
+            time.sleep(backoff)
+
+    assert last_exc is not None
+    raise last_exc
+
+
 def run_agent_loop(demand_id: str, system_prompt: str) -> bool:
     """
     运行 Agent 循环，直到它给出最终文本回复，或者调用了挂起工具(ask_human_approval)
-    返回 True 表示当前阶段已完成，返回 False 表示被挂起。
+    返回 True 表示当前阶段已完成，返回 False 表示被挂起 / 超轮数 / 连续空响应。
+
+    A3 保护：单轮超时、最大轮数、连续空响应退出、LLM 失败指数退避重试。
     """
-    session = SESSION_STORE.get(demand_id)
+    session = _load_session(demand_id)
     if not session:
         return False
+    logger = session["logger"]
+    phase = session.get("phase")
+
+    max_turns = _env_int("AGENT_MAX_TURNS", 30)
+    max_empty_streak = _env_int("AGENT_MAX_EMPTY_STREAK", 3)
+    turn_count = 0
+    empty_streak = 0
 
     while True:
-        print(f"\n[Agent] 正在思考 (Demand: {demand_id}, Provider: {session['provider']})...")
+        if turn_count >= max_turns:
+            raise RuntimeError(
+                f"agent loop exceeded AGENT_MAX_TURNS={max_turns} at phase {phase}"
+            )
+        turn_count += 1
+        logger.info(
+            "agent thinking",
+            extra={"event": "agent_thinking", "phase": phase},
+        )
 
-        turn = create_turn(session, system_prompt)
+        turn = _create_turn_with_retry(session, system_prompt, logger, phase)
+
+        # B6 的 usage 埋点：单轮指标 + 累计到 session['metrics']
+        turn_usage = getattr(turn, "usage", {}) or {}
+        tool_name_for_metric = turn.tool_calls[0].name if turn.tool_calls else None
+        log_turn_metrics(logger, phase, turn_usage, tool_name_for_metric)
+        accumulate_metrics(session, turn_usage)
+
+        # 空响应检测：既没有工具调用、也没有 finished 标志、也没有文本内容
+        if not turn.tool_calls and not turn.finished and not any(
+            (block or "").strip() for block in (turn.text_blocks or [])
+        ):
+            empty_streak += 1
+            logger.warning(
+                f"empty turn streak {empty_streak}/{max_empty_streak}",
+                extra={"event": "agent_empty_turn", "phase": phase},
+            )
+            if empty_streak >= max_empty_streak:
+                raise RuntimeError(
+                    f"agent returned {empty_streak} consecutive empty turns at phase {phase}"
+                )
+            continue
+        empty_streak = 0
 
         if turn.tool_calls:
             for tool_call in turn.tool_calls:
@@ -212,14 +229,18 @@ def run_agent_loop(demand_id: str, system_prompt: str) -> bool:
 
                 # 特殊处理：如果调用了 ask_human_approval，则发送飞书卡片并挂起
                 if tool_name == "ask_human_approval":
-                    print("  [Pipeline] 触发审批节点，发送飞书卡片并挂起...")
+                    logger.info(
+                        "approval requested",
+                        extra={"event": "approval_requested", "phase": phase},
+                    )
                     session["pending_approval"] = {
                         "tool_call_id": tool_call.id,
                         "tool_name": tool_name,
                         "summary": tool_args.get("summary", ""),
                         "design_doc": tool_args.get("design_doc", "")
                     }
-                    
+                    _save_session(demand_id, session)
+
                     lark_target = os.getenv("LARK_CHAT_ID") or os.getenv("LARK_WEBHOOK_URL")
                     if lark_target:
                         send_lark_card(
@@ -229,7 +250,10 @@ def run_agent_loop(demand_id: str, system_prompt: str) -> bool:
                             session["pending_approval"]["design_doc"]
                         )
                     else:
-                        print("  [Warning] 未配置 LARK_CHAT_ID 或 LARK_WEBHOOK_URL，跳过发送飞书卡片")
+                        logger.warning(
+                            "lark target not configured, skip card",
+                            extra={"event": "lark_skip"},
+                        )
                     return False
 
                 # 常规工具执行：workspace_root 与 target_dir 在 start_new_demand 阶段已固化到 session
@@ -243,52 +267,221 @@ def run_agent_loop(demand_id: str, system_prompt: str) -> bool:
                 result_text = execute_local_tool(tool_name, tool_args, tool_ctx)
                 append_tool_result(session, tool_call, result_text)
 
+            # 每轮工具执行完成后持久化，支持中途崩溃恢复
+            _save_session(demand_id, session)
+
         elif turn.finished:
-            # Agent 完成了当前阶段的任务，给出了最终文本回复
-            final_text = "\n".join(turn.text_blocks).strip()
-            print(f"[Agent] 阶段任务完成: {final_text}")
+            # Agent 完成了当前阶段的任务
+            logger.info(
+                "phase finished",
+                extra={"event": "phase_finished", "phase": phase},
+            )
+            _save_session(demand_id, session)
             return True
 
 
 # ==========================================
-# 3. 状态机：阶段流转控制
+# 3. 状态机：阶段流转控制 (A2)
 # ==========================================
+# 合法阶段常量；session["phase"] 仅能取这些值
+PHASE_DESIGN = "design"
+PHASE_DESIGN_PENDING = "design_pending"  # 审批挂起态
+PHASE_CODING = "coding"
+PHASE_TESTING = "testing"
+PHASE_REVIEWING = "reviewing"
+PHASE_DEPLOYING = "deploying"
+PHASE_DONE = "done"
+PHASE_FAILED = "failed"
+
+# 每个阶段对应的 system prompt 文件与进入时追加到 history 的 user kickoff 文本
+# design 的 kickoff 由 start_new_demand 注入；coding 的 kickoff 由 resume_after_approval 注入(审批 feedback)
+_PHASE_CONFIG: Dict[str, Dict[str, Any]] = {
+    PHASE_DESIGN: {"prompt": "phase1_design.md", "kickoff": None},
+    PHASE_CODING: {"prompt": "phase2_coding.md", "kickoff": None},
+    PHASE_TESTING: {
+        "prompt": "phase3_test.md",
+        "kickoff": "编码已完成，请开始编写测试用例并运行测试。",
+    },
+    PHASE_REVIEWING: {
+        "prompt": "phase4_review.md",
+        "kickoff": "测试已通过，请作为 Code Reviewer 进行最终的代码审查，并修复任何不符合规范的代码。",
+    },
+    # deploying 不走 agent loop，仅登记为合法阶段，prompt 为 None
+    PHASE_DEPLOYING: {"prompt": None, "kickoff": None},
+}
+
+# 正常完成时的下一个阶段；用于链式推进
+_NEXT_PHASE: Dict[str, str] = {
+    PHASE_CODING: PHASE_TESTING,
+    PHASE_TESTING: PHASE_REVIEWING,
+    PHASE_REVIEWING: PHASE_DEPLOYING,
+}
+
+
+def _mark_failed(demand_id: str, phase: str, error: str) -> None:
+    """把 session 置为 failed 并落盘，同时飞书告警（如有配置）。"""
+    session = _load_session(demand_id)
+    if not session:
+        return
+    session["phase"] = PHASE_FAILED
+    session["last_error"] = {"phase": phase, "message": error}
+    _save_session(demand_id, session)
+
+    # A3 验收要求：失败态落地后发飞书告警，方便值班人员介入
+    lark_target = os.getenv("LARK_CHAT_ID") or os.getenv("LARK_WEBHOOK_URL")
+    if lark_target:
+        try:
+            send_lark_text(
+                lark_target,
+                f"⚠️ 需求 {demand_id} 在 {phase} 阶段失败：{error}",
+            )
+        except Exception:  # noqa: BLE001 — 告警失败不能影响主流程
+            pass
+
+
+def _advance_to_phase(demand_id: str, phase: str) -> Dict[str, Any] | None:
+    """切换 session 到指定 phase，按需追加 kickoff 文本，并落盘。"""
+    if phase not in _PHASE_CONFIG:
+        raise ValueError(f"unknown phase: {phase}")
+    logger = get_logger(demand_id, phase)
+    logger.info("enter phase", extra={"event": "phase_enter", "phase": phase})
+    session = _load_session(demand_id)
+    if not session:
+        return None
+    session["phase"] = phase
+    kickoff = _PHASE_CONFIG[phase]["kickoff"]
+    if kickoff:
+        append_user_text(session, kickoff)
+    _save_session(demand_id, session)
+    return session
+
+
+def _run_phase(demand_id: str, phase: str) -> bool:
+    """加载指定 phase 的 prompt 并运行 agent loop；异常时置 failed 态。"""
+    prompt_file = _PHASE_CONFIG[phase]["prompt"]
+    logger = get_logger(demand_id, phase)
+    try:
+        system_prompt = load_prompt(prompt_file)
+        return run_agent_loop(demand_id, system_prompt)
+    except Exception as exc:
+        logger.error(
+            f"phase crashed: {exc}",
+            extra={"event": "phase_failed", "phase": phase},
+            exc_info=True,
+        )
+        _mark_failed(demand_id, phase, str(exc))
+        return False
+
+
 def start_new_demand(demand_id: str, requirement: str):
     """
     入口：飞书多维表格录入新需求，触发 Pipeline
     """
-    print(f"========== 启动需求 {demand_id} ==========")
+    logger = get_logger(demand_id, PHASE_DESIGN)
+    logger.info(
+        "demand started",
+        extra={"event": "demand_started", "phase": PHASE_DESIGN},
+    )
 
     # 将 Kratos 骨架模板物化为本次需求的产物目录，Phase 2 Agent 会在骨架基础上追加业务代码
     workspace_root, target_dir = _resolve_workspace_and_target()
     _ensure_target_scaffold(workspace_root, target_dir)
-    print(f"[Scaffold] target_dir 就绪: {target_dir}")
+    logger.info(
+        "scaffold ready",
+        extra={"event": "scaffold_ready", "phase": PHASE_DESIGN},
+    )
 
     provider = get_provider_name()
     client = build_client(provider)
-    SESSION_STORE[demand_id] = initialize_session(provider, f"新需求：{requirement}", client)
-    SESSION_STORE[demand_id]["target_dir"] = target_dir
-    SESSION_STORE[demand_id]["workspace_root"] = workspace_root
+    session = initialize_session(provider, f"新需求：{requirement}", client)
+    session["target_dir"] = target_dir
+    session["workspace_root"] = workspace_root
+    session["phase"] = PHASE_DESIGN
+    _save_session(demand_id, session)
 
     # 进入 Phase 1: Design
-    system_prompt = load_prompt("phase1_design.md")
-    completed = run_agent_loop(demand_id, system_prompt)
+    completed = _run_phase(demand_id, PHASE_DESIGN)
 
     if not completed:
-        print(f"========== 需求 {demand_id} 已挂起，等待人类审批 ==========")
+        # 审批挂起或失败；区分两种语义用 session.phase
+        latest = _load_session(demand_id)
+        if latest and latest.get("pending_approval"):
+            latest["phase"] = PHASE_DESIGN_PENDING
+            _save_session(demand_id, latest)
+            logger.info(
+                "demand suspended awaiting approval",
+                extra={"event": "demand_suspended", "phase": PHASE_DESIGN_PENDING},
+            )
+
+
+def resume_from_phase(demand_id: str, phase: str) -> None:
+    """从指定 phase 起链式推进，直到挂起 / 完成 / 失败。
+
+    支持中途失败后的断点续跑。合法入口 phase: coding / testing / reviewing / deploying。
+    """
+    allowed = {PHASE_CODING, PHASE_TESTING, PHASE_REVIEWING, PHASE_DEPLOYING}
+    if phase not in allowed:
+        raise ValueError(
+            f"resume_from_phase: unsupported phase {phase!r}, must be one of {sorted(allowed)}"
+        )
+    logger = get_logger(demand_id, phase)
+    logger.info("resume from phase", extra={"event": "phase_resume", "phase": phase})
+
+    # coding → testing → reviewing 依靠 agent loop，每一阶段完成后进入下一阶段
+    current = phase
+    while current in (PHASE_CODING, PHASE_TESTING, PHASE_REVIEWING):
+        if _advance_to_phase(demand_id, current) is None:
+            return
+        completed = _run_phase(demand_id, current)
+        if not completed:
+            # agent 挂起、超轮数或异常。_run_phase 已按需打日志/置 failed
+            return
+        current = _NEXT_PHASE[current]
+
+    # current == PHASE_DEPLOYING：执行部署并以结果定 phase 终态
+    if _advance_to_phase(demand_id, PHASE_DEPLOYING) is None:
+        return
+    try:
+        deploy_ok = deploy_app(demand_id)
+    except Exception as exc:
+        logger.error(
+            f"deploy crashed: {exc}",
+            extra={"event": "phase_failed", "phase": PHASE_DEPLOYING},
+            exc_info=True,
+        )
+        _mark_failed(demand_id, PHASE_DEPLOYING, str(exc))
+        return
+
+    session = _load_session(demand_id)
+    if session is None:
+        return
+    if deploy_ok:
+        session["phase"] = PHASE_DONE
+        _save_session(demand_id, session)
+        logger.info("demand done", extra={"event": "demand_done", "phase": PHASE_DONE})
+    else:
+        _mark_failed(demand_id, PHASE_DEPLOYING, "deploy reported failure")
+
 
 def resume_after_approval(demand_id: str, approved: bool, feedback: str):
     """
-    由 lark_interaction.py 的 Webhook 调用
+    由 lark_interaction.py 的 Webhook 调用：吸收审批结果 -> 交给 resume_from_phase 链式推进。
     """
-    print(f"========== 唤醒需求 {demand_id} (审批: {approved}) ==========")
-    session = SESSION_STORE.get(demand_id)
+    logger = get_logger(demand_id)
+    logger.info(
+        "approval resumed",
+        extra={"event": "approval_resumed", "approved": approved},
+    )
+    session = _load_session(demand_id)
     if not session:
         return
 
     pending_approval = session.get("pending_approval")
     if not pending_approval:
-        print(">> 当前会话没有待处理的审批节点")
+        logger.warning(
+            "no pending approval to resume",
+            extra={"event": "approval_missing"},
+        )
         return
 
     append_tool_result(
@@ -298,114 +491,63 @@ def resume_after_approval(demand_id: str, approved: bool, feedback: str):
             name=pending_approval["tool_name"],
             arguments={
                 "summary": pending_approval["summary"],
-                "design_doc": pending_approval["design_doc"]
-            }
+                "design_doc": pending_approval["design_doc"],
+            },
         ),
-        feedback
+        feedback,
     )
     session["pending_approval"] = None
+    _save_session(demand_id, session)
 
     if approved:
-        # 进入 Phase 2: Coding
-        print(">> 进入 Phase 2: Coding")
-        system_prompt = load_prompt("phase2_coding.md")
-        completed = run_agent_loop(demand_id, system_prompt)
-
-        if completed:
-            # 自动进入 Phase 3: Test
-            print(">> 进入 Phase 3: Test")
-            append_user_text(session, "编码已完成，请开始编写测试用例并运行测试。")
-            system_prompt = load_prompt("phase3_test.md")
-            test_completed = run_agent_loop(demand_id, system_prompt)
-
-            if test_completed:
-                # 自动进入 Phase 4: Review
-                print(">> 进入 Phase 4: Review")
-                append_user_text(session, "测试已通过，请作为 Code Reviewer 进行最终的代码审查，并修复任何不符合规范的代码。")
-                system_prompt = load_prompt("phase4_review.md")
-                review_completed = run_agent_loop(demand_id, system_prompt)
-
-                if review_completed:
-                    print(f"========== 需求 {demand_id} 全部流程结束，准备部署 ==========")
-                    deploy_app(demand_id)
+        resume_from_phase(demand_id, PHASE_CODING)
     else:
-        # 驳回，继续留在 Phase 1 重新设计
-        print(">> 驳回，重新进入 Phase 1: Design")
-        system_prompt = load_prompt("phase1_design.md")
-        run_agent_loop(demand_id, system_prompt)
-
-# ==========================================
-# 4. Docker 部署逻辑
-# ==========================================
-def deploy_app(demand_id: str):
-    """
-    将 AI 写的代码打包成 Docker 镜像并运行
-    """
-    print(">> 开始 Docker 部署...")
-    app_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "demo-app"))
-
-    # 1. 如果 AI 没有写 Dockerfile，我们帮它生成一个极简版的
-    dockerfile_path = os.path.join(app_dir, "Dockerfile")
-    if not os.path.exists(dockerfile_path):
-        with open(dockerfile_path, "w") as f:
-            f.write(
-                "FROM golang:1.22-alpine AS builder\n\n"
-                "RUN apk add --no-cache build-base\n\n"
-                "WORKDIR /src\n\n"
-                "COPY go.mod go.sum ./\n"
-                "RUN go mod download\n\n"
-                "COPY . .\n\n"
-                "RUN CGO_ENABLED=1 GOOS=linux go build -o /out/main .\n\n"
-                "FROM golang:1.22-alpine\n\n"
-                "WORKDIR /app\n\n"
-                "COPY --from=builder /out/main /app/main\n\n"
-                "EXPOSE 8080\n\n"
-                "CMD [\"/app/main\"]\n"
-            )
-
-    try:
-        # 2. 构建镜像
-        print("   正在构建镜像 demo-app:latest...")
-        _run_checked_command(["docker", "build", "-t", "demo-app", "."], cwd=app_dir)
-
-        # 3. 停止旧容器（如果存在）
-        subprocess.run(["docker", "rm", "-f", "demo-app-container"], capture_output=True, text=True)
-
-        # 4. 运行新容器
-        print("   正在启动容器 demo-app-container (端口 8080)...")
-        run_result = _run_checked_command(
-            ["docker", "run", "-d", "--name", "demo-app-container", "-p", "8080:8080", "demo-app"]
+        # 驳回：回到 Phase 1 重新设计
+        logger.info(
+            "approval rejected, retry design",
+            extra={"event": "approval_rejected", "phase": PHASE_DESIGN},
         )
+        session = _load_session(demand_id)
+        if session:
+            session["phase"] = PHASE_DESIGN
+            _save_session(demand_id, session)
+        _run_phase(demand_id, PHASE_DESIGN)
 
-        container_id = run_result.stdout.strip()
-        if container_id:
-            print(f"   容器已创建: {container_id}")
+# ==========================================
+# 4. 部署编排 (A5)
+# 实际构建/运行/失败分类由 pipeline/deploy_strategy.py 的 DeployStrategy 承担
+# ==========================================
+def deploy_app(demand_id: str) -> bool:
+    """
+    读取 session 中的 target_dir 与 deploy_strategy，委托策略执行部署。
+    返回 True 表示成功，False 表示已捕获的失败。
+    """
+    logger = get_logger(demand_id, PHASE_DEPLOYING)
+    logger.info("deploy started", extra={"event": "deploy_started", "phase": PHASE_DEPLOYING})
 
-        container_failure = _inspect_container_failure("demo-app-container")
-        if container_failure:
-            raise RuntimeError(container_failure)
+    session = _load_session(demand_id) or {}
+    _, target_dir = _resolve_workspace_and_target(session.get("target_dir"))
+    strategy = get_strategy(session.get("deploy_strategy"))
 
-        print(">> 部署成功！")
-        lark_target = os.getenv("LARK_CHAT_ID") or os.getenv("LARK_WEBHOOK_URL")
+    outcome = strategy.deploy(target_dir, logger)
+
+    lark_target = os.getenv("LARK_CHAT_ID") or os.getenv("LARK_WEBHOOK_URL")
+    if outcome.success:
+        logger.info("deploy success", extra={"event": "deploy_success", "phase": PHASE_DEPLOYING})
         if lark_target:
-            send_lark_text(lark_target, f"🎉 需求 {demand_id} 部署成功！\n测试环境已就绪，体验地址：http://localhost:8080")
+            send_lark_text(
+                lark_target,
+                f"🎉 需求 {demand_id} 部署成功！\n测试环境已就绪，体验地址：{outcome.access_url}",
+            )
+        return True
 
-    except subprocess.CalledProcessError as e:
-        command_name = " ".join(e.cmd[:2]) if isinstance(e.cmd, (list, tuple)) and len(e.cmd) >= 2 else str(e.cmd)
-        details = _collect_process_output(e)
-        reason = _classify_deploy_failure(command_name, details)
-        print(f">> 部署失败: {reason}")
-        if details:
-            print(_tail_text(details))
-        lark_target = os.getenv("LARK_CHAT_ID") or os.getenv("LARK_WEBHOOK_URL")
-        if lark_target:
-            send_lark_text(lark_target, f"❌ 需求 {demand_id} 部署失败：{reason}")
-    except RuntimeError as e:
-        reason = str(e)
-        print(f">> 部署失败: {reason}")
-        lark_target = os.getenv("LARK_CHAT_ID") or os.getenv("LARK_WEBHOOK_URL")
-        if lark_target:
-            send_lark_text(lark_target, f"❌ 需求 {demand_id} 部署失败：{reason}")
+    logger.error(
+        f"deploy failed: {outcome.reason}",
+        extra={"event": "deploy_failed", "phase": PHASE_DEPLOYING},
+    )
+    if lark_target:
+        send_lark_text(lark_target, f"❌ 需求 {demand_id} 部署失败：{outcome.reason}")
+    return False
 
 # ==========================================
 # 测试入口 (模拟运行)

@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from pipeline import engine
 from pipeline.llm_adapter import AgentTurn, ToolCall
+from pipeline.persistence import SqliteSessionStore
 
 
 class EngineLoopB1TestCase(unittest.TestCase):
@@ -18,19 +19,28 @@ class EngineLoopB1TestCase(unittest.TestCase):
         self.target_dir = Path(self.target_temp_dir.name)
         self.target_dir.mkdir(exist_ok=True)
 
+        # 用临时 SQLite 替换默认 STORE，避免污染真实持久化文件
+        self._db_tmp = tempfile.TemporaryDirectory(prefix="larkflow-test-db-")
+        self._orig_store = engine.STORE
+        engine.STORE = SqliteSessionStore(str(Path(self._db_tmp.name) / "sessions.db"))
+
+        # build_client 在 _load_session 中被调用，测试里用哑对象替代
+        self._build_client_patch = patch.object(engine, "build_client", return_value=object())
+        self._build_client_patch.start()
+
         self.session_id = "DEMAND-B1-LOOP"
-        engine.SESSION_STORE.clear()
-        engine.SESSION_STORE[self.session_id] = {
+        engine.STORE.save(self.session_id, {
             "provider": "openai",
-            "client": object(),
             "history": [],
             "pending_approval": None,
             "provider_state": {},
             "target_dir": str(self.target_dir),
-        }
+        })
 
     def tearDown(self):
-        engine.SESSION_STORE.clear()
+        self._build_client_patch.stop()
+        engine.STORE = self._orig_store
+        self._db_tmp.cleanup()
         self.target_temp_dir.cleanup()
 
     def test_run_agent_loop_supports_workspace_read_and_target_write(self):
@@ -107,7 +117,7 @@ class EngineLoopB1TestCase(unittest.TestCase):
             'package main\n\nfunc main() { println("ok") }\n',
         )
 
-        history = engine.SESSION_STORE[self.session_id]["history"]
+        history = engine.STORE.get(self.session_id)["history"]
         self.assertEqual(len(history), 3)
         self.assertEqual(history[0]["name"], "file_editor")
         self.assertIn("rule", history[0]["content"].lower())
