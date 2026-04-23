@@ -14,6 +14,8 @@
 | HTTP, API, REST, Router, 路由, 中间件, Request, Response, OpenAPI, google.api.http | `skills/transport/http.md` | 1.0 | Kratos transport/http, proto 注解路由, errors proto → HTTP status |
 | gRPC, RPC, 服务间调用, 内部调用, Protobuf, Proto service, Metadata, Errors proto, 服务调用 | `skills/transport/rpc.md` | **1.1** | Kratos transport/grpc, 客户端拦截器, 超时/metadata 透传, errors 映射 |
 | Trace, 链路, 链路追踪, OTel, OpenTelemetry, Metrics, 指标, Prometheus, 可观测, Observability, Span, trace_id | `skills/governance/observability.md` | **1.1** | OTel + OTLP gRPC, Kratos tracing/metrics middleware, /metrics 暴露, trace_id 与 log 打通 |
+| 熔断, Circuit Breaker, 重试, Retry, 降级, Resilience, 超时预算, Timeout Budget, 退避, Backoff, 韧性 | `skills/governance/resilience.md` | 1.0 | 超时预算、指数退避+jitter、Kratos circuitbreaker、重试/熔断/限流的链路顺序 |
+| 服务发现, Discovery, Registry, etcd, Nacos, Consul, Zookeeper, 注册中心, 负载均衡, p2c, 灰度 | `skills/governance/service_discovery.md` | 1.0 | Kratos registry 抽象、discovery:// DSN、p2c 默认 LB、优雅下线与灰度 |
 | Error, 错误, Exception, 异常, Wrap, fmt.Errorf, Sentinel | `skills/lang/error.md` | 1.0 | Error wrapping and sentinel errors |
 | Goroutine, Concurrency, 并发, Async, WaitGroup, errgroup, Channel, Context | `skills/lang/concurrency.md` | 1.0 | Goroutine lifecycle, context cancellation |
 | Log, Logging, 日志, slog, zap, trace_id, 结构化日志 | `skills/governance/logging.md` | 1.0 | Structured JSON logging, trace IDs, PII redaction |

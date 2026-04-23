@@ -232,3 +232,21 @@ PR#5a：补齐 Kratos 横切治理的第一组 skill —— RPC + Observability 
 - `eval.py --mock` **7/7 fixtures** 通过；pytest 仍 45 passed。
 - 骨架 `go.mod` 按保守策略（Q1 选 B）保持最小，新 skill 对应的依赖（opentelemetry / prometheus / kratos tracing 中间件等）由 Agent 在真实需求触发时通过 `go get` 按需引入；`docker build` 阶段的 `go mod tidy` 会同步 `go.sum`。
 - PR#5b（resilience / service_discovery）在本 PR 合入观察真实需求产出后再开。
+
+## v1.4.7 (2026-04-23)
+
+### Overview
+PR#5b：补齐 Kratos 横切治理的第二组 skill —— 韧性（resilience）与服务发现（service discovery）。至此 PR#5（a+b）全部落地，Agent 已具备写出带熔断/重试/超时预算/注册发现/灰度的生产级微服务的知识基础。
+
+### Added
+- **`skills/governance/resilience.md`** 🆕：超时预算（upstream > Σ downstream + 读 `ctx.Deadline` 收敛）、指数退避 + full jitter、Kratos `circuitbreaker` + aegis `sre.NewBreaker` 默认参数、重试/熔断/限流的中间件链路顺序（client 与 server 对称）、selector 节点级熔断。与 `rate_limit.md` / `idempotency.md` 的职责边界在文档里单独列表划清。
+- **`skills/governance/service_discovery.md`** 🆕：Kratos `registry.Registrar/Discovery` 抽象 + etcd 实现；服务端 `kratos.Registrar()` + 客户端 `discovery:///svc-name` + `grpc.WithDiscovery(r)`；p2c 为默认负载均衡（禁止改 round_robin）；`filter.Version` 做灰度；优雅下线 + lease TTL 风险；换 nacos/consul 的最小改动点。
+- **`tests/prompts/fixtures/08_resilience_retry_budget.yaml`** 🆕：订单→库存 gRPC 调用的韧性组合场景；正则断言覆盖 discovery DSN、熔断阈值、jitter 抖动、codes.Unavailable 重试白名单、`ctx.Deadline` 读取；黑名单禁止固定间隔 sleep、round_robin、裸循环重试。
+
+### Changed
+- **`rules/skill-routing.yaml` / `.md`**：新增 `resilience.md`（关键词 熔断/重试/超时预算/退避/韧性，weight 1.0）与 `service_discovery.md`（关键词 服务发现/registry/etcd/nacos/p2c/灰度，weight 1.0）两条路由。
+
+### Notes
+- `eval.py --mock` **8/8 fixtures** 通过；pytest 仍 45 passed。
+- 骨架 `go.mod` 维持保守策略不预装依赖，韧性和服务发现相关的 Kratos contrib 包（`contrib/registry/etcd/v2` / `aegis/circuitbreaker/sre`）由 Agent 在真实需求触发时 `go get` 引入。
+- 至此 PR#1（skills 分层）→ PR#2（模板）→ PR#3（engine scaffold）→ PR#4（Kratos framework skill）→ PR#5a/b（transport + governance）的 Kratos 改造完整落地。下一步建议用真实需求验证 Agent 对 `resilience.md` / `service_discovery.md` 的命中质量，再视情况启动观察期 / skill 回灌 / 引入更多 contrib（trace exporter、消息队列等）。

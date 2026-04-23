@@ -33,6 +33,14 @@ routes:
     skill: skills/governance/observability.md
     weight: 1.1
 
+  - keywords: [熔断, circuit breaker, 重试, retry, 降级, resilience, 超时预算, timeout budget, 退避, backoff, 韧性]
+    skill: skills/governance/resilience.md
+    weight: 1.0
+
+  - keywords: [服务发现, discovery, registry, etcd, nacos, consul, zookeeper, 注册中心, 负载均衡, p2c, 灰度]
+    skill: skills/governance/service_discovery.md
+    weight: 1.0
+
   - keywords: [error, 错误, exception, 异常, wrap, errors.is, errors.as, fmt.errorf, sentinel]
     skill: skills/lang/error.md
     weight: 1.0
