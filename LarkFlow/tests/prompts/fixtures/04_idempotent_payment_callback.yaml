@@ -11,10 +11,10 @@ expect_phase1_tools:
   - ask_human_approval
 
 expect_phase2_skills_read:
-  - skills/biz/payment.md
-  - skills/idempotency.md
-  - skills/http.md
-  - skills/database.md
+  - skills/domain/payment.md
+  - skills/governance/idempotency.md
+  - skills/transport/http.md
+  - skills/infra/database.md
 
 expect_phase2_files_written_patterns:
   - "internal/handler/*.go"

@@ -1,0 +1,40 @@
+name: resilience_retry_budget
+requirement: |
+  订单服务在调用不稳定的库存服务时，必须具备完整的韧性组合：
+  1. 客户端通过 Kratos transport/grpc 拨号，使用 discovery:///inventory-svc + etcd registry。
+  2. 客户端中间件链：tracing.Client() → circuitbreaker.Client() → retry。
+     熔断阈值：3 秒窗口、100 请求、成功率 60%。
+  3. 重试策略：最多 3 次（含首次），指数退避 base=50ms、cap=2s，必须带 full jitter。
+  4. 超时预算：上游入口 800ms，本级调用 200ms；若上游 ctx 剩余 < 200ms 则取较小值。
+  5. 只对可重试的错误（codes.Unavailable / codes.DeadlineExceeded / 5xx reason）触发重试；
+     codes.InvalidArgument 不重试；下游非幂等接口禁止重试。
+
+expect_phase1_tools:
+  - inspect_db
+  - ask_human_approval
+
+expect_phase2_skills_read:
+  - skills/framework/kratos.md
+  - skills/governance/resilience.md
+  - skills/governance/service_discovery.md
+  - skills/transport/rpc.md
+  - skills/governance/observability.md
+
+expect_phase2_files_written_patterns:
+  - "internal/data/*.go"
+  - "internal/biz/*.go"
+  - "cmd/server/wire.go"
+
+expect_phase2_required_patterns:
+  - 'discovery:///inventory-svc'      # 正确的 DSN
+  - 'WithDiscovery'                   # 注入 discovery 实现
+  - 'circuitbreaker\.Client'          # 客户端熔断
+  - 'sre\.NewBreaker'                 # 使用 aegis sre 熔断器
+  - 'rand\.Int64N'                    # jitter 来自随机
+  - 'codes\.Unavailable'              # 可重试错误白名单
+  - 'ctx\.Deadline'                   # 读取上游 ctx 剩余时间做 budget
+
+expect_phase2_forbidden_patterns:
+  - 'time\.Sleep\(100\s*\*\s*time\.Millisecond\)'   # 固定间隔重试
+  - 'WithBalancerName.*round_robin'                  # 禁止改回 round-robin
+  - 'for.*err.*!=.*nil.*continue'                    # 裸循环 + 非幂等重试的典型形态

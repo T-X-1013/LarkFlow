@@ -8,8 +8,8 @@ expect_phase1_tools:
   - ask_human_approval
 
 expect_phase2_skills_read:
-  - skills/database.md
-  - skills/http.md
+  - skills/infra/database.md
+  - skills/transport/http.md
 
 expect_phase2_files_written_patterns:
   - "internal/handler/*.go"

@@ -12,10 +12,10 @@ expect_phase1_tools:
   - ask_human_approval
 
 expect_phase2_skills_read:
-  - skills/concurrency.md
-  - skills/error.md
-  - skills/http.md
-  - skills/logging.md
+  - skills/lang/concurrency.md
+  - skills/lang/error.md
+  - skills/transport/http.md
+  - skills/governance/logging.md
 
 expect_phase2_files_written_patterns:
   - "internal/service/*.go"

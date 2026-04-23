@@ -1,4 +1,5 @@
 import os
+import shutil
 import sys
 import subprocess
 import time
@@ -34,6 +35,66 @@ def load_prompt(phase_filename: str) -> str:
     path = os.path.join(os.path.dirname(__file__), "..", "agents", phase_filename)
     with open(path, "r", encoding="utf-8") as f:
         return f.read()
+
+
+# 骨架物化标记：`go.mod` 存在即视为 target_dir 已是 Kratos 布局
+_SCAFFOLD_MARKER = "go.mod"
+
+# 骨架模板在 workspace_root 内的相对位置
+_SCAFFOLD_TEMPLATE_RELPATH = os.path.join("templates", "kratos-skeleton")
+
+
+def _ensure_target_scaffold(workspace_root: str, target_dir: str) -> None:
+    """将 Kratos 骨架模板复制到 target_dir，作为每个新需求的只读起点
+
+    @params:
+        workspace_root: LarkFlow/ 目录的绝对路径，内部有 templates/kratos-skeleton/
+        target_dir: 本次需求产物目录的绝对路径，一般是 <repo>/demo-app
+
+    @return:
+        无返回值；以下情况抛异常：
+          - 模板目录不存在
+          - target_dir 已有文件但缺失 `go.mod`（未知状态，拒绝覆盖）
+
+    @notes:
+        - 幂等：target_dir 下有 `go.mod` 时直接返回，不做任何覆盖，支持 pipeline 重启后
+          的 resume 流程。
+        - 空目录安全：target_dir 存在但为空时，删除后再 copytree，避免 shutil 报错。
+    """
+    template_dir = os.path.join(workspace_root, _SCAFFOLD_TEMPLATE_RELPATH)
+    marker = os.path.join(target_dir, _SCAFFOLD_MARKER)
+
+    if os.path.isfile(marker):
+        return
+
+    if not os.path.isdir(template_dir):
+        raise FileNotFoundError(
+            f"Kratos 骨架模板缺失：{template_dir}；请确认 LarkFlow/{_SCAFFOLD_TEMPLATE_RELPATH}/ 存在"
+        )
+
+    if os.path.exists(target_dir):
+        if os.listdir(target_dir):
+            raise RuntimeError(
+                f"target_dir 非空且无 {_SCAFFOLD_MARKER}，状态不明确，拒绝覆盖：{target_dir}；"
+                f"请先人工清理或检查上一次需求产物"
+            )
+        os.rmdir(target_dir)
+
+    shutil.copytree(template_dir, target_dir)
+
+
+def _resolve_workspace_and_target(session_target: str = None) -> tuple:
+    """统一解析 workspace_root 与 target_dir，供 start / resume 与工具调用共用
+
+    @params:
+        session_target: 已存储在 session 中的 target_dir，优先使用
+
+    @return:
+        (workspace_root 绝对路径, target_dir 绝对路径)
+    """
+    workspace_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    target_dir = session_target or os.path.abspath(os.path.join(workspace_root, "..", "demo-app"))
+    return workspace_root, target_dir
 
 
 def _run_checked_command(command: list, cwd: str = None) -> subprocess.CompletedProcess:
@@ -171,12 +232,8 @@ def run_agent_loop(demand_id: str, system_prompt: str) -> bool:
                         print("  [Warning] 未配置 LARK_CHAT_ID 或 LARK_WEBHOOK_URL，跳过发送飞书卡片")
                     return False
 
-                # 常规工具执行
-                workspace_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-                target_dir = session.get(
-                    "target_dir",
-                    os.path.abspath(os.path.join(workspace_root, "..", "demo-app")),
-                )
+                # 常规工具执行：workspace_root 与 target_dir 在 start_new_demand 阶段已固化到 session
+                workspace_root, target_dir = _resolve_workspace_and_target(session.get("target_dir"))
                 tool_ctx = ToolContext(
                     demand_id=demand_id,
                     workspace_root=workspace_root,
@@ -201,9 +258,17 @@ def start_new_demand(demand_id: str, requirement: str):
     入口：飞书多维表格录入新需求，触发 Pipeline
     """
     print(f"========== 启动需求 {demand_id} ==========")
+
+    # 将 Kratos 骨架模板物化为本次需求的产物目录，Phase 2 Agent 会在骨架基础上追加业务代码
+    workspace_root, target_dir = _resolve_workspace_and_target()
+    _ensure_target_scaffold(workspace_root, target_dir)
+    print(f"[Scaffold] target_dir 就绪: {target_dir}")
+
     provider = get_provider_name()
     client = build_client(provider)
     SESSION_STORE[demand_id] = initialize_session(provider, f"新需求：{requirement}", client)
+    SESSION_STORE[demand_id]["target_dir"] = target_dir
+    SESSION_STORE[demand_id]["workspace_root"] = workspace_root
 
     # 进入 Phase 1: Design
     system_prompt = load_prompt("phase1_design.md")

@@ -13,7 +13,7 @@ LarkFlow 作为一个由 Python Pipeline 驱动的状态机运行，它协调多
 - **阶段 4 (代码审查)**：作为严苛的 Code Reviewer，确保代码质量并严格检查是否遵守了各项规范。
 
 ### 2. 规则与技能库 (`rules/` & `skills/`)
-本框架采用类似 RAG（检索增强生成）的机制。它不会将所有几万字的规范一股脑塞进 System Prompt 中，而是强制编码 Agent 首先读取 `rules/skill-routing.md` 路由表，根据当前任务的上下文（例如：只有当任务涉及缓存时，才去读取 `skills/redis.md`）来动态发现并学习具体的最佳实践。
+本框架采用类似 RAG（检索增强生成）的机制。它不会将所有几万字的规范一股脑塞进 System Prompt 中，而是强制编码 Agent 首先读取 `rules/skill-routing.md` 路由表，根据当前任务的上下文（例如：只有当任务涉及缓存时，才去读取 `skills/infra/redis.md`）来动态发现并学习具体的最佳实践。
 
 ### 3. 调度引擎 (`pipeline/`)
 这是一个 Python 引擎，负责处理 Anthropic、OpenAI 或 Qwen/DashScope API 的调用，执行本地工具（如文件读写、Bash 命令执行），并通过飞书（Lark）交互式消息卡片来管理整个工作流的挂起（等待人类审批）与唤醒。其中：

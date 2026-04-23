@@ -17,7 +17,7 @@ Produce a design that a reviewer can approve or reject in under 2 minutes, with 
    - Use `file_editor` (action: `read`) to survey existing handlers, services, and migrations in `../demo-app`. Respect existing naming conventions.
    - Consult `rules/skill-routing.yaml` to identify which `skills/*.md` files bind to this requirement — note them in the design so Phase 2 reads the same set.
 
-3. **Draft the Design Document** — use exactly this structure:
+3. **Draft the Design Document** — use exactly this structure. **The product is a Kratos v2.7 service (four-layer layout already materialized in `demo-app/`). Every usecase in your design MUST spell out which file goes into `internal/biz` / `internal/data` / `internal/service` and which `.proto` lands in `api/<domain>/v1/`.** See `skills/framework/kratos.md` for the hard rules.
 
    ```markdown
    ## Goal & Scope
@@ -27,13 +27,25 @@ Produce a design that a reviewer can approve or reject in under 2 minutes, with 
    <table, columns, indexes, migration direction; "none" if no change>
 
    ## API Design
-   <METHOD /path, request schema, response schema, status codes, auth>
+   <METHOD /path, request schema, response schema, status codes, auth.
+    For gRPC: also list rpc method signatures in api/<domain>/v1/<domain>.proto>
+
+   ## Kratos Layering
+   <required table — leave "none" only if the demand is purely a config/infra change>
+   | Layer | New/Changed File | Responsibility |
+   |---|---|---|
+   | api proto | api/<domain>/v1/*.proto | service + messages + google.api.http annotations |
+   | internal/biz | internal/biz/<domain>.go | Usecase + Repo interface |
+   | internal/data | internal/data/<domain>.go | Repo implementation over gorm/redis |
+   | internal/service | internal/service/<domain>.go | Wire proto handlers to biz usecase |
+   | internal/server | http.go / grpc.go | Register <pb>.Register*Server |
+   | cmd/server/wire.go | activate biz/data/service.ProviderSet if first domain | — |
 
    ## Core Logic Flow
    <numbered steps with branches; call out transactions, locks, external calls>
 
    ## Relevant Skills
-   <list of skills/*.md to be read in Phase 2 (from skill-routing.yaml match)>
+   <list of skills/*.md to be read in Phase 2 (from skill-routing.yaml match; kratos.md is always included)>
 
    ## Open Questions
    <for reviewer; "none" if fully specified>
@@ -74,8 +86,18 @@ PATCH /users/me/nickname — body `{ "nickname": "string <=30" }`, returns 200 w
 3. UPDATE users SET nickname=? WHERE id=?; 1 row expected.
 4. Return refreshed user row.
 
+## Kratos Layering
+| Layer | New/Changed File | Responsibility |
+|---|---|---|
+| api proto | api/user/v1/user.proto | add rpc UpdateNickname(UpdateNicknameReq) returns (User) + google.api.http PATCH /v1/users/me/nickname |
+| internal/biz | internal/biz/user.go | new UpdateNickname(ctx, userID, nick) + extend UserRepo interface |
+| internal/data | internal/data/user.go | implement UpdateNickname via gorm UPDATE |
+| internal/service | internal/service/user.go | wire proto handler → biz.UpdateNickname |
+| internal/server | no change (pb.RegisterUserServer already registered) |
+| cmd/server/wire.go | no change (biz/data/service.ProviderSet already active) |
+
 ## Relevant Skills
-skills/database.md, skills/http.md, skills/auth.md
+skills/framework/kratos.md, skills/infra/database.md, skills/transport/http.md, skills/governance/auth.md, skills/domain/user.md
 
 ## Open Questions
 Should empty string clear the nickname, or require explicit NULL? (Assuming: empty string → NULL.)

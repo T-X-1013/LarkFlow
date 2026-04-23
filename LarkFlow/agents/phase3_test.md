@@ -21,10 +21,13 @@ Every code path touched in Phase 2 must be exercised by at least one test, and `
    - Mock external dependencies (DB, Redis, HTTP) via interfaces already defined in the code; do NOT hit real infrastructure.
    - Use `testify/assert` if the project already depends on it; otherwise stdlib `testing` with `t.Fatalf`.
 
-4. **Run Tests**
-   - `cd ../demo-app && go test ./... -race -count=1`.
-   - If coverage signal is needed: `go test ./... -coverprofile=coverage.out && go tool cover -func=coverage.out`.
+4. **Run Tests (Kratos toolchain order matters)**
+   - If Phase 2 touched any `.proto`, regenerate Go code first: `cd ../demo-app && make api`. Skipping this leaves stale `*.pb.go` and the tests compile against old symbols.
+   - If Phase 2 touched any `ProviderSet` or `wire.go`: `cd ../demo-app && make wire` to refresh `wire_gen.go`. Wire errors here usually mean a ProviderSet is listed in `wire.Build` but no provider in it is consumed — go back and either add a consumer or keep the set commented.
+   - Then: `cd ../demo-app && go test ./... -race -count=1`.
+   - Coverage (optional): `go test ./... -coverprofile=coverage.out && go tool cover -func=coverage.out`.
    - Timeout: no single `go test` invocation should exceed 5 minutes.
+   - If `make api` or `make wire` fails, fix the Phase 2 code (or proto / wire.go), not the test. Do not bypass the codegen steps.
 
 5. **Fix — Code First, Tests Second**
    - If a test fails, prefer fixing the implementation. Only modify tests when the test itself was wrong (misstated expectations).
@@ -54,6 +57,9 @@ Emit exactly two sections:
 - ...
 
 ## Test Results
+$ cd ../demo-app && make api && make wire
+<paste actual output>
+
 $ go test ./... -race -count=1
 <paste actual output>
 
@@ -74,9 +80,13 @@ Phase 2 added `POST /orders` with Redis idempotency.
 - handler.CreateOrder: binds and validates body; routes errors to correct status
 
 ## Test Results
+$ cd ../demo-app && make api && make wire
+(generated api/order/v1/order.pb.go, order_grpc.pb.go, order_http.pb.go)
+(regenerated cmd/server/wire_gen.go)
+
 $ go test ./... -race -count=1
 ok  	demo-app/internal/service  0.812s  coverage: 87.4% of statements
-ok  	demo-app/internal/handler  0.214s  coverage: 91.2% of statements
+ok  	demo-app/internal/biz      0.214s  coverage: 91.2% of statements
 
 Coverage (changed files only): 89.1%
 ```

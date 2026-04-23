@@ -48,8 +48,11 @@ For each promoted block:
 
 1. If the `suggested-skill` file exists — add a new 🔴/🟡 section to it,
    preserving the existing structure (`## <severity>: <rule>` + ❌/✅ Go code).
-2. If it does not exist — create a new `skills/<topic>.md` using `database.md`
-   as the template.
+2. If it does not exist — create a new `skills/<layer>/<topic>.md` (choose the
+   `<layer>` by concern: `lang/` for language rules, `transport/` for API
+   protocols, `infra/` for external dependencies, `governance/` for cross-cutting
+   security/observability/resilience, `domain/` for business knowledge) using
+   `infra/database.md` as the template.
 3. Update `rules/skill-routing.yaml`: ensure the new skill is reachable via the
    right `keywords`; add the keyword if missing. Mirror the change in
    `rules/skill-routing.md`.

@@ -128,3 +128,125 @@ Agent 能力与规范知识库扩充：skills 库从 6 个扩到 13 个、路由
 
 ### Removed
 - 无。
+
+## v1.4.1 (2026-04-22)
+
+### Overview
+按关注点分层重构 `skills/` 目录（PR#1，纯迁移无内容变化），为后续引入 Kratos 相关 skill 打基础。
+
+### Changed
+- **skills 目录分层**：从扁平结构迁移为五层结构，使用 `git mv` 保留历史
+  - `skills/lang/`：concurrency / error / python-comments
+  - `skills/transport/`：http / pagination
+  - `skills/infra/`：database / redis / config
+  - `skills/governance/`：auth / rate_limit / idempotency / logging
+  - `skills/domain/`：原 `skills/biz/`，改名避免与 Kratos `internal/biz` 语义冲突
+- **路由与文档同步**：`rules/skill-routing.yaml`、`rules/skill-routing.md`、`rules/skill-feedback-loop.md`、`agents/phase1_design.md`、`agents/phase2_coding.md`、`agents/phase4_review.md`、`tests/prompts/fixtures/*.yaml`、`README.md` 全量更新为新路径
+- **代码侧零改动**：`pipeline/tools_runtime.py` 的 ACL 只校验 `workspace_root` 深度无关，无需适配
+
+## v1.4.2 (2026-04-22)
+
+### Overview
+引入 Kratos 骨架模板作为每次需求启动时的只读模具，为后续 Agent 按 Kratos 四层布局生成代码铺路。本次仅引入模板（PR#2 / Phase A），不改 pipeline 与 Agent prompt。
+
+### Added
+- **`LarkFlow/templates/kratos-skeleton/`**：精简版 Kratos v2.7.3 骨架，覆盖 `api/` / `cmd/server/` / `configs/` / `internal/{biz,conf,data,server,service}` / `third_party/` 目录与 `go.mod` / `Makefile` / `Dockerfile` / `README.md`。
+  - 四层 `ProviderSet` 占位（`biz` / `data` / `service` / `server`），`cmd/server/wire.go` 正确汇聚，Agent 只需向对应层追加 provider。
+  - `Makefile` 目标：`init` / `api` / `wire` / `build` / `test` / `run` / `all`；`Dockerfile` 两阶段（`golang:1.21-alpine` builder → `alpine:3.19` runtime），HTTP 8080 + gRPC 9000。
+  - 默认数据栈：GORM + SQLite（`configs/config.yaml`），与现有 `skills/infra/database.md` 约定一致。
+  - 生成物（`*.pb.go` / `wire_gen.go`）不提交，统一由 `make api && make wire` 实时生成。
+- **根 `.gitignore` 补充**：排除 `demo-app/`（per-demand 产物目录）以及 demo-app/templates 下的 Kratos 生成物。
+
+### Notes
+- 本次**未**改动 `pipeline/engine.py`、Agent prompt、路由表；Phase B（engine 对接 copy-in 钩子）与 Phase C（Agent prompt + `skills/framework/kratos.md`）将在后续 PR 推进。
+- 模板 `gofmt -l` 清零；`docker build` 的端到端验证需要宿主能拉取 `golang:1.21-alpine`，留给使用者本地或 CI 侧完成。
+
+## v1.4.3 (2026-04-22)
+
+### Overview
+把 Kratos 骨架接入 pipeline：新需求启动时自动把 `templates/kratos-skeleton/` 物化到 `target_dir`（demo-app/），Phase 2 Agent 从完整 Kratos 布局起步（PR#3 / Phase B）。
+
+### Added
+- **`_ensure_target_scaffold()` 钩子**：在 `pipeline/engine.py` 的 `start_new_demand` 起点调用；幂等处理四种场景：
+  - target_dir 不存在 → `shutil.copytree` 物化模板
+  - target_dir 存在但为空 → 先 rmdir 再 copytree
+  - target_dir 已有 `go.mod`（resume / 多次 demand） → 原样保留，不覆盖
+  - target_dir 非空但缺 `go.mod`（状态不明） → 抛 `RuntimeError` 拒绝覆盖
+- **`_resolve_workspace_and_target()`**：统一解析 workspace_root / target_dir，消除 `run_agent_loop` 里的重复计算；start 阶段把两个路径固化进 session，工具调用直接读取。
+- **`tests/test_engine_scaffold.py`**：5 个 unittest，覆盖空目录物化、已物化幂等、模板缺失报错、脏状态拒绝四个分支。
+
+### Changed
+- `start_new_demand`：物化骨架 → initialize_session → 写入 `target_dir` / `workspace_root` 到 session → 进入 Phase 1。
+- `run_agent_loop`：工具执行时从 session 读 `target_dir`（原先是每次重算）。
+
+### Notes
+- 仅影响 pipeline 启动行为；Agent prompt 与 skills 未改动（PR#4 / Phase C 处理）。
+- 全量回归测试 45 passed（40 旧 + 5 新 scaffold）。
+
+## v1.4.4 (2026-04-22)
+
+### Overview
+让 Agent 完整理解 Kratos 骨架——新增 `skills/framework/kratos.md` 作为架构级硬约束（weight=1.3，进 defaults），四阶段 prompt 全部接入 Kratos 分层规则（PR#4 / Phase C）。至此 PR#2→#4 三步闭环，Phase 2 从完整 Kratos 布局起步、按五步流程补业务代码，Phase 4 把跨层违规列为 🔴 红线。
+
+### Added
+- **`skills/framework/kratos.md`** 🆕：四层依赖方向矩阵 + 跨层禁例 + 新增 domain 五步流程（proto → biz → data → service → wire 激活）+ wire ProviderSet 累积规则 + Repo interface 放 biz 层的正反例 + proto/errors 组织约定 + Makefile 命令对照 + 常见错配地雷。
+- **`tests/prompts/fixtures/06_grpc_order_service.yaml`** 🆕：覆盖 gRPC+HTTP 双协议 + Kratos 五层文件落地 + wire 激活的端到端断言，验证 `skills/framework/kratos.md` 路由命中。
+
+### Changed
+- **`rules/skill-routing.yaml` / `skill-routing.md`**：新增 `kratos / wire / 分层 / api 层 / internal/biz|data|service / proto / 骨架 / scaffold` 路由，`weight: 1.3`（高于 business 1.2，高于 generic 1.0）；`defaults` 头条追加 `skills/framework/kratos.md`，保证任何需求都会读到布局规范。
+- **`agents/phase1_design.md`**：设计模板新增 `## Kratos Layering` 必填小节，要求每个 usecase 明确拆解到 api/biz/data/service/server/wire 各文件职责；worked example 同步按 user 域重写。
+- **`agents/phase2_coding.md`**：Implement 步骤改写为「Kratos 四层布局 + 5 步流程」，明确 `make api` / `make wire` 的触发时机；Forbidden 列表新增跨层调用、根目录平铺、跳过 codegen 三类硬约束。
+- **`agents/phase3_test.md`**：Run Tests 顺序强制 `make api && make wire && go test ./...`；worked example 示范 codegen 步骤输出。
+- **`agents/phase4_review.md`**：Enforce Standards checklist 新增两组 🔴 红线——跨层 import 违规 + codegen 一致性（proto/ProviderSet 改动后生成物必须同步）。
+- **`rules/flow-rule.md`**：General Go Standards 增一条 Kratos 布局硬约束，禁止 `demo-app/` 根目录平铺 .go 文件。
+
+### Notes
+- `eval.py --mock` 6/6 fixtures 通过；pytest 全量 45 passed。
+- rpc.md / observability.md / resilience.md / service_discovery.md 留给后续 PR#5（同步 PR#2a）——本次只聚焦 Kratos 本身。
+
+## v1.4.5 (2026-04-22)
+
+### Fixed
+- **Kratos 骨架 CGO 陷阱**：模板 `gorm.io/driver/sqlite`（底层 mattn/go-sqlite3）依赖 CGO，在 `golang:1.22-alpine` builder 下因未安装 gcc 默认编译为 stub，容器启动时 `gorm.Open` panic：`go-sqlite3 requires cgo to work. This is a stub`。切换到纯 Go 实现的 `github.com/glebarez/sqlite v1.11.0`（drop-in 替换，GORM API 完全兼容），Dockerfile 零改动、alpine 镜像无 gcc 也能正常运行。
+- 修改范围：`templates/kratos-skeleton/go.mod`、`templates/kratos-skeleton/internal/data/data.go`。
+
+### Notes
+- 五道坑合集（Go 版本 / protobuf-dev / go.sum / 空 ProviderSet / CGO）已沉淀到 memory，下次做 Kratos 骨架直接规避。
+
+## v1.4.6 (2026-04-23)
+
+### Overview
+PR#5a：补齐 Kratos 横切治理的第一组 skill —— RPC + Observability + HTTP 改写。Agent 从此能写出"服务间 gRPC 调用 + 端到端 trace + 错误按 errors proto 映射"的生产级代码。韧性（熔断 / 重试 / 超时预算）与服务发现（etcd / nacos）留给 PR#5b。
+
+### Added
+- **`skills/transport/rpc.md`** 🆕：Kratos `transport/grpc` + 客户端 `DialInsecure` + tracing.Client / metadata middleware + errors proto 映射 gRPC status + 客户端当 Repo 注入的模式。明确**禁止裸用 `grpc.Dial`**。
+- **`skills/governance/observability.md`** 🆕：OpenTelemetry + OTLP gRPC exporter + Kratos tracing/metrics middleware + Prometheus `/metrics`；提供完整的 `setTracerProvider()` 初始化片段；强调 `log.WithContext(ctx)` 是 `trace_id` 注入日志的必要条件；采样率走 env `OTEL_TRACES_SAMPLER_ARG`。
+- **`tests/prompts/fixtures/07_inter_service_rpc.yaml`** 🆕：订单 → 库存 gRPC 调用场景；正则断言覆盖 `transport/grpc` / `DialInsecure` / `tracing.Client/Server` / errors proto，黑名单覆盖裸 `grpc.Dial` / `fmt.Errorf` / `gin.Engine`。
+
+### Changed
+- **`skills/transport/http.md`**：全面改写。以 Kratos `transport/http` + proto `google.api.http` 注解为主线；Gin/标准库 `net/http` 退场（Reviewer 在 `demo-app/` 里发现即 🔴 block）。明确中间件顺序 `recovery → tracing → logging → 业务`、系统端点 `/healthz` + `/metrics` 的单独挂载方式、protobuf JSON 序列化的 `int64` 字符串化陷阱。
+- **`rules/skill-routing.yaml` / `.md`**：新增 `rpc.md`（weight 1.1，关键词 grpc/rpc/服务间调用/...）和 `observability.md`（weight 1.1，关键词 trace/链路/otel/metrics/...）；`defaults` 追加 `observability.md`，保证每次需求都带 trace_id 意识。
+- **`agents/phase2_coding.md`** Forbidden 列表新增四条 🔴 规则：裸 `grpc.Dial` / 手工 HTTP 路由 / `fmt.Errorf` 业务错误 / 漏掉 `log.WithContext(ctx)`；都指向对应 skill 的具体章节。
+
+### Notes
+- `eval.py --mock` **7/7 fixtures** 通过；pytest 仍 45 passed。
+- 骨架 `go.mod` 按保守策略（Q1 选 B）保持最小，新 skill 对应的依赖（opentelemetry / prometheus / kratos tracing 中间件等）由 Agent 在真实需求触发时通过 `go get` 按需引入；`docker build` 阶段的 `go mod tidy` 会同步 `go.sum`。
+- PR#5b（resilience / service_discovery）在本 PR 合入观察真实需求产出后再开。
+
+## v1.4.7 (2026-04-23)
+
+### Overview
+PR#5b：补齐 Kratos 横切治理的第二组 skill —— 韧性（resilience）与服务发现（service discovery）。至此 PR#5（a+b）全部落地，Agent 已具备写出带熔断/重试/超时预算/注册发现/灰度的生产级微服务的知识基础。
+
+### Added
+- **`skills/governance/resilience.md`** 🆕：超时预算（upstream > Σ downstream + 读 `ctx.Deadline` 收敛）、指数退避 + full jitter、Kratos `circuitbreaker` + aegis `sre.NewBreaker` 默认参数、重试/熔断/限流的中间件链路顺序（client 与 server 对称）、selector 节点级熔断。与 `rate_limit.md` / `idempotency.md` 的职责边界在文档里单独列表划清。
+- **`skills/governance/service_discovery.md`** 🆕：Kratos `registry.Registrar/Discovery` 抽象 + etcd 实现；服务端 `kratos.Registrar()` + 客户端 `discovery:///svc-name` + `grpc.WithDiscovery(r)`；p2c 为默认负载均衡（禁止改 round_robin）；`filter.Version` 做灰度；优雅下线 + lease TTL 风险；换 nacos/consul 的最小改动点。
+- **`tests/prompts/fixtures/08_resilience_retry_budget.yaml`** 🆕：订单→库存 gRPC 调用的韧性组合场景；正则断言覆盖 discovery DSN、熔断阈值、jitter 抖动、codes.Unavailable 重试白名单、`ctx.Deadline` 读取；黑名单禁止固定间隔 sleep、round_robin、裸循环重试。
+
+### Changed
+- **`rules/skill-routing.yaml` / `.md`**：新增 `resilience.md`（关键词 熔断/重试/超时预算/退避/韧性，weight 1.0）与 `service_discovery.md`（关键词 服务发现/registry/etcd/nacos/p2c/灰度，weight 1.0）两条路由。
+
+### Notes
+- `eval.py --mock` **8/8 fixtures** 通过；pytest 仍 45 passed。
+- 骨架 `go.mod` 维持保守策略不预装依赖，韧性和服务发现相关的 Kratos contrib 包（`contrib/registry/etcd/v2` / `aegis/circuitbreaker/sre`）由 Agent 在真实需求触发时 `go get` 引入。
+- 至此 PR#1（skills 分层）→ PR#2（模板）→ PR#3（engine scaffold）→ PR#4（Kratos framework skill）→ PR#5a/b（transport + governance）的 Kratos 改造完整落地。下一步建议用真实需求验证 Agent 对 `resilience.md` / `service_discovery.md` 的命中质量，再视情况启动观察期 / skill 回灌 / 引入更多 contrib（trace exporter、消息队列等）。
