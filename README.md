@@ -318,7 +318,6 @@ docker run --rm -p 8080:8080 -p 9000:9000 <image-id>     # HTTP 8080 + gRPC 9000
 
 - `inspect_db` 目前仅支持 SQLite 和 MySQL；若后续引入其他数据库引擎，还需要继续补适配。
 - Kratos 骨架要求宿主 Go ≥ 1.22（否则 `make init` / `make api` 在本地跑不通；Docker builder 使用 `golang:1.22-alpine` 不受影响）。
-- `rpc / observability / resilience / service_discovery` 等 Kratos 横切治理 skill 尚未落地（计划中的 PR#5）。
 
 ## 相关文档
 
