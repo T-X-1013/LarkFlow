@@ -212,3 +212,23 @@ Agent 能力与规范知识库扩充：skills 库从 6 个扩到 13 个、路由
 
 ### Notes
 - 五道坑合集（Go 版本 / protobuf-dev / go.sum / 空 ProviderSet / CGO）已沉淀到 memory，下次做 Kratos 骨架直接规避。
+
+## v1.4.6 (2026-04-23)
+
+### Overview
+PR#5a：补齐 Kratos 横切治理的第一组 skill —— RPC + Observability + HTTP 改写。Agent 从此能写出"服务间 gRPC 调用 + 端到端 trace + 错误按 errors proto 映射"的生产级代码。韧性（熔断 / 重试 / 超时预算）与服务发现（etcd / nacos）留给 PR#5b。
+
+### Added
+- **`skills/transport/rpc.md`** 🆕：Kratos `transport/grpc` + 客户端 `DialInsecure` + tracing.Client / metadata middleware + errors proto 映射 gRPC status + 客户端当 Repo 注入的模式。明确**禁止裸用 `grpc.Dial`**。
+- **`skills/governance/observability.md`** 🆕：OpenTelemetry + OTLP gRPC exporter + Kratos tracing/metrics middleware + Prometheus `/metrics`；提供完整的 `setTracerProvider()` 初始化片段；强调 `log.WithContext(ctx)` 是 `trace_id` 注入日志的必要条件；采样率走 env `OTEL_TRACES_SAMPLER_ARG`。
+- **`tests/prompts/fixtures/07_inter_service_rpc.yaml`** 🆕：订单 → 库存 gRPC 调用场景；正则断言覆盖 `transport/grpc` / `DialInsecure` / `tracing.Client/Server` / errors proto，黑名单覆盖裸 `grpc.Dial` / `fmt.Errorf` / `gin.Engine`。
+
+### Changed
+- **`skills/transport/http.md`**：全面改写。以 Kratos `transport/http` + proto `google.api.http` 注解为主线；Gin/标准库 `net/http` 退场（Reviewer 在 `demo-app/` 里发现即 🔴 block）。明确中间件顺序 `recovery → tracing → logging → 业务`、系统端点 `/healthz` + `/metrics` 的单独挂载方式、protobuf JSON 序列化的 `int64` 字符串化陷阱。
+- **`rules/skill-routing.yaml` / `.md`**：新增 `rpc.md`（weight 1.1，关键词 grpc/rpc/服务间调用/...）和 `observability.md`（weight 1.1，关键词 trace/链路/otel/metrics/...）；`defaults` 追加 `observability.md`，保证每次需求都带 trace_id 意识。
+- **`agents/phase2_coding.md`** Forbidden 列表新增四条 🔴 规则：裸 `grpc.Dial` / 手工 HTTP 路由 / `fmt.Errorf` 业务错误 / 漏掉 `log.WithContext(ctx)`；都指向对应 skill 的具体章节。
+
+### Notes
+- `eval.py --mock` **7/7 fixtures** 通过；pytest 仍 45 passed。
+- 骨架 `go.mod` 按保守策略（Q1 选 B）保持最小，新 skill 对应的依赖（opentelemetry / prometheus / kratos tracing 中间件等）由 Agent 在真实需求触发时通过 `go get` 按需引入；`docker build` 阶段的 `go mod tidy` 会同步 `go.sum`。
+- PR#5b（resilience / service_discovery）在本 PR 合入观察真实需求产出后再开。

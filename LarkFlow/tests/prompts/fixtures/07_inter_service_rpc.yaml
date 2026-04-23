@@ -1,0 +1,42 @@
+name: inter_service_rpc
+requirement: |
+  订单服务（order-svc）在创建订单时需要通过 gRPC 调用库存服务（inventory-svc）扣减库存：
+  1. api/order/v1/order.proto 新增 service Order 的 CreateOrder rpc，同时用 google.api.http 暴露 POST /v1/orders。
+  2. 订单 biz 层 OrderUsecase 依赖一个 InventoryRepo 接口（Deduct(ctx, sku, qty)），interface 定义在 biz 层。
+  3. internal/data/inventory_client.go 用 Kratos transport/grpc.DialInsecure + tracing.Client() 拨号到
+     inventory-svc，实现 biz.InventoryRepo；禁止裸用 google.golang.org/grpc.Dial。
+  4. 整条链路必须带 trace_id：server 侧 tracing.Server()、client 侧 tracing.Client() 都接上；
+     log 使用 log.WithContext(ctx) 把 trace_id 注入到访问日志。
+  5. 错误走 errors proto：库存不足返回 v1.ErrorInsufficientStock，而不是 fmt.Errorf。
+
+expect_phase1_tools:
+  - inspect_db
+  - ask_human_approval
+
+expect_phase2_skills_read:
+  - skills/framework/kratos.md
+  - skills/transport/rpc.md
+  - skills/governance/observability.md
+  - skills/domain/order.md
+  - skills/transport/http.md
+
+expect_phase2_files_written_patterns:
+  - "api/order/v1/*.proto"
+  - "internal/biz/*.go"
+  - "internal/data/*.go"
+  - "internal/service/*.go"
+  - "cmd/server/wire.go"
+
+expect_phase2_required_patterns:
+  - 'transport/grpc'                  # 用 Kratos 的 gRPC 包
+  - 'DialInsecure'                    # 正确的拨号方式
+  - 'tracing\.Client'                 # client 端 tracing middleware
+  - 'tracing\.Server'                 # server 端 tracing middleware
+  - 'InventoryRepo'                   # biz 层定义 Repo 接口
+  - 'google\.api\.http'               # proto 有 HTTP 注解
+  - 'ErrorInsufficientStock'          # 走 errors proto
+
+expect_phase2_forbidden_patterns:
+  - 'google\.golang\.org/grpc.*Dial[^I]'   # 禁止裸 grpc.Dial（但允许 DialInsecure）
+  - 'fmt\.Errorf.*stock'                   # 业务错误禁止 fmt.Errorf
+  - 'gin\.Engine'                          # 禁止引入 Gin

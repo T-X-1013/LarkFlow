@@ -43,6 +43,10 @@ Deliver code that (a) implements the approved design exactly, (b) passes every r
 - **Cross-layer calls**: service holding `*gorm.DB` or `*redis.Client`; biz importing `internal/data/*` concrete types (only its Repo interface); server touching biz/data directly. (`skills/framework/kratos.md`)
 - **Putting `.go` files at `../demo-app/` root** or anywhere outside the Kratos layout. (`skills/framework/kratos.md`)
 - **Skipping `make api` after proto edits** or **`make wire` after ProviderSet edits** — the generated files won't be refreshed and the next build will fail. (`skills/framework/kratos.md`)
+- **Naked `grpc.Dial` for inter-service calls** — use Kratos `transport/grpc.DialInsecure` with `tracing.Client()` middleware so the call inherits the trace, metadata, and timeout. (`skills/transport/rpc.md`)
+- **Handwritten HTTP routes** (`srv.HandleFunc("POST /xxx", ...)` or `gin.Engine`) inside `demo-app/` — routes come from proto's `google.api.http` annotation + `pb.Register<X>HTTPServer`. (`skills/transport/http.md`)
+- **Business errors built with `fmt.Errorf`** — use the generated `v1.ErrorXxx(...)` from `*_errors.pb.go` so gRPC status, HTTP status, reason, metadata all match. (`skills/transport/rpc.md`)
+- **Missing `WithContext(ctx)` on log.Helper** — without it, `trace_id` / `span_id` fields are empty and the log cannot be joined with traces. (`skills/governance/observability.md`)
 - Using `fmt.Sprintf` to build SQL. Use parameterized queries (`skills/infra/database.md`).
 - Starting naked goroutines. Use `errgroup` / `sync.WaitGroup` with panic recovery (`skills/lang/concurrency.md`).
 - Storing or logging secrets, tokens, full PII (`skills/governance/logging.md`, `skills/infra/config.md`).

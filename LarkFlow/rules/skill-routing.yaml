@@ -21,9 +21,17 @@ routes:
     skill: skills/infra/redis.md
     weight: 1.0
 
-  - keywords: [http, api, rest, gin, router, middleware, 路由, 中间件, request, response]
+  - keywords: [http, api, rest, router, middleware, 路由, 中间件, request, response, openapi, google.api.http]
     skill: skills/transport/http.md
     weight: 1.0
+
+  - keywords: [grpc, rpc, 服务间调用, 内部调用, protobuf, proto service, metadata, errors proto, 服务调用]
+    skill: skills/transport/rpc.md
+    weight: 1.1
+
+  - keywords: [trace, 链路, 链路追踪, otel, opentelemetry, metrics, 指标, prometheus, 可观测, observability, span, trace_id]
+    skill: skills/governance/observability.md
+    weight: 1.1
 
   - keywords: [error, 错误, exception, 异常, wrap, errors.is, errors.as, fmt.errorf, sentinel]
     skill: skills/lang/error.md
@@ -80,11 +88,13 @@ routes:
     weight: 1.2
 
 # When no route matches, Phase 2 agent should still read at least:
-#   - skills/framework/kratos.md   # 骨架布局是所有 demo-app 产物的前提，必读
+#   - skills/framework/kratos.md           # 骨架布局是所有 demo-app 产物的前提，必读
+#   - skills/governance/observability.md   # trace_id 对所有服务都是刚需，防止调用链断链
 #   - skills/lang/error.md
 #   - skills/transport/http.md
 # These are baseline skills assumed for any Go service work.
 defaults:
   - skills/framework/kratos.md
+  - skills/governance/observability.md
   - skills/lang/error.md
   - skills/transport/http.md
