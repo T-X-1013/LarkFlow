@@ -135,8 +135,15 @@ graph TD
 
 - 通过 `start_new_demand()` 启动新需求；起点调用 **`_ensure_target_scaffold()`** 把 `templates/kratos-skeleton/` 物化到 `demo-app/`（空目录物化、已物化幂等、脏状态拒绝、模板缺失报错四种情况都在 `tests/test_engine_scaffold.py` 中覆盖）。
 - 在设计阶段调用 `ask_human_approval` 后挂起；pipeline 服务重启后 resume 老需求时，scaffold 钩子幂等跳过，Agent 看到的是上次留下的代码。
-- 收到审批回调后，进入 Coding、Test、Review 阶段。
-- 最后默认对仓库根下的 `demo-app/` 尝试构建 Docker 镜像并运行。
+- 收到审批回调后，按显式状态机 `design → coding → testing → reviewing → deploying → done` 推进；任一阶段 LLM 异常 / 超时 / 超轮数 / 连续空响应都会落入 `failed` 并发飞书告警。
+- 最后委托 `pipeline/deploy_strategy.py` 的 `DeployStrategy` 完成 Docker 构建与运行；`target_dir` 与策略名从 session 读取，未指定时默认 `demo-app/` + `docker-go` 策略。
+
+引擎可靠性组件（release/A 生产化改造，对应 `ownership.pdf` 中的 A1~A6）：
+
+- `LarkFlow/pipeline/persistence.py` 的 `SqliteSessionStore` 把 session 持久化到 `.larkflow/sessions.db`（WAL + 线程锁），进程重启后通过 `list_active()` 列出未完成需求并自动续跑；序列化时自动剥离 `client` / `logger` 等 transient 字段，载入时按 provider 重建。
+- `resume_from_phase(demand_id, phase)` 入口支持从 `coding / testing / reviewing / deploying` 任意阶段断点续跑，失败不退回 Phase 1。
+- `run_agent_loop` 叠加 `AGENT_TURN_TIMEOUT` 单轮超时、`AGENT_MAX_RETRIES` 指数退避、`AGENT_MAX_TURNS` 最大轮数、`AGENT_MAX_EMPTY_STREAK` 空响应退出四道保护，与 `llm_adapter.py` 中 SDK 层重试解耦。
+- `LarkFlow/pipeline/observability.py` 给每个需求发结构化 JSON 日志（stdout + `logs/larkflow.jsonl`），读 `AgentTurn.usage` 累加到 `session["metrics"]`，可用 `jq` 按 `demand_id` 聚合 token 与延迟。
 
 `LarkFlow/pipeline/llm_adapter.py` 统一了三类模型调用：
 
@@ -223,6 +230,14 @@ QWEN_MODEL=qwen3.6-plus
 - `agents/tools_definition.md` 由 `pipeline/tools_schema.py` 单源生成；修改工具协议后执行 `python scripts/gen_tools_doc.py`，校验一致性可执行 `python scripts/gen_tools_doc.py --check`。
 - 飞书回调入口支持 `LARK_VERIFICATION_TOKEN` 与 `LARK_ENCRYPT_KEY` 校验；同一个 `header.event_id` 在 24 小时内只会触发一次 pipeline 恢复。
 - LLM 适配层会在 `AgentTurn.usage` 中统一输出 `prompt_tokens`、`completion_tokens`、`total_tokens`、`latency_ms`；OpenAI 调用支持 `OPENAI_MAX_RETRIES`、`OPENAI_RETRY_BASE_SECONDS`、`OPENAI_RETRY_MAX_SECONDS` 控制重试，Qwen 走 Chat Completions 的工具调用格式。
+- **引擎可靠性相关环境变量**（均有合理默认值，按需覆盖）：
+  - `LARKFLOW_SESSION_DB`：会话持久化 SQLite 路径，默认 `.larkflow/sessions.db`（已在 `.gitignore` 中忽略）。
+  - `LARKFLOW_LOG_FILE`：结构化日志文件路径，默认 `logs/larkflow.jsonl`。
+  - `LARKFLOW_LOG_LEVEL`：默认 `INFO`。
+  - `AGENT_TURN_TIMEOUT`：单轮 LLM 调用超时（秒），默认 `120`。
+  - `AGENT_MAX_RETRIES`：单轮 LLM 调用的指数退避重试次数，默认 `3`。
+  - `AGENT_MAX_TURNS`：单阶段最大轮数，超过置 `failed` 并告警，默认 `30`。
+  - `AGENT_MAX_EMPTY_STREAK`：连续空响应阈值，超过置 `failed`，默认 `3`。
 
 ### 3. 运行
 
@@ -318,6 +333,9 @@ docker run --rm -p 8080:8080 -p 9000:9000 <image-id>     # HTTP 8080 + gRPC 9000
 
 - `inspect_db` 目前仅支持 SQLite 和 MySQL；若后续引入其他数据库引擎，还需要继续补适配。
 - Kratos 骨架要求宿主 Go ≥ 1.22（否则 `make init` / `make api` 在本地跑不通；Docker builder 使用 `golang:1.22-alpine` 不受影响）。
+- `SqliteSessionStore` 默认走本地文件系统，多实例部署时应把 `.larkflow/sessions.db` 放在共享卷，或换成 Redis 实现（`SessionStore` 抽象已预留）。
+- `AGENT_TURN_TIMEOUT` 基于 `ThreadPoolExecutor.result(timeout=...)`，只能让**等待**超时、不能真正杀掉正在跑的 LLM 调用线程；强杀需要切换到 `signal.alarm` 或子进程沙箱。当前方案叠加 SDK 自带的 connect/read timeout 已能覆盖生产场景。
+- `DeployStrategy` 当前只有 `DockerfileGoStrategy` 一个内置实现；非 Docker / 非 Go 的部署目标需通过 `register(strategy)` 自行注入。
 
 ## 相关文档
 
