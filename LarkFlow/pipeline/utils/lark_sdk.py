@@ -63,8 +63,10 @@ def get_lark_client() -> Client:
         if _client is not None:
             return _client
 
-        app_id = os.getenv("LARK_APP_ID")
-        app_secret = os.getenv("LARK_APP_SECRET")
+        # 必须 strip 首尾空白：docker --env-file 不会像 python-dotenv 那样自动 trim，
+        # .env 里一旦有尾部空格/CR 就会整串传进 SDK，飞书会回 1000040346 app_id invalid
+        app_id = (os.getenv("LARK_APP_ID") or "").strip().strip('"').strip("'")
+        app_secret = (os.getenv("LARK_APP_SECRET") or "").strip().strip('"').strip("'")
         if not app_id or not app_secret:
             raise LarkSdkConfigError(
                 "缺少 LARK_APP_ID 或 LARK_APP_SECRET 环境变量，无法构建飞书 SDK 客户端"

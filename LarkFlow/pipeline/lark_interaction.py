@@ -355,8 +355,9 @@ def run_event_loop(app_id: Optional[str] = None, app_secret: Optional[str] = Non
     @return:
         无返回值；函数会阻塞直到连接终止
     """
-    resolved_app_id = app_id or os.getenv("LARK_APP_ID")
-    resolved_app_secret = app_secret or os.getenv("LARK_APP_SECRET")
+    # 同样必须 strip，docker --env-file 不会自动 trim 尾部空白
+    resolved_app_id = (app_id or os.getenv("LARK_APP_ID") or "").strip().strip('"').strip("'")
+    resolved_app_secret = (app_secret or os.getenv("LARK_APP_SECRET") or "").strip().strip('"').strip("'")
     if not resolved_app_id or not resolved_app_secret:
         raise RuntimeError(
             "缺少 LARK_APP_ID 或 LARK_APP_SECRET 环境变量，无法启动飞书事件监听"
