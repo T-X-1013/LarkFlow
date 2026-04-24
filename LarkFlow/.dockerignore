@@ -1,0 +1,46 @@
+# Python 虚拟环境与字节码（venv 里的符号链接在容器里是坏的，必须排除）
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# 本地运行产物
+logs/
+tmp/
+.larkflow/
+*.db
+*.sqlite
+*.sqlite3
+
+# Secrets：只允许 .env.example 进镜像
+.env
+.env.*
+!.env.example
+
+# 版本控制与 IDE
+.git/
+.gitignore
+.gitattributes
+.idea/
+.vscode/
+*.swp
+
+# 文档与测试资产（运行时不需要）
+tests/
+doc/
+image/
+*.md
+!LarkFlow.md
+
+# macOS / Windows 残留
+.DS_Store
+Thumbs.db
+
+# Docker 自身
+Dockerfile
+.dockerignore
