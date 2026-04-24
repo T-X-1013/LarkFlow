@@ -241,7 +241,7 @@ def run_agent_loop(demand_id: str, system_prompt: str) -> bool:
                     }
                     _save_session(demand_id, session)
 
-                    lark_target = os.getenv("LARK_CHAT_ID") or os.getenv("LARK_WEBHOOK_URL")
+                    lark_target = os.getenv("LARK_CHAT_ID")
                     if lark_target:
                         send_lark_card(
                             lark_target,
@@ -328,7 +328,7 @@ def _mark_failed(demand_id: str, phase: str, error: str) -> None:
     _save_session(demand_id, session)
 
     # A3 验收要求：失败态落地后发飞书告警，方便值班人员介入
-    lark_target = os.getenv("LARK_CHAT_ID") or os.getenv("LARK_WEBHOOK_URL")
+    lark_target = os.getenv("LARK_CHAT_ID")
     if lark_target:
         try:
             send_lark_text(
@@ -531,7 +531,7 @@ def deploy_app(demand_id: str) -> bool:
 
     outcome = strategy.deploy(target_dir, logger)
 
-    lark_target = os.getenv("LARK_CHAT_ID") or os.getenv("LARK_WEBHOOK_URL")
+    lark_target = os.getenv("LARK_CHAT_ID")
     if outcome.success:
         logger.info("deploy success", extra={"event": "deploy_success", "phase": PHASE_DEPLOYING})
         if lark_target:
