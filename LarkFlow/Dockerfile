@@ -20,8 +20,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 复制项目代码
 COPY . .
 
-# 暴露 FastAPI 默认端口
-EXPOSE 8000
+# WebSocket 长连模式下无需暴露端口，飞书事件通过 lark-oapi SDK 主动连接拉取
 
-# 启动 FastAPI Webhook 服务
-CMD ["uvicorn", "pipeline.lark_interaction:app", "--host", "0.0.0.0", "--port", "8000"]
+# 启动飞书 WebSocket 事件监听器
+CMD ["python", "-m", "pipeline.lark_interaction"]

@@ -18,8 +18,9 @@ LarkFlow 作为一个由 Python Pipeline 驱动的状态机运行，它协调多
 ### 3. 调度引擎 (`pipeline/`)
 这是一个 Python 引擎，负责处理 Anthropic、OpenAI、Qwen/DashScope 或 Doubao/Ark API 的调用，执行本地工具（如文件读写、Bash 命令执行），并通过飞书（Lark）交互式消息卡片来管理整个工作流的挂起（等待人类审批）与唤醒。其中：
 - `pipeline/llm_adapter.py` 负责统一 Anthropic、OpenAI、Qwen/DashScope 与 Doubao/Ark 四种 provider 的调用接口与会话状态；Qwen 通过 DashScope 的 OpenAI-compatible Chat Completions API 接入，Doubao 通过火山方舟在线推理 Responses API 接入，并支持 `ep-...` 共享 Endpoint ID 作为 `DOUBAO_MODEL`。
-- `pipeline/lark_client.py` 负责飞书卡片构建与消息发送。
-- `pipeline/lark_interaction.py` 负责飞书 Webhook 校验、事件幂等、回调解析，并调用状态机恢复已挂起的 Pipeline。
+- `pipeline/utils/lark_sdk.py` 提供共享的 `lark-oapi` Client 工厂，出站消息、文档读取、入站事件共用一份 `tenant_access_token` 缓存。
+- `pipeline/lark_client.py` 负责飞书卡片构建与消息发送（基于 `client.im.v1.message.create`）。
+- `pipeline/lark_interaction.py` 基于 `lark_oapi.ws.Client` 建立 WebSocket 长连，订阅 `card.action.trigger` 事件；URL 校验 / verification token / 签名 / 加密由 SDK 兜底，本文件只做 24 小时 `event_id` 幂等与状态机恢复。
 
 ## 快速参考
 关于环境配置与部署说明，请参阅 `README.md` 文件。
