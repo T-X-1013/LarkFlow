@@ -32,16 +32,21 @@ class FakeAnthropicClient:
 
 
 class FakeOpenAIResponses:
-    def __init__(self, response):
-        self.response = response
+    def __init__(self, responses):
+        if isinstance(responses, list):
+            self.responses = list(responses)
+        else:
+            self.responses = [responses]
+        self.calls = []
 
     def create(self, **kwargs):
-        return self.response
+        self.calls.append(kwargs)
+        return self.responses.pop(0)
 
 
 class FakeOpenAIClient:
-    def __init__(self, response):
-        self.responses = FakeOpenAIResponses(response)
+    def __init__(self, responses):
+        self.responses = FakeOpenAIResponses(responses)
 
 
 class FakeQwenCompletions:
@@ -116,6 +121,112 @@ class LlmAdapterB6TestCase(unittest.TestCase):
         self.assertEqual(turn.usage["total_tokens"], 18)
         self.assertGreaterEqual(turn.usage["latency_ms"], 0)
         self.assertEqual(session["history"][-1]["usage"], turn.usage)
+
+    def test_doubao_turn_supports_shared_endpoint_and_tool_result_roundtrip(self):
+        tool_response = SimpleNamespace(
+            id="resp-doubao-001",
+            output=[
+                SimpleNamespace(
+                    type="function_call",
+                    call_id="call-inspect-db",
+                    name="inspect_db",
+                    arguments='{"query": "SHOW CREATE TABLE users"}',
+                )
+            ],
+            output_text="",
+            usage=SimpleNamespace(
+                input_tokens=19,
+                output_tokens=8,
+                total_tokens=27,
+            ),
+        )
+        final_response = SimpleNamespace(
+            id="resp-doubao-002",
+            output=[
+                SimpleNamespace(
+                    type="message",
+                    content=[
+                        SimpleNamespace(type="output_text", text="doubao done"),
+                    ],
+                )
+            ],
+            output_text="",
+            usage=SimpleNamespace(
+                input_tokens=29,
+                output_tokens=4,
+                total_tokens=33,
+            ),
+        )
+        client = FakeOpenAIClient([tool_response, final_response])
+        session = initialize_session(
+            "doubao",
+            "hello",
+            client,
+        )
+
+        with patch.dict(
+            os.environ,
+            {
+                "DOUBAO_MODEL": "ep-20260424-doubao-20-pro",
+                "DOUBAO_MAX_RETRIES": "0",
+            },
+            clear=False,
+        ):
+            first_turn = create_turn(session, "system prompt")
+
+        self.assertFalse(first_turn.finished)
+        self.assertEqual(first_turn.text_blocks, [])
+        self.assertEqual(len(first_turn.tool_calls), 1)
+        self.assertEqual(first_turn.tool_calls[0].name, "inspect_db")
+        self.assertEqual(
+            first_turn.tool_calls[0].arguments,
+            {"query": "SHOW CREATE TABLE users"},
+        )
+        self.assertEqual(first_turn.usage["total_tokens"], 27)
+
+        first_call = client.responses.calls[0]
+        self.assertEqual(first_call["model"], "ep-20260424-doubao-20-pro")
+        self.assertEqual(first_call["instructions"], "system prompt")
+        self.assertEqual(first_call["input"], [{"role": "user", "content": "hello"}])
+        self.assertEqual(first_call["tools"][0]["type"], "function")
+
+        append_tool_result(
+            session,
+            ToolCall(
+                id="call-inspect-db",
+                name="inspect_db",
+                arguments={"query": "SHOW CREATE TABLE users"},
+            ),
+            "DATABASE: mysql\nROWS:\n- table: users",
+        )
+
+        with patch.dict(
+            os.environ,
+            {
+                "DOUBAO_MODEL": "ep-20260424-doubao-20-pro",
+                "DOUBAO_MAX_RETRIES": "0",
+            },
+            clear=False,
+        ):
+            second_turn = create_turn(session, "system prompt")
+
+        self.assertTrue(second_turn.finished)
+        self.assertEqual(second_turn.text_blocks, ["doubao done"])
+        self.assertEqual(second_turn.tool_calls, [])
+        self.assertEqual(second_turn.usage["total_tokens"], 33)
+
+        second_call = client.responses.calls[1]
+        self.assertEqual(second_call["previous_response_id"], "resp-doubao-001")
+        self.assertEqual(
+            second_call["input"],
+            [
+                {
+                    "type": "function_call_output",
+                    "call_id": "call-inspect-db",
+                    "output": "DATABASE: mysql\nROWS:\n- table: users",
+                }
+            ],
+        )
 
     def test_openai_retry_handles_generic_exception(self):
         response = SimpleNamespace(id="resp-ok")

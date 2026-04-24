@@ -8,6 +8,9 @@ from typing import Any, Dict, List
 from pipeline.tools_schema import get_anthropic_tools, get_chat_completion_tools, get_openai_tools
 
 
+_RESPONSES_PROVIDERS = {"openai", "doubao"}
+
+
 @dataclass
 class ToolCall:
     id: str
@@ -27,9 +30,15 @@ class AgentTurn:
 def get_provider_name() -> str:
     """读取当前配置的模型提供方"""
     provider = os.getenv("LLM_PROVIDER", "anthropic").strip().lower()
-    if provider not in {"anthropic", "openai", "qwen"}:
+    if provider not in {"anthropic", "openai", "qwen", "doubao"}:
         raise ValueError(f"Unsupported LLM_PROVIDER: {provider}")
     return provider
+
+
+def _require_config(value: str, message: str) -> str:
+    if value:
+        return value
+    raise ValueError(message)
 
 
 def build_client(provider: str) -> Any:
@@ -56,6 +65,20 @@ def build_client(provider: str) -> Any:
             os.getenv("QWEN_BASE_URL")
             or os.getenv("DASHSCOPE_BASE_URL")
             or "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        )
+        return OpenAI(api_key=api_key, base_url=base_url)
+
+    if provider == "doubao":
+        from openai import OpenAI
+
+        api_key = _require_config(
+            os.getenv("DOUBAO_API_KEY") or os.getenv("ARK_API_KEY"),
+            "Doubao API key is not configured; set DOUBAO_API_KEY or ARK_API_KEY",
+        )
+        base_url = (
+            os.getenv("DOUBAO_BASE_URL")
+            or os.getenv("ARK_BASE_URL")
+            or "https://ark.cn-beijing.volces.com/api/v3"
         )
         return OpenAI(api_key=api_key, base_url=base_url)
 
@@ -86,8 +109,8 @@ def append_user_text(session: Dict[str, Any], text: str):
             "role": "user",
             "content": text
         })
-    elif provider == "openai":
-        # OpenAI Responses API 采用增量输入，因此维护 pending_inputs 队列。
+    elif provider in _RESPONSES_PROVIDERS:
+        # Responses API provider 采用增量 input，因此维护 pending_inputs 队列。
         session["provider_state"].setdefault("pending_inputs", []).append({
             "role": "user",
             "content": text
@@ -119,8 +142,8 @@ def append_tool_result(session: Dict[str, Any], tool_call: ToolCall, result_text
                 "content": result_text
             }]
         })
-    elif provider == "openai":
-        # OpenAI 需要把工具结果包装成 function_call_output，供下一轮 Responses 请求续接。
+    elif provider in _RESPONSES_PROVIDERS:
+        # Responses API 需要把工具结果包装成 function_call_output，供下一轮请求续接。
         session["provider_state"].setdefault("pending_inputs", []).append({
             "type": "function_call_output",
             "call_id": tool_call.id,
@@ -146,6 +169,8 @@ def create_turn(session: Dict[str, Any], system_prompt: str) -> AgentTurn:
         return _create_anthropic_turn(session, client, system_prompt)
     if provider == "openai":
         return _create_openai_turn(session, client, system_prompt)
+    if provider == "doubao":
+        return _create_doubao_turn(session, client, system_prompt)
     return _create_qwen_turn(session, client, system_prompt)
 
 
@@ -198,11 +223,50 @@ def _create_anthropic_turn(session: Dict[str, Any], client: Any, system_prompt: 
 
 
 def _create_openai_turn(session: Dict[str, Any], client: Any, system_prompt: str) -> AgentTurn:
+    return _create_responses_turn(
+        session,
+        client,
+        system_prompt,
+        provider_label="OpenAI",
+        model_env_names=["OPENAI_MODEL"],
+        default_model="gpt-5-codex",
+        retry_env_prefix="OPENAI",
+        reasoning_env_name="OPENAI_REASONING_EFFORT",
+    )
+
+
+def _create_doubao_turn(session: Dict[str, Any], client: Any, system_prompt: str) -> AgentTurn:
+    return _create_responses_turn(
+        session,
+        client,
+        system_prompt,
+        provider_label="Doubao",
+        model_env_names=["DOUBAO_MODEL", "ARK_MODEL", "ARK_ENDPOINT_ID"],
+        default_model="",
+        retry_env_prefix="DOUBAO",
+        reasoning_env_name="",
+    )
+
+
+def _create_responses_turn(
+    session: Dict[str, Any],
+    client: Any,
+    system_prompt: str,
+    provider_label: str,
+    model_env_names: List[str],
+    default_model: str,
+    retry_env_prefix: str,
+    reasoning_env_name: str,
+) -> AgentTurn:
     state = session["provider_state"]
     pending_inputs = list(state.get("pending_inputs", []))
-    model_name = os.getenv("OPENAI_MODEL", "gpt-5-codex")
+    model_name = _first_env_value(model_env_names, default_model)
+    if not model_name:
+        raise ValueError(
+            f"{provider_label} model is not configured; set one of: {', '.join(model_env_names)}"
+        )
 
-    # OpenAI 侧统一走 Responses API；如果存在 previous_response_id，则继续同一条响应链。
+    # Responses API 采用 previous_response_id 续接同一条响应链。
     request_args = {
         "model": model_name,
         "instructions": system_prompt,
@@ -211,8 +275,8 @@ def _create_openai_turn(session: Dict[str, Any], client: Any, system_prompt: str
         "max_output_tokens": 4096,
     }
 
-    if _model_supports_reasoning(model_name):
-        reasoning_effort = os.getenv("OPENAI_REASONING_EFFORT", "medium").strip()
+    if reasoning_env_name and _model_supports_reasoning(model_name):
+        reasoning_effort = os.getenv(reasoning_env_name, "medium").strip()
         if reasoning_effort:
             request_args["reasoning"] = {"effort": reasoning_effort}
 
@@ -220,7 +284,13 @@ def _create_openai_turn(session: Dict[str, Any], client: Any, system_prompt: str
         request_args["previous_response_id"] = state["previous_response_id"]
 
     started_at = time.monotonic()
-    response = _create_openai_response_with_retry(client, request_args, model_name)
+    response = _create_responses_response_with_retry(
+        client,
+        request_args,
+        provider_label,
+        retry_env_prefix,
+        model_name,
+    )
     latency_ms = _elapsed_ms(started_at)
     usage = _normalize_usage(getattr(response, "usage", None), latency_ms)
     state["pending_inputs"] = []
@@ -261,6 +331,14 @@ def _create_openai_turn(session: Dict[str, Any], client: Any, system_prompt: str
         raw_response=response,
         usage=usage,
     )
+
+
+def _first_env_value(names: List[str], default: str = "") -> str:
+    for name in names:
+        value = os.getenv(name, "").strip()
+        if value:
+            return value
+    return default
 
 
 def _elapsed_ms(started_at: float) -> int:
@@ -405,11 +483,27 @@ def _model_supports_reasoning(model_name: str) -> bool:
 
 
 def _create_openai_response_with_retry(client: Any, request_args: Dict[str, Any], model_name: str) -> Any:
+    return _create_responses_response_with_retry(
+        client,
+        request_args,
+        provider_label="OpenAI",
+        env_prefix="OPENAI",
+        model_name=model_name,
+    )
+
+
+def _create_responses_response_with_retry(
+    client: Any,
+    request_args: Dict[str, Any],
+    provider_label: str,
+    env_prefix: str,
+    model_name: str,
+) -> Any:
     from openai import RateLimitError
 
-    max_retries = int(os.getenv("OPENAI_MAX_RETRIES", "3"))
-    base_delay = float(os.getenv("OPENAI_RETRY_BASE_SECONDS", "5"))
-    max_delay = float(os.getenv("OPENAI_RETRY_MAX_SECONDS", "60"))
+    max_retries = int(os.getenv(f"{env_prefix}_MAX_RETRIES", "3"))
+    base_delay = float(os.getenv(f"{env_prefix}_RETRY_BASE_SECONDS", "5"))
+    max_delay = float(os.getenv(f"{env_prefix}_RETRY_MAX_SECONDS", "60"))
 
     for attempt in range(max_retries + 1):
         try:
@@ -420,14 +514,28 @@ def _create_openai_response_with_retry(client: Any, request_args: Dict[str, Any]
 
             retry_after = _extract_retry_after_seconds(str(exc))
             sleep_seconds = _openai_retry_delay(attempt, base_delay, max_delay, retry_after)
-            _log_openai_retry("rate limited", model_name, sleep_seconds, attempt, max_retries)
+            _log_responses_retry(
+                provider_label,
+                "rate limited",
+                model_name,
+                sleep_seconds,
+                attempt,
+                max_retries,
+            )
             time.sleep(sleep_seconds)
         except Exception:
             if attempt >= max_retries:
                 raise
 
             sleep_seconds = _openai_retry_delay(attempt, base_delay, max_delay)
-            _log_openai_retry("request failed", model_name, sleep_seconds, attempt, max_retries)
+            _log_responses_retry(
+                provider_label,
+                "request failed",
+                model_name,
+                sleep_seconds,
+                attempt,
+                max_retries,
+            )
             time.sleep(sleep_seconds)
 
 
@@ -453,7 +561,8 @@ def _openai_retry_delay(
     return min(max(retry_after, backoff_delay), max_delay)
 
 
-def _log_openai_retry(
+def _log_responses_retry(
+    provider_label: str,
     reason: str,
     model_name: str,
     sleep_seconds: float,
@@ -474,7 +583,7 @@ def _log_openai_retry(
         无返回值；直接输出日志到 stdout
     """
     print(
-        f"[LLM] OpenAI {reason} for model {model_name}; "
+        f"[LLM] {provider_label} {reason} for model {model_name}; "
         f"retrying in {sleep_seconds:.1f}s "
         f"({attempt + 1}/{max_retries})"
     )
