@@ -6,11 +6,12 @@ from unittest.mock import patch
 from pipeline import engine
 from pipeline.llm_adapter import AgentTurn, ToolCall
 from pipeline.persistence import SqliteSessionStore
+from tests.path_utils import repo_root
 
 
 class EngineLoopB1TestCase(unittest.TestCase):
     def setUp(self):
-        self.repo_root = Path(__file__).resolve().parents[2]
+        self.repo_root = repo_root()
         self.workspace_root = self.repo_root / "LarkFlow"
         self.target_temp_dir = tempfile.TemporaryDirectory(
             prefix="demo-app-engine-test-",

@@ -1,17 +1,16 @@
 import os
 import unittest
-from pathlib import Path
 
 from dotenv import load_dotenv
 
 from pipeline.llm_adapter import append_tool_result, build_client, create_turn, initialize_session
+from tests.path_utils import project_root
 
 
 class DoubaoConnectivityIntegrationTestCase(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        project_root = Path(__file__).resolve().parents[1]
-        load_dotenv(project_root / ".env", override=False)
+        load_dotenv(project_root() / ".env", override=False)
 
     def setUp(self):
         self.api_key = (os.getenv("DOUBAO_API_KEY") or os.getenv("ARK_API_KEY") or "").strip()

@@ -1,5 +1,4 @@
 import unittest
-from pathlib import Path
 
 from pipeline.tools_schema import get_tool_specs
 from scripts.gen_tools_doc import (
@@ -7,11 +6,12 @@ from scripts.gen_tools_doc import (
     check_tools_definition,
     render_tools_definition_markdown,
 )
+from tests.path_utils import project_root
 
 
 class ToolsDocGenerationTestCase(unittest.TestCase):
     def setUp(self):
-        self.project_root = Path(__file__).resolve().parents[1]
+        self.project_root = project_root()
         self.tools_doc_path = self.project_root / "agents" / "tools_definition.md"
 
     def test_tools_definition_has_auto_generated_header(self):

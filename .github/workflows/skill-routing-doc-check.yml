@@ -1,0 +1,39 @@
+name: Skill Routing Doc Check
+
+on:
+  push:
+    paths:
+      - ".github/workflows/skill-routing-doc-check.yml"
+      - "LarkFlow/rules/skill-routing.yaml"
+      - "LarkFlow/rules/skill-routing.md"
+      - "LarkFlow/scripts/gen_skill_routing_md.py"
+  pull_request:
+    paths:
+      - ".github/workflows/skill-routing-doc-check.yml"
+      - "LarkFlow/rules/skill-routing.yaml"
+      - "LarkFlow/rules/skill-routing.md"
+      - "LarkFlow/scripts/gen_skill_routing_md.py"
+  workflow_dispatch:
+
+jobs:
+  check-skill-routing-doc:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: LarkFlow
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Check generated skill-routing doc
+        run: python scripts/gen_skill_routing_md.py --check
