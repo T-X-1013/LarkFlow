@@ -1,11 +1,18 @@
-# syntax=docker/dockerfile:1
-FROM golang:1.22-alpine AS builder
+ARG GO_IMAGE=golang:1.22-alpine
+FROM ${GO_IMAGE}
 
-RUN apk add --no-cache git make protoc protobuf-dev
+ARG ALPINE_MIRROR=
+
+RUN if [ -n "$ALPINE_MIRROR" ]; then \
+      sed -i "s|https://dl-cdn.alpinelinux.org/alpine|${ALPINE_MIRROR}|g" /etc/apk/repositories; \
+    fi
+
+RUN apk add --no-cache git make protoc protobuf-dev ca-certificates tzdata
 
 # 网络稳健性：优先走 goproxy.cn，失败回落到官方代理；sum db 校验在 builder 阶段关闭，
 # 避免 GOSUMDB 不可达导致的构建中断（go.sum 一旦落地仍由 go mod download 校验）
-ENV GOPROXY=https://goproxy.cn,https://proxy.golang.org,direct
+ARG GO_PROXY=https://goproxy.cn,https://proxy.golang.org,direct
+ENV GOPROXY=${GO_PROXY}
 ENV GOSUMDB=off
 # 模板未提交 go.sum；用 -mod=mod 允许 go 自动生成/更新 go.sum，避免 wire 的 go/packages 在默认 readonly 模式下加载失败
 ENV GOFLAGS=-mod=mod
@@ -28,14 +35,8 @@ ENV PATH="/go/bin:${PATH}"
 
 RUN make api && make wire && make build
 
-# ----------------------------------------------------------
-FROM alpine:3.19
-
-RUN apk add --no-cache ca-certificates tzdata
-
 WORKDIR /app
-COPY --from=builder /src/bin/server /app/server
-COPY --from=builder /src/configs /app/configs
+RUN cp /src/bin/server /app/server && cp -r /src/configs /app/configs
 
 EXPOSE 8080 9000
 

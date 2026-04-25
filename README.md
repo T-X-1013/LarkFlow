@@ -269,6 +269,43 @@ docker build -t larkflow LarkFlow/
 docker run --rm --env-file LarkFlow/.env larkflow
 ```
 
+如果希望保留 session 数据、日志和生成产物，推荐挂载 volume：
+
+```bash
+docker run --rm \
+  --env-file LarkFlow/.env \
+  -v "$PWD/demo-app:/demo-app" \
+  -v "$PWD/LarkFlow/.larkflow:/app/.larkflow" \
+  -v "$PWD/LarkFlow/logs:/app/logs" \
+  larkflow
+```
+
+如果团队需要使用稳定、可控的镜像源，当前支持通过环境变量统一配置构建参数：
+
+```env
+LARKFLOW_GO_IMAGE=registry.example.com/library/golang:1.22-alpine
+LARKFLOW_ALPINE_MIRROR=https://mirrors.example.com/alpine
+LARKFLOW_GO_PROXY=https://goproxy.cn,https://proxy.golang.org,direct
+LARKFLOW_PYTHON_IMAGE=registry.example.com/library/python:3.11-slim
+LARKFLOW_DEBIAN_MIRROR=https://mirrors.example.com/debian
+LARKFLOW_DEBIAN_SECURITY_MIRROR=https://mirrors.example.com/debian-security
+```
+
+其中：
+
+- `LARKFLOW_GO_IMAGE`、`LARKFLOW_ALPINE_MIRROR`、`LARKFLOW_GO_PROXY` 由 `pipeline/deploy_strategy.py` 在部署 `demo-app` 时自动读取并注入 `docker build --build-arg`
+- `LARKFLOW_PYTHON_IMAGE`、`LARKFLOW_DEBIAN_MIRROR`、`LARKFLOW_DEBIAN_SECURITY_MIRROR` 用于构建 LarkFlow 服务自身镜像，需要在执行 `docker build` 时显式传入
+
+例如，构建 LarkFlow 服务自身镜像时可以执行：
+
+```bash
+docker build \
+  --build-arg PYTHON_IMAGE=registry.example.com/library/python:3.11-slim \
+  --build-arg DEBIAN_MIRROR=https://mirrors.example.com/debian \
+  --build-arg DEBIAN_SECURITY_MIRROR=https://mirrors.example.com/debian-security \
+  -t larkflow LarkFlow/
+```
+
 如果构建时拉取 `python:3.11-slim` 超时，可先执行 `docker pull python:3.11-slim`，或检查 Docker Desktop 代理/网络配置。
 
 **飞书开发者后台配置**：在"应用 → 事件与回调 → 推送方式"中选择 **长连接**（不再需要填写 HTTPS 回调 URL、ngrok 隧道、反向代理或证书）；开通应用相关权限（消息、文档、表格等）。

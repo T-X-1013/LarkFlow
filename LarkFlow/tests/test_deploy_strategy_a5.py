@@ -98,11 +98,14 @@ class DeployAppDelegationTestCase(unittest.TestCase):
         self._orig_store = engine.STORE
         engine.STORE = SqliteSessionStore(str(Path(self._db_tmp.name) / "s.db"))
         self._build_client_patch = patch.object(engine, "build_client", return_value=object())
+        self._send_lark_text_patch = patch.object(engine, "send_lark_text", return_value=None)
         self._build_client_patch.start()
+        self._send_lark_text_patch.start()
         self.demand_id = "DEMAND-A5"
 
     def tearDown(self):
         self._build_client_patch.stop()
+        self._send_lark_text_patch.stop()
         engine.STORE = self._orig_store
         self._db_tmp.cleanup()
 
