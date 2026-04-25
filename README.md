@@ -90,7 +90,7 @@ graph TD
 │   ├── skills/                     # 按关注点分层的 md 知识库
 │   │   ├── framework/              # kratos (weight 1.3, defaults)
 │   │   ├── lang/                   # concurrency / error / python-comments
-│   │   ├── transport/              # http / pagination
+│   │   ├── transport/              # http / rpc / pagination / mq
 │   │   ├── infra/                  # database / redis / config
 │   │   ├── governance/             # auth / rate_limit / idempotency / logging
 │   │   └── domain/                 # order / user / payment (weight 1.2)
@@ -138,7 +138,7 @@ graph TD
 - `rules/flow-rule.md`：总规则，要求先查路由表再编码；明确"产物是 Kratos 骨架，禁止平铺 .go 文件"。
 - `rules/skill-routing.yaml`：**路由表唯一真源**，结构为 `keywords / skill / weight` 列表。权重分三档——**framework `1.3`（架构级硬约束）> domain `1.2`（业务） > 其他 `1.0`**。Phase 2 Agent 按权重取 Top 5 读取；`defaults` 头条 `skills/framework/kratos.md` 保证每次必读。`rules/skill-routing.md` 作为人类可读镜像并在顶部声明以 YAML 为准。
 - `rules/skill-feedback-loop.md`：Phase 4 Reviewer 输出 `<skill-feedback>` 块 → 周度 triage → PR 回灌 `skills/*.md` 的四步闭环。
-- `skills/**/*.md`：按 `framework/ / lang/ / transport/ / infra/ / governance/ / domain/` 六层组织的知识库，覆盖 Kratos 分层/wire/make 工具链、并发/错误、HTTP/分页、DB/Redis/Config、认证/限流/幂等/日志，以及订单/用户/支付业务规范。每份 md 保持 🔴 CRITICAL / 🟡 HIGH / 🟢 最佳实践 分级 + Go ❌/✅ 代码对照结构。
+- `skills/**/*.md`：按 `framework/ / lang/ / transport/ / infra/ / governance/ / domain/` 六层组织的知识库，覆盖 Kratos 分层/wire/make 工具链、并发/错误、HTTP/RPC/分页/消息队列、DB/Redis/Config、认证/限流/幂等/日志/韧性/可观测/服务发现，以及订单/用户/支付业务规范。每份 md 保持 🔴 CRITICAL / 🟡 HIGH / 🟢 最佳实践 分级 + Go ❌/✅ 代码对照结构。
 
 ### 3. Pipeline
 
