@@ -1,10 +1,10 @@
 import os
 import unittest
-from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
 
 from pipeline.tools_runtime import ToolContext, _build_mysql_connection_kwargs, execute
+from tests.path_utils import project_root, repo_root
 
 
 class InspectDbMySQLIntegrationTestCase(unittest.TestCase):
@@ -28,8 +28,8 @@ class InspectDbMySQLIntegrationTestCase(unittest.TestCase):
         self.table_name = f"lf_inspectdb_{uuid4().hex[:10]}"
         self.ctx = ToolContext(
             demand_id="DEMAND-B3-MYSQL",
-            workspace_root=str(Path(__file__).resolve().parents[1]),
-            target_dir=str(Path(__file__).resolve().parents[2] / "demo-app"),
+            workspace_root=str(project_root()),
+            target_dir=str(repo_root() / "demo-app"),
             logger=None,
         )
 

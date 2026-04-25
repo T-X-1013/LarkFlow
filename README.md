@@ -85,7 +85,8 @@ graph TD
 │   │   ├── skill-routing.md        # 人类可读镜像
 │   │   └── skill-feedback-loop.md  # Review → Skills 回灌闭环
 │   ├── scripts/
-│   │   └── gen_tools_doc.py
+│   │   ├── gen_tools_doc.py
+│   │   └── gen_skill_routing_md.py  # 由 skill-routing.yaml 生成 .md 镜像
 │   ├── skills/                     # 按关注点分层的 md 知识库
 │   │   ├── framework/              # kratos (weight 1.3, defaults)
 │   │   ├── lang/                   # concurrency / error / python-comments
@@ -103,10 +104,18 @@ graph TD
 │   │       ├── Makefile            # init / api / wire / build / test / run
 │   │       └── Dockerfile          # 两阶段 golang:1.22-alpine → alpine:3.19
 │   └── tests/
-│       ├── prompts/                # Prompt 评测集
-│       │   ├── fixtures/*.yaml     # 6 个 fixture（含 grpc_order_service）
-│       │   └── eval.py
-│       └── test_engine_scaffold.py # scaffold 钩子单测
+│       ├── unit/                   # 快速单元测试
+│       │   ├── engine/
+│       │   ├── deploy/
+│       │   ├── tools/
+│       │   ├── llm/
+│       │   └── lark/
+│       ├── integration/            # 本地链路与外部依赖测试
+│       │   ├── engine/
+│       │   └── external/
+│       └── prompts/                # Prompt 评测集
+│           ├── fixtures/*.yaml     # 6 个 fixture（含 grpc_order_service）
+│           └── eval.py
 ├── demo-app/                  # 产物目录；.gitignore 排除，每次需求由 engine 自动物化
 └── image/
 ```
@@ -135,7 +144,7 @@ graph TD
 
 `LarkFlow/pipeline/engine.py` 负责主状态机和工具执行：
 
-- 通过 `start_new_demand()` 启动新需求；起点调用 **`_ensure_target_scaffold()`** 把 `templates/kratos-skeleton/` 物化到 `demo-app/`（空目录物化、已物化幂等、脏状态拒绝、模板缺失报错四种情况都在 `tests/test_engine_scaffold.py` 中覆盖）。
+- 通过 `start_new_demand()` 启动新需求；起点调用 **`_ensure_target_scaffold()`** 把 `templates/kratos-skeleton/` 物化到 `demo-app/`（空目录物化、已物化幂等、脏状态拒绝、模板缺失报错四种情况都在 `tests/unit/engine/test_engine_scaffold.py` 中覆盖）。
 - 在设计阶段调用 `ask_human_approval` 后挂起；pipeline 服务重启后 resume 老需求时，scaffold 钩子幂等跳过，Agent 看到的是上次留下的代码。
 - 收到审批回调后，按显式状态机 `design → coding → testing → reviewing → deploying → done` 推进；任一阶段 LLM 异常 / 超时 / 超轮数 / 连续空响应都会落入 `failed` 并发飞书告警。
 - 最后委托 `pipeline/deploy_strategy.py` 的 `DeployStrategy` 完成 Docker 构建与运行；`target_dir` 与策略名从 session 读取，未指定时默认 `demo-app/` + `docker-go` 策略。
@@ -241,8 +250,10 @@ DOUBAO_RETRY_MAX_SECONDS=60
 - 当 `LLM_PROVIDER=qwen` 时，Pipeline 使用 OpenAI SDK 连接 DashScope 的 OpenAI-compatible Chat Completions API；优先读取 `QWEN_API_KEY`、`QWEN_BASE_URL`、`QWEN_MODEL`，同时兼容 `DASHSCOPE_API_KEY`、`DASHSCOPE_BASE_URL`、`DASHSCOPE_MODEL`。
 - 当 `LLM_PROVIDER=doubao` 时，Pipeline 使用 OpenAI SDK 连接火山方舟在线推理 `Responses API`；优先读取 `DOUBAO_API_KEY`、`DOUBAO_BASE_URL`、`DOUBAO_MODEL`，同时兼容 `ARK_API_KEY`、`ARK_BASE_URL`、`ARK_MODEL`、`ARK_ENDPOINT_ID`。`DOUBAO_MODEL` 既可以填写基础模型名，也可以直接填写共享 Endpoint ID，例如 `ep-...`。
 - `inspect_db` 依赖 `DATABASE_URL` 读取真实数据库 schema，目前支持 SQLite 和 MySQL，只允许只读查询。
-- 若要执行真实 MySQL 集成测试，可额外设置 `MYSQL_TEST_DATABASE_URL`，然后运行 `python -m unittest tests.test_inspect_db_mysql_integration`。
+- 快速单元测试可运行 `pytest tests/unit`；本地链路集成测试可运行 `pytest tests/integration/engine`；全量非 Prompt 测试可运行 `pytest tests --ignore=tests/prompts`。
+- 若要执行真实外部依赖测试，可运行 `pytest tests/integration/external`；其中真实 MySQL 集成测试需要额外设置 `MYSQL_TEST_DATABASE_URL`，也可单独运行 `python -m unittest tests.integration.external.test_inspect_db_mysql_integration`。
 - `agents/tools_definition.md` 由 `pipeline/tools_schema.py` 单源生成；修改工具协议后执行 `python scripts/gen_tools_doc.py`，校验一致性可执行 `python scripts/gen_tools_doc.py --check`。
+- `rules/skill-routing.md` 由 `rules/skill-routing.yaml` 单源生成；修改路由表后执行 `python scripts/gen_skill_routing_md.py`，校验一致性可执行 `python scripts/gen_skill_routing_md.py --check`（CI 中由 `.github/workflows/skill-routing-doc-check.yml` 自动校验）。
 - 飞书事件入口基于 `lark-oapi` SDK 的 WebSocket 长连，URL 校验、verification token、签名与加密均由 SDK 兜底，业务层只负责 24 小时 `header.event_id` 幂等去重。
 - LLM 适配层会在 `AgentTurn.usage` 中统一输出 `prompt_tokens`、`completion_tokens`、`total_tokens`、`latency_ms`；OpenAI 与 Doubao 都支持独立的重试配置，Qwen 走 Chat Completions 的工具调用格式。
 - **引擎可靠性相关环境变量**（均有合理默认值，按需覆盖）：
