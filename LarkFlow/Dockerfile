@@ -1,5 +1,8 @@
-# 使用轻量级的 Python 3.11 镜像
-FROM python:3.11-slim
+ARG PYTHON_IMAGE=python:3.11-slim
+FROM ${PYTHON_IMAGE}
+
+ARG DEBIAN_MIRROR=
+ARG DEBIAN_SECURITY_MIRROR=
 
 # 设置工作目录
 WORKDIR /app
@@ -9,7 +12,13 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
 # 安装系统依赖（如果需要）
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN if [ -n "$DEBIAN_MIRROR" ] && [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+      sed -i "s|http://deb.debian.org/debian|${DEBIAN_MIRROR}|g; s|https://deb.debian.org/debian|${DEBIAN_MIRROR}|g" /etc/apt/sources.list.d/debian.sources; \
+    fi \
+    && if [ -n "$DEBIAN_SECURITY_MIRROR" ] && [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+      sed -i "s|http://deb.debian.org/debian-security|${DEBIAN_SECURITY_MIRROR}|g; s|https://deb.debian.org/debian-security|${DEBIAN_SECURITY_MIRROR}|g" /etc/apt/sources.list.d/debian.sources; \
+    fi \
+    && apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 

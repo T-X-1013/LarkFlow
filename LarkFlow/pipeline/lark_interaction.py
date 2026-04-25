@@ -18,6 +18,8 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 import lark_oapi as lark
+import certifi
+from dotenv import load_dotenv
 from lark_oapi.event.callback.model.p2_card_action_trigger import (
     P2CardActionTrigger,
     P2CardActionTriggerResponse,
@@ -25,6 +27,9 @@ from lark_oapi.event.callback.model.p2_card_action_trigger import (
 
 from pipeline.utils.lark_doc import LarkDocError, fetch_lark_doc_content
 from pipeline.utils.lark_sdk import get_lark_client
+
+load_dotenv()
+os.environ.setdefault("SSL_CERT_FILE", certifi.where())
 
 
 # 飞书回调事件默认保留 24 小时，确保同一事件重复投递时不会再次触发 pipeline

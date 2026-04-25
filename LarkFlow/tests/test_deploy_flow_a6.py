@@ -1,5 +1,6 @@
 """A6 DockerfileGoStrategy.deploy 主流程测试（mock subprocess）"""
 import logging
+import os
 import subprocess
 import tempfile
 import unittest
@@ -63,6 +64,49 @@ class DeployFlowTestCase(unittest.TestCase):
 
         self.assertFalse(outcome.success)
         self.assertIn("Docker 外网访问失败", outcome.reason)
+
+    def test_build_includes_configured_image_mirror_args(self):
+        captured = []
+
+        def record_run_checked(cmd, cwd=None):
+            captured.append((cmd, cwd))
+            if cmd[:2] == ["docker", "build"]:
+                return _completed()
+            if cmd[:2] == ["docker", "run"]:
+                return _completed(stdout="container-abc\n")
+            if cmd[:2] == ["docker", "inspect"]:
+                return _completed(stdout="running\n")
+            raise AssertionError(f"unexpected command: {cmd}")
+
+        with patch.dict(
+            os.environ,
+            {
+                "LARKFLOW_GO_IMAGE": "registry.example.com/library/golang:1.22-alpine",
+                "LARKFLOW_ALPINE_MIRROR": "https://mirrors.example.com/alpine",
+                "LARKFLOW_GO_PROXY": "https://goproxy.example.com,direct",
+            },
+            clear=False,
+        ), patch.object(deploy_strategy, "_run_checked", side_effect=record_run_checked), \
+             patch.object(deploy_strategy.subprocess, "run", return_value=_completed(stdout="")), \
+             patch.object(deploy_strategy.time, "sleep", lambda *a: None):
+            outcome = self.strat.deploy(self.target_dir, self.logger)
+
+        self.assertTrue(outcome.success)
+        build_command = captured[0][0]
+        self.assertEqual(build_command[:4], ["docker", "build", "--pull=false", "-t"])
+        self.assertIn("--build-arg", build_command)
+        self.assertIn(
+            "GO_IMAGE=registry.example.com/library/golang:1.22-alpine",
+            build_command,
+        )
+        self.assertIn(
+            "ALPINE_MIRROR=https://mirrors.example.com/alpine",
+            build_command,
+        )
+        self.assertIn(
+            "GO_PROXY=https://goproxy.example.com,direct",
+            build_command,
+        )
 
     def test_container_exits_immediately(self):
         """容器启动后立即退出 → inspect 返回 exited → 失败 + 带日志尾"""

@@ -46,6 +46,12 @@ def _tail_text(text: str, max_lines: int = 20) -> str:
     return "\n".join(lines[-max_lines:])
 
 
+def _append_build_arg(command: list, arg_name: str, arg_value: str) -> None:
+    value = (arg_value or "").strip()
+    if value:
+        command.extend(["--build-arg", f"{arg_name}={value}"])
+
+
 class DeployStrategy(abc.ABC):
     """部署策略抽象。子类决定如何构建、启动、健康检查、分类失败。"""
 
@@ -57,7 +63,7 @@ class DeployStrategy(abc.ABC):
 
 
 class DockerfileGoStrategy(DeployStrategy):
-    """基于 Alpine Go + CGO 的 Dockerfile 部署策略。"""
+    """基于单镜像 Go + CGO 的 Dockerfile 部署策略。"""
 
     name = "docker-go"
 
@@ -66,26 +72,37 @@ class DockerfileGoStrategy(DeployStrategy):
     PORT = 8080
 
     _DEFAULT_DOCKERFILE = (
-        "FROM golang:1.22-alpine AS builder\n\n"
+        "ARG GO_IMAGE=golang:1.22-alpine\n"
+        "FROM ${GO_IMAGE}\n\n"
+        "ARG ALPINE_MIRROR=\n\n"
+        "RUN if [ -n \"$ALPINE_MIRROR\" ]; then \\\n"
+        "      sed -i \"s|https://dl-cdn.alpinelinux.org/alpine|${ALPINE_MIRROR}|g\" /etc/apk/repositories; \\\n"
+        "    fi\n\n"
         "RUN apk add --no-cache build-base\n\n"
+        "ARG GO_PROXY=https://proxy.golang.org,direct\n"
+        "ENV GOPROXY=${GO_PROXY}\n\n"
         "WORKDIR /src\n\n"
         "COPY go.mod go.sum ./\n"
         "RUN go mod download\n\n"
         "COPY . .\n\n"
         "RUN CGO_ENABLED=1 GOOS=linux go build -o /out/main .\n\n"
-        "FROM golang:1.22-alpine\n\n"
         "WORKDIR /app\n\n"
-        "COPY --from=builder /out/main /app/main\n\n"
+        "RUN cp /out/main /app/main\n\n"
         "EXPOSE 8080\n\n"
         'CMD ["/app/main"]\n'
     )
 
     def deploy(self, target_dir: str, logger: Any) -> DeployOutcome:
         self._ensure_dockerfile(target_dir)
+        build_command = ["docker", "build", "--pull=false", "-t", self.IMAGE_TAG]
+        _append_build_arg(build_command, "GO_IMAGE", os.getenv("LARKFLOW_GO_IMAGE", ""))
+        _append_build_arg(build_command, "ALPINE_MIRROR", os.getenv("LARKFLOW_ALPINE_MIRROR", ""))
+        _append_build_arg(build_command, "GO_PROXY", os.getenv("LARKFLOW_GO_PROXY", ""))
+        build_command.append(".")
 
         try:
             logger.info("docker build", extra={"event": "docker_build"})
-            _run_checked(["docker", "build", "-t", self.IMAGE_TAG, "."], cwd=target_dir)
+            _run_checked(build_command, cwd=target_dir)
 
             # 清理旧容器；失败忽略，因为可能根本不存在
             subprocess.run(
