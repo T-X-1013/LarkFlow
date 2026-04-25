@@ -24,10 +24,23 @@ Every code path touched in Phase 2 must be exercised by at least one test, and `
 4. **Run Tests (Kratos toolchain order matters)**
    - If Phase 2 touched any `.proto`, regenerate Go code first: `cd ../demo-app && make api`. Skipping this leaves stale `*.pb.go` and the tests compile against old symbols.
    - If Phase 2 touched any `ProviderSet` or `wire.go`: `cd ../demo-app && make wire` to refresh `wire_gen.go`. Wire errors here usually mean a ProviderSet is listed in `wire.Build` but no provider in it is consumed — go back and either add a consumer or keep the set commented.
+   - After any proto or provider wiring change, you MUST run `cd ../demo-app && make build`. Do not stop at `make wire`: duplicate bindings, missing provider graph edges, bad imports, and stale method names often surface only at compile time.
+   - Before declaring success, run `cd ../demo-app && python ../LarkFlow/scripts/check_kratos_contract.py .`
+   - The contract check covers:
+     - `internal/biz/biz.go`, `internal/data/data.go`, `internal/service/service.go` are the only files allowed to define `var ProviderSet = ...`
+     - Domain files such as `internal/biz/user.go` / `internal/data/user.go` / `internal/service/user.go` must not define a second `ProviderSet`
+     - `cmd/server/wire.go` must enable `biz.ProviderSet` / `data.ProviderSet` / `service.ProviderSet` once those sets contain real domain providers
+     - `internal/data/*.go` must use `r.data.DB.WithContext(ctx)` instead of treating `Data.DB` as a callable function
+     - If a proto imports `google/api/*.proto` or `validate/validate.proto`, the corresponding files must exist under `../demo-app/third_party/`
+     - Imported `google/api/*.proto` must declare `go_package`
+     - In-project Go imports and local proto `go_package` must use the exact `go.mod` module prefix, not `github.com/demo-app/...`
+   - During `make build` failure analysis, explicitly inspect repo-layer type mismatches:
+     - `gorm.Model.ID` is `uint`, so mapping into a biz `int64` field requires an explicit conversion
+     - `Data.DB` is a field; `DB(ctx)` means the repo code is structurally wrong, not a flaky compiler error
    - Then: `cd ../demo-app && go test ./... -race -count=1`.
    - Coverage (optional): `go test ./... -coverprofile=coverage.out && go tool cover -func=coverage.out`.
    - Timeout: no single `go test` invocation should exceed 5 minutes.
-   - If `make api` or `make wire` fails, fix the Phase 2 code (or proto / wire.go), not the test. Do not bypass the codegen steps.
+   - If `make api`, `make wire`, or `make build` fails, fix the Phase 2 code (or proto / wire.go / ProviderSet wiring), not the test. Do not bypass the codegen steps.
 
 5. **Fix — Code First, Tests Second**
    - If a test fails, prefer fixing the implementation. Only modify tests when the test itself was wrong (misstated expectations).
@@ -57,7 +70,7 @@ Emit exactly two sections:
 - ...
 
 ## Test Results
-$ cd ../demo-app && make api && make wire
+$ cd ../demo-app && make api && make wire && make build
 <paste actual output>
 
 $ go test ./... -race -count=1
@@ -80,9 +93,10 @@ Phase 2 added `POST /orders` with Redis idempotency.
 - handler.CreateOrder: binds and validates body; routes errors to correct status
 
 ## Test Results
-$ cd ../demo-app && make api && make wire
+$ cd ../demo-app && make api && make wire && make build
 (generated api/order/v1/order.pb.go, order_grpc.pb.go, order_http.pb.go)
 (regenerated cmd/server/wire_gen.go)
+(compiled bin/server successfully)
 
 $ go test ./... -race -count=1
 ok  	demo-app/internal/service  0.812s  coverage: 87.4% of statements

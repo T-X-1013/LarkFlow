@@ -21,12 +21,21 @@ Deliver code that (a) implements the approved design exactly, (b) passes every r
 3. **Implement (Kratos 四层布局 + 5 步流程)**
    - `../demo-app/` is a materialized Kratos v2.7 skeleton. You MUST follow the layering: every new domain means touching `api/<domain>/v1/*.proto` + `internal/biz/<domain>.go` + `internal/data/<domain>.go` + `internal/service/<domain>.go`, and wiring the providers in `cmd/server/wire.go`. Read `skills/framework/kratos.md` first if you haven't.
    - **Cross-layer calls are forbidden**: service → biz → data (via Repo interface), never skip a layer. Server only registers services, does not access biz/data.
+  - **Provider wiring is centralized**: update `internal/biz/biz.go`, `internal/data/data.go`, and `internal/service/service.go` only. Do NOT define `var ProviderSet = ...` inside `internal/biz/<domain>.go`, `internal/data/<domain>.go`, or `internal/service/<domain>.go`.
+  - **`cmd/server/wire.go` is always-on wiring**: keep `biz.ProviderSet`, `data.ProviderSet`, and `service.ProviderSet` enabled in both `import` and `wire.Build(...)`. These center sets are safe even when empty, so do NOT comment them out and do NOT leave them commented after adding a domain.
+   - **Repo binding rule**: if `NewXxxRepo` already returns the interface type (for example `biz.UserRepo`), do NOT add an extra `wire.Bind(...)`. Only use `wire.Bind` when the constructor returns the concrete struct pointer and Wire needs an explicit interface binding.
+  - **Proto dependency rule**: if a proto imports `google/api/*.proto` or `validate/validate.proto`, those files must exist under `../demo-app/third_party/` and any imported `google/api/*.proto` must contain a valid `go_package`.
+  - **Module path rule**: every in-project Go import and every local proto `go_package` must use the exact module prefix from `../demo-app/go.mod` (currently `demo-app/...`). Do NOT invent `github.com/demo-app/...` or any other repository-style prefix for local packages.
+  - **GORM repo rule**: in `internal/data/*.go`, use `r.data.DB.WithContext(ctx)` for queries. `Data.DB` is a field, not a function, so never write `r.data.DB(ctx)`.
+  - **Model mapping rule**: when converting from GORM models to biz models, align field types explicitly. If a persistence model embeds `gorm.Model`, its `ID` is `uint`; convert it to the biz model type explicitly (for example `int64(po.ID)`), do not rely on implicit assignment.
    - **5-step flow when adding a new domain** (order/user/payment/…):
      1. Write `api/<domain>/v1/<domain>.proto` (service + messages + `google.api.http` annotations for HTTP).
      2. `run_bash` command: `cd ../demo-app && make api` — generates `*.pb.go` / `*_grpc.pb.go` / `*_http.pb.go`.
-     3. Write `internal/biz/<domain>.go` (Usecase + Repo interface) + add `NewXxxUsecase` to `biz.ProviderSet`.
-     4. Write `internal/data/<domain>.go` (Repo implementation returning `biz.XxxRepo`) + add `NewXxxRepo` to `data.ProviderSet`.
-     5. Write `internal/service/<domain>.go` (proto handler calling biz) + add `NewXxxService` to `service.ProviderSet`; update `internal/server/http.go` + `grpc.go` to register the pb service; uncomment `biz.ProviderSet` / `data.ProviderSet` / `service.ProviderSet` in `cmd/server/wire.go` if still commented out; then `run_bash`: `cd ../demo-app && make wire`.
+     3. Write `internal/biz/<domain>.go` (Usecase + Repo interface), then update `internal/biz/biz.go` so `biz.ProviderSet` includes `NewXxxUsecase`.
+     4. Write `internal/data/<domain>.go` (Repo implementation returning `biz.XxxRepo`), then update `internal/data/data.go` so `data.ProviderSet` includes `NewXxxRepo` and only the necessary `wire.Bind(...)`.
+        - In repo methods, all DB operations must start from `r.data.DB.WithContext(ctx)`
+        - When mapping DB rows back to biz structs, explicitly convert persistence-only types such as `uint` IDs into the biz model field type
+     5. Write `internal/service/<domain>.go` (proto handler calling biz), then update `internal/service/service.go` so `service.ProviderSet` includes `NewXxxService`; update `internal/server/http.go` + `grpc.go` to register the pb service; confirm `cmd/server/wire.go` still imports `biz` / `data` / `service` and still includes `biz.ProviderSet` / `data.ProviderSet` / `service.ProviderSet` in `wire.Build(...)`; then `run_bash`: `cd ../demo-app && python ../LarkFlow/scripts/check_kratos_contract.py . && make wire && make build`.
    - Modifying an **existing** domain: only the layer(s) actually changing. Skip steps that don't apply.
    - NEVER create `.go` files at the `../demo-app/` root or under unexpected directories — they will be ignored by the build.
 
@@ -43,6 +52,13 @@ Deliver code that (a) implements the approved design exactly, (b) passes every r
 - **Cross-layer calls**: service holding `*gorm.DB` or `*redis.Client`; biz importing `internal/data/*` concrete types (only its Repo interface); server touching biz/data directly. (`skills/framework/kratos.md`)
 - **Putting `.go` files at `../demo-app/` root** or anywhere outside the Kratos layout. (`skills/framework/kratos.md`)
 - **Skipping `make api` after proto edits** or **`make wire` after ProviderSet edits** — the generated files won't be refreshed and the next build will fail. (`skills/framework/kratos.md`)
+- **Stopping after `make wire`** when provider wiring changed — you MUST run `make build` too, because missing provider graph edges, duplicate bindings, bad imports, and stale method names often surface only at compile time.
+- **Commenting out `biz.ProviderSet` / `data.ProviderSet` / `service.ProviderSet` in `cmd/server/wire.go`** — center wiring is permanent and must stay enabled even before the first domain is added.
+- **Defining duplicate `ProviderSet` variables** in both the center files (`biz.go` / `data.go` / `service.go`) and domain files (`user.go` / `order.go`) — Wire will either ignore the intended set or report multiple bindings.
+- **Importing `google/api/*.proto` without `go_package`** or without shipping the corresponding file under `third_party/` — `make api` will fail during `protoc-gen-go`.
+- **Using the wrong local module prefix** (for example `github.com/demo-app/...`) in Go imports or local proto `go_package` — `go mod tidy` will treat local packages as remote repositories and the build will fail.
+- **Calling `r.data.DB(ctx)` inside `internal/data/*.go`** — `Data.DB` is a `*gorm.DB` field, so the correct entrypoint is `r.data.DB.WithContext(ctx)`.
+- **Returning `gorm.Model` fields into biz structs without explicit conversion** — for example assigning `po.ID` (`uint`) directly into an `int64` biz field will fail at compile time.
 - **Naked `grpc.Dial` for inter-service calls** — use Kratos `transport/grpc.DialInsecure` with `tracing.Client()` middleware so the call inherits the trace, metadata, and timeout. (`skills/transport/rpc.md`)
 - **Handwritten HTTP routes** (`srv.HandleFunc("POST /xxx", ...)` or `gin.Engine`) inside `demo-app/` — routes come from proto's `google.api.http` annotation + `pb.Register<X>HTTPServer`. (`skills/transport/http.md`)
 - **Business errors built with `fmt.Errorf`** — use the generated `v1.ErrorXxx(...)` from `*_errors.pb.go` so gRPC status, HTTP status, reason, metadata all match. (`skills/transport/rpc.md`)

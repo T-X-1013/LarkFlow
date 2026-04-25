@@ -42,12 +42,12 @@ graph TD
         J -.->|5 步流程: proto → make api → biz → data → service → wire| T2["file_editor 写<br/>demo-app/{api,internal/*}"]
         J --> L{阶段3: Test}
         L -->|注入 phase3_test.md| M[测试 Agent]
-        M -.->|run_bash| T3["cd demo-app && make api && make wire && go test ./..."]
+        M -.->|run_bash| T3["cd demo-app && python ../LarkFlow/scripts/check_kratos_contract.py .<br/>&& make api && make wire && make build && go test ./..."]
         M --> O{阶段4: Review}
         O -->|注入 phase4_review.md| P[代码审查 Agent]
         P -.->|🔴 跨层违规 / codegen 不同步 直接 block| RL[阻断]
         P --> N[流转完成: 准备部署]
-        N --> DP[docker build demo-app<br/>两阶段: golang:1.22 → alpine]
+        N --> DP[docker build demo-app<br/>两阶段: golang:1.22-alpine → alpine:3.19]
     end
 ```
 
@@ -146,7 +146,7 @@ graph TD
 
 - 通过 `start_new_demand()` 启动新需求；起点调用 **`_ensure_target_scaffold()`** 把 `templates/kratos-skeleton/` 物化到 `demo-app/`（空目录物化、已物化幂等、脏状态拒绝、模板缺失报错四种情况都在 `tests/unit/engine/test_engine_scaffold.py` 中覆盖）。
 - 在设计阶段调用 `ask_human_approval` 后挂起；pipeline 服务重启后 resume 老需求时，scaffold 钩子幂等跳过，Agent 看到的是上次留下的代码。
-- 收到审批回调后，按显式状态机 `design → coding → testing → reviewing → deploying → done` 推进；任一阶段 LLM 异常 / 超时 / 超轮数 / 连续空响应都会落入 `failed` 并发飞书告警。
+- 收到审批回调后，按显式状态机 `design → design_pending → coding → testing → reviewing → deploying → done` 推进；任一阶段 LLM 异常 / 超时 / 超轮数 / 连续空响应都会落入 `failed` 并发飞书告警。
 - 最后委托 `pipeline/deploy_strategy.py` 的 `DeployStrategy` 完成 Docker 构建与运行；`target_dir` 与策略名从 session 读取，未指定时默认 `demo-app/` + `docker-go` 策略。
 
 引擎可靠性组件（release/A 生产化改造，对应 `ownership.pdf` 中的 A1~A6）：
@@ -267,18 +267,59 @@ DOUBAO_RETRY_MAX_SECONDS=60
 
 ### 3. 运行
 
-启动 `lark-oapi` WebSocket 事件监听器，与飞书建立长连并等待卡片点击事件：
+最小启动集是 `pipeline.lark_interaction`。它负责：
+
+- 与飞书建立 WebSocket 长连
+- 接收卡片点击审批事件
+- 恢复挂起需求并继续跑 coding / testing / reviewing / deploying
+
+启动命令：
 
 ```bash
 PYTHONPATH=. python -m pipeline.lark_interaction
 ```
 
-也可以通过 Docker 构建并启动（无需发布端口，容器主动连飞书）：
+如果业务需要“通过多维表格自动化直接触发启动需求”，还需要额外启动一个极小 HTTP ingress，专门接表格工作流的 `发送 HTTP 请求`。这个进程和 WebSocket 监听器是两个独立入口，`start_ingress` 不会被 `lark_interaction` 自动带起来：
+
+```bash
+PYTHONPATH=. uvicorn pipeline.start_ingress:app --host 0.0.0.0 --port 8001
+```
+
+对应环境变量：
+
+```env
+LARK_START_INGRESS_TOKEN=replace-with-a-random-token
+```
+
+多维表格工作流调用时，在 Header 中带：
+
+```text
+X-LarkFlow-Token: <LARK_START_INGRESS_TOKEN>
+```
+
+请求体示例：
+
+```json
+{
+  "demand_id": "{{需求ID}}",
+  "doc_url": "{{需求文档链接}}"
+}
+```
+
+如果在本地联调该 HTTP ingress，还需要使用 `ngrok`/`cloudflared`/`frp` 暴露公网 HTTPS 地址，再把 URL 配到多维表格工作流中。
+
+也可以通过 Docker 构建并启动 WebSocket 监听器（无需发布端口，容器主动连飞书）：
 
 ```bash
 docker build -t larkflow LarkFlow/
 docker run --rm --env-file LarkFlow/.env larkflow
 ```
+
+注意：
+
+- 上面的 `docker run` 只会启动 `python -m pipeline.lark_interaction`
+- 如果你还需要 `start_ingress`，应单独起第二个进程或第二个容器
+- `start_ingress` 是 HTTP 服务，只有它需要发布端口
 
 如果希望保留 session 数据、日志和生成产物，推荐挂载 volume：
 
@@ -289,6 +330,16 @@ docker run --rm \
   -v "$PWD/LarkFlow/.larkflow:/app/.larkflow" \
   -v "$PWD/LarkFlow/logs:/app/logs" \
   larkflow
+```
+
+如果要在容器里单独运行 `start_ingress`，可以覆盖默认命令：
+
+```bash
+docker run --rm \
+  -p 8001:8001 \
+  --env-file LarkFlow/.env \
+  larkflow \
+  python -m uvicorn pipeline.start_ingress:app --host 0.0.0.0 --port 8001
 ```
 
 如果团队需要使用稳定、可控的镜像源，当前支持通过环境变量统一配置构建参数：
@@ -374,7 +425,7 @@ python tests/prompts/eval.py --only grpc_order_service
 | `internal/biz` | 领域层 usecase + Repo 接口 | 自身定义的 Repo interface | HTTP/gRPC 原语 / `internal/data` 具体类型 |
 | `internal/data` | Repo 实现（gorm / redis） | DB 驱动 | `internal/biz` / `internal/service` |
 | `internal/server` | HTTP + gRPC server 注册 | 注册 proto service | 直接访问 biz / data |
-| `cmd/server/wire.go` | wire DI 汇聚 | 激活四层 ProviderSet | — |
+| `cmd/server/wire.go` | wire DI 汇聚 | 常驻启用 `server/biz/data/service` 四个中心 ProviderSet | — |
 
 ### 新增一个 domain（5 步）
 
@@ -384,8 +435,8 @@ python tests/prompts/eval.py --only grpc_order_service
 2. internal/biz/order.go                 # OrderUsecase + OrderRepo 接口 + NewOrderUsecase → biz.ProviderSet
 3. internal/data/order.go                # orderRepo 实现 biz.OrderRepo + NewOrderRepo → data.ProviderSet
 4. internal/service/order.go             # OrderService → service.ProviderSet；在 server 里注册
-5. cmd/server/wire.go                    # 取消 biz/data/service.ProviderSet 的注释
-   run_bash: cd demo-app && make wire    # 重新生成 wire_gen.go
+5. cmd/server/wire.go                    # 保持 biz/data/service.ProviderSet 常驻启用
+   run_bash: cd demo-app && python ../LarkFlow/scripts/check_kratos_contract.py . && make wire && make build
 ```
 
 完整规范：`skills/framework/kratos.md`（路由表 `weight: 1.3`，`defaults` 头条，每次需求 Phase 2 都会读）。

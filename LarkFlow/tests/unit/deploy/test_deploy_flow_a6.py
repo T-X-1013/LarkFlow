@@ -23,6 +23,8 @@ class DeployFlowTestCase(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory(prefix="deploy-flow-")
         self.target_dir = self._tmp.name
+        Path(self.target_dir, "Makefile").write_text("api:\n\t@echo ok\n", encoding="utf-8")
+        Path(self.target_dir, "go.mod").write_text("module demo-app\n\ngo 1.21\n", encoding="utf-8")
         self.strat = DockerfileGoStrategy()
         self.logger = logging.getLogger("test-deploy")
         self.logger.handlers = [logging.NullHandler()]

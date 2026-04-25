@@ -4,7 +4,7 @@ LarkFlow 飞书事件入口（WebSocket 长连模式）
 负责：
 1. 通过 lark-oapi SDK 的 WebSocket 客户端订阅飞书事件推送，无需公网可达
 2. 对 event_id 做 24 小时幂等，避免重复点击或重复推送多次触发 pipeline
-3. 处理卡片审批回调并唤醒对应的需求流程；同时提供 start_demand 的内部入口
+3. 处理卡片审批回调并唤醒对应的需求流程
 
 SDK 已负责 URL 校验、verification token 校验、签名校验、加密解密，本文件只处理业务层事件。
 """
@@ -268,10 +268,18 @@ def process_card_action(
         print(f"[LarkListener] 忽略重复事件: {event_id}")
         return update_card_status("⏳ 请求已处理，请勿重复点击")
 
-    action_type = action_value.get("action") if isinstance(action_value, dict) else None
-    demand_id = action_value.get("demand_id") if isinstance(action_value, dict) else None
-    if not action_type or not demand_id:
+    action_type = None
+    demand_id = None
+    if isinstance(action_value, dict):
+        action_type = action_value.get("action_type") or action_value.get("action")
+        demand_id = action_value.get("demand_id")
+
+    if not action_type:
         print(f"[LarkListener] 收到无效的 action 数据: {action_value}")
+        return update_card_status(f"解析失败，收到的数据: {action_value}")
+
+    if not demand_id:
+        print(f"[LarkListener] 收到缺少 demand_id 的 action 数据: {action_value}")
         return update_card_status(f"解析失败，收到的数据: {action_value}")
 
     if action_type == "approve":

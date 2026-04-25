@@ -57,8 +57,8 @@ class DockerfileEnsureTestCase(unittest.TestCase):
             dockerfile = Path(tmp) / "Dockerfile"
             self.assertTrue(dockerfile.exists())
             content = dockerfile.read_text(encoding="utf-8")
-            self.assertIn("golang:1.22-alpine", content)
-            self.assertIn("CGO_ENABLED=1", content)
+            template = strat._template_dockerfile_path().read_text(encoding="utf-8")
+            self.assertEqual(content, template)
 
     def test_ensure_dockerfile_preserves_existing(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -66,6 +66,139 @@ class DockerfileEnsureTestCase(unittest.TestCase):
             path.write_text("# my custom dockerfile\n", encoding="utf-8")
             DockerfileGoStrategy()._ensure_dockerfile(tmp)
             self.assertEqual(path.read_text(encoding="utf-8"), "# my custom dockerfile\n")
+
+    def test_preflight_reports_missing_proto_dependency(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            (tmp_path / "Makefile").write_text("api:\n\t@echo ok\n", encoding="utf-8")
+            (tmp_path / "go.mod").write_text("module demo-app\n\ngo 1.21\n", encoding="utf-8")
+            proto_dir = tmp_path / "api" / "user" / "v1"
+            proto_dir.mkdir(parents=True)
+            (proto_dir / "user.proto").write_text(
+                'syntax = "proto3";\noption go_package = "demo-app/api/user/v1;v1";\nimport "google/api/annotations.proto";\nimport "validate/validate.proto";\n',
+                encoding="utf-8",
+            )
+
+            message = DockerfileGoStrategy()._preflight(tmp)
+            self.assertIn("google/api/annotations.proto", message)
+            self.assertIn("validate/validate.proto", message)
+
+    def test_preflight_accepts_proto_dependency_in_third_party(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            (tmp_path / "Makefile").write_text("api:\n\t@echo ok\n", encoding="utf-8")
+            (tmp_path / "go.mod").write_text("module demo-app\n\ngo 1.21\n", encoding="utf-8")
+            proto_dir = tmp_path / "api" / "user" / "v1"
+            proto_dir.mkdir(parents=True)
+            (proto_dir / "user.proto").write_text(
+                'syntax = "proto3";\noption go_package = "demo-app/api/user/v1;v1";\nimport "google/api/annotations.proto";\nimport "validate/validate.proto";\n',
+                encoding="utf-8",
+            )
+            (tmp_path / "third_party" / "google" / "api").mkdir(parents=True)
+            (tmp_path / "third_party" / "validate").mkdir(parents=True)
+            (tmp_path / "third_party" / "google" / "api" / "annotations.proto").write_text(
+                'syntax = "proto3";\n',
+                encoding="utf-8",
+            )
+            (tmp_path / "third_party" / "validate" / "validate.proto").write_text(
+                'syntax = "proto2";\n',
+                encoding="utf-8",
+            )
+
+            message = DockerfileGoStrategy()._preflight(tmp)
+            self.assertEqual(message, "")
+
+    def test_preflight_blocks_when_wire_omits_active_provider_sets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            (tmp_path / "Makefile").write_text("api:\n\t@echo ok\n", encoding="utf-8")
+            (tmp_path / "go.mod").write_text("module demo-app\n\ngo 1.21\n", encoding="utf-8")
+            (tmp_path / "cmd" / "server").mkdir(parents=True)
+            (tmp_path / "cmd" / "server" / "wire.go").write_text(
+                """package main
+
+import (
+\t"demo-app/internal/biz"
+\t"demo-app/internal/data"
+\t"demo-app/internal/service"
+\t"github.com/google/wire"
+)
+
+func wireApp() {
+\twire.Build(
+\t\t// biz.ProviderSet,
+\t\t// data.ProviderSet,
+\t\t// service.ProviderSet,
+\t)
+}
+""",
+                encoding="utf-8",
+            )
+            (tmp_path / "internal" / "biz").mkdir(parents=True)
+            (tmp_path / "internal" / "biz" / "biz.go").write_text(
+                """package biz
+
+import "github.com/google/wire"
+
+var ProviderSet = wire.NewSet(NewUserUsecase)
+""",
+                encoding="utf-8",
+            )
+            (tmp_path / "internal" / "data").mkdir(parents=True)
+            (tmp_path / "internal" / "data" / "data.go").write_text(
+                """package data
+
+import "github.com/google/wire"
+
+var ProviderSet = wire.NewSet(NewData, NewUserRepo)
+""",
+                encoding="utf-8",
+            )
+            (tmp_path / "internal" / "service").mkdir(parents=True)
+            (tmp_path / "internal" / "service" / "service.go").write_text(
+                """package service
+
+import "github.com/google/wire"
+
+var ProviderSet = wire.NewSet(NewUserService)
+""",
+                encoding="utf-8",
+            )
+
+            message = DockerfileGoStrategy()._preflight(tmp)
+            self.assertIn("Kratos 骨架契约", message)
+            self.assertIn("wire.go must enable biz.ProviderSet", message)
+            self.assertIn("wire.go must enable data.ProviderSet", message)
+            self.assertIn("wire.go must enable service.ProviderSet", message)
+
+    def test_preflight_blocks_wrong_local_imports(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            (tmp_path / "Makefile").write_text("api:\n\t@echo ok\n", encoding="utf-8")
+            (tmp_path / "go.mod").write_text("module demo-app\n\ngo 1.21\n", encoding="utf-8")
+            (tmp_path / "cmd" / "server").mkdir(parents=True)
+            (tmp_path / "cmd" / "server" / "wire.go").write_text(
+                """package main
+
+func wireApp() {}
+""",
+                encoding="utf-8",
+            )
+            (tmp_path / "internal" / "service").mkdir(parents=True)
+            (tmp_path / "internal" / "service" / "user.go").write_text(
+                """package service
+
+import "github.com/demo-app/internal/biz"
+
+var _ = biz.UserUsecase{}
+""",
+                encoding="utf-8",
+            )
+
+            message = DockerfileGoStrategy()._preflight(tmp)
+            self.assertIn("Kratos 骨架契约", message)
+            self.assertIn("wrong local Go imports", message)
+            self.assertIn("github.com/demo-app/internal/biz", message)
 
 
 class StrategyRegistryTestCase(unittest.TestCase):

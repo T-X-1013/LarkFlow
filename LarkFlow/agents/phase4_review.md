@@ -31,6 +31,21 @@ Block any merge that violates a 🔴 rule in the matched `skills/*.md`. Fix 🟡
    - **🔴 Kratos codegen consistency**:
      - If any `.proto` changed, the corresponding `*.pb.go` / `*_grpc.pb.go` / `*_http.pb.go` must exist and match (check `make api` ran). Stale generated files = block.
      - If any `ProviderSet` or `wire.go` changed, `wire_gen.go` must reflect it (check `make wire` ran).
+   - **🔴 Provider wiring contract**:
+     - `internal/biz/biz.go`, `internal/data/data.go`, and `internal/service/service.go` are the only files allowed to define `var ProviderSet = ...`.
+     - Domain files such as `internal/biz/user.go` / `internal/data/user.go` / `internal/service/user.go` must not define a second `ProviderSet`.
+     - If a repo constructor already returns the interface type, there must not be an extra `wire.Bind(...)` that creates a duplicate binding.
+     - `cmd/server/wire.go` must actually enable `biz.ProviderSet` / `data.ProviderSet` / `service.ProviderSet` once those sets contain real domain providers; leaving them commented out is a blocking error.
+     - `make build` must succeed after `make wire`; do not approve code that only passed codegen but failed compilation.
+   - **🔴 Data-layer contract**:
+     - In `internal/data/*.go`, DB access must start from `r.data.DB.WithContext(ctx)`; calling `r.data.DB(ctx)` is a blocking error because `DB` is a field, not a function.
+     - When persistence models embed `gorm.Model` or otherwise use DB-specific field types, mappings into biz structs must convert to the biz type explicitly (for example `int64(po.ID)`), not rely on implicit assignment.
+   - **🔴 Proto dependency contract**:
+     - If any proto imports `google/api/*.proto` or `validate/validate.proto`, the corresponding files must exist under `third_party/`.
+      - Imported `google/api/*.proto` must declare `go_package`, otherwise `protoc-gen-go` will fail.
+   - **🔴 Module path contract**:
+     - In-project Go imports and local proto `go_package` must use the exact prefix from `go.mod`.
+     - If code imports `github.com/demo-app/...` while `go.mod` says `module demo-app`, block the review.
    - **Database**: no string-concatenated SQL; transactions have `defer rollback`; list queries have `LIMIT`.
    - **Concurrency**: no naked `go func()`; every goroutine has lifecycle control and panic recovery; `context` propagated.
    - **Auth**: middleware on groups not handlers; JWT `alg` pinned; constant-time compares for signatures.

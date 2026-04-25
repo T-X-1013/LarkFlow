@@ -11,8 +11,8 @@
 | 层 | 允许依赖 | 禁止依赖 |
 |---|---|---|
 | `internal/service` | `internal/biz` | `internal/data`、`gorm`、`redis`、HTTP 框架 |
-| `internal/biz` | `internal/data`（通过 Repo interface） | `internal/service`、HTTP/gRPC 原语 |
-| `internal/data` | 数据库驱动、`gorm`、`redis` | `internal/biz`、`internal/service` |
+| `internal/biz` | 自己定义的 Repo interface | `internal/data` 具体实现、`internal/service`、HTTP/gRPC 原语 |
+| `internal/data` | 数据库驱动、`gorm`、`redis`、`internal/biz` 中定义的 Repo interface | `internal/service` |
 | `internal/server` | 注册 Service（`pb.Register<X>HTTPServer`） | 直接访问 biz / data |
 
 ```go
@@ -47,8 +47,8 @@ func (s *OrderService) GetOrder(ctx context.Context, req *v1.GetReq) (*v1.Order,
 4. internal/service/order.go          # OrderService + NewOrderService + 实现 pb.OrderServer
    → 把 NewOrderService 加入 service.ProviderSet
 5. internal/server/http.go + grpc.go  # 注册：pb.RegisterOrderHTTPServer(srv, svc) 等
-   cmd/server/wire.go                 # 取消 biz/data/service.ProviderSet 的注释
-   → run_bash: cd <target_dir> && make wire   # 重新生成 wire_gen.go
+   cmd/server/wire.go                 # 保持 biz/data/service.ProviderSet 常驻启用
+   → run_bash: cd <target_dir> && python ../LarkFlow/scripts/check_kratos_contract.py . && make wire && make build
 ```
 
 **缺任何一步**：编译不过 / wire 报未绑定 / HTTP 路由 404 / gRPC 方法未注册。
@@ -57,9 +57,10 @@ func (s *OrderService) GetOrder(ctx context.Context, req *v1.GetReq) (*v1.Order,
 
 `wire.Build` 中列出的每个 `ProviderSet` 必须有**至少一个 provider 被依赖链消费**，否则 wire 直接拒绝生成。
 
-- 骨架初始只启用 `server.ProviderSet + newApp`（见 `cmd/server/wire.go` 的注释）
-- 新增第一个 domain 时：同时往 biz/data/service 三个 ProviderSet 追加 provider，并在 wire.go 取消对应 `// x.ProviderSet,` 的注释——**一次性做完**
-- 不要分步只开一个（wire 会报 "unused provider set"）
+- 骨架默认始终启用 `server.ProviderSet + biz.ProviderSet + data.ProviderSet + service.ProviderSet + newApp`
+- `biz.ProviderSet` / `service.ProviderSet` 允许为空 `wire.NewSet()`；`data.ProviderSet` 至少保留 `NewData`
+- Agent 不要把 `cmd/server/wire.go` 中的中心 ProviderSet 改回注释态；新增 domain 时只需要往中心 `ProviderSet` 里追加 provider
+- 修改完 `ProviderSet` 后，先跑 `python ../LarkFlow/scripts/check_kratos_contract.py .`，再跑 `make wire` 和 `make build`
 
 ## 🟡 HIGH: Repo interface 放在 biz 层
 
@@ -98,6 +99,9 @@ func (r *orderRepo) Create(ctx context.Context, o *biz.Order) error {
     return r.data.DB.WithContext(ctx).Create(&po).Error
 }
 ```
+
+- `Data.DB` 是字段，不是函数。Repo 层一律从 `r.data.DB.WithContext(ctx)` 起 query，禁止写 `r.data.DB(ctx)`
+- 如果持久化模型嵌入了 `gorm.Model`，其 `ID` 是 `uint`；映射回 biz 结构体时要显式转成 biz 字段类型，例如 `int64(po.ID)`
 
 ## 🟡 HIGH: proto 组织与 errors
 
