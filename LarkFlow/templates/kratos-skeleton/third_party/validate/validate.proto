@@ -1,0 +1,124 @@
+syntax = "proto2";
+
+package validate;
+
+option go_package = "github.com/envoyproxy/protoc-gen-validate/validate";
+option java_package = "io.envoyproxy.pgv.validate";
+
+import "google/protobuf/descriptor.proto";
+
+extend google.protobuf.MessageOptions {
+  optional bool disabled = 1071;
+}
+
+extend google.protobuf.OneofOptions {
+  optional bool required = 1071;
+}
+
+extend google.protobuf.FieldOptions {
+  optional FieldRules rules = 1071;
+}
+
+message FieldRules {
+  optional MessageRules message = 17;
+  optional FloatRules float = 1;
+  optional DoubleRules double = 2;
+  optional Int32Rules int32 = 3;
+  optional Int64Rules int64 = 4;
+  optional UInt32Rules uint32 = 5;
+  optional UInt64Rules uint64 = 6;
+  optional BoolRules bool = 13;
+  optional StringRules string = 14;
+  optional BytesRules bytes = 15;
+  optional EnumRules enum = 16;
+  optional RepeatedRules repeated = 18;
+}
+
+message MessageRules {
+  optional bool skip = 1;
+  optional bool required = 2;
+}
+
+message FloatRules {
+  optional float const = 1;
+  optional float lt = 2;
+  optional float lte = 3;
+  optional float gt = 4;
+  optional float gte = 5;
+}
+
+message DoubleRules {
+  optional double const = 1;
+  optional double lt = 2;
+  optional double lte = 3;
+  optional double gt = 4;
+  optional double gte = 5;
+}
+
+message Int32Rules {
+  optional int32 const = 1;
+  optional int32 lt = 2;
+  optional int32 lte = 3;
+  optional int32 gt = 4;
+  optional int32 gte = 5;
+  repeated int32 in = 6;
+  repeated int32 not_in = 7;
+}
+
+message Int64Rules {
+  optional int64 const = 1;
+  optional int64 lt = 2;
+  optional int64 lte = 3;
+  optional int64 gt = 4;
+  optional int64 gte = 5;
+  repeated int64 in = 6;
+  repeated int64 not_in = 7;
+}
+
+message UInt32Rules {
+  optional uint32 const = 1;
+  optional uint32 lt = 2;
+  optional uint32 lte = 3;
+  optional uint32 gt = 4;
+  optional uint32 gte = 5;
+  repeated uint32 in = 6;
+  repeated uint32 not_in = 7;
+}
+
+message UInt64Rules {
+  optional uint64 const = 1;
+  optional uint64 lt = 2;
+  optional uint64 lte = 3;
+  optional uint64 gt = 4;
+  optional uint64 gte = 5;
+  repeated uint64 in = 6;
+  repeated uint64 not_in = 7;
+}
+
+message BoolRules {
+  optional bool const = 1;
+}
+
+message StringRules {
+  optional string const = 1;
+  optional uint64 min_len = 2;
+  optional uint64 max_len = 3;
+  optional string pattern = 6;
+}
+
+message BytesRules {
+  optional bytes const = 1;
+  optional uint64 min_len = 2;
+  optional uint64 max_len = 3;
+}
+
+message EnumRules {
+  optional int32 const = 1;
+  optional bool defined_only = 2;
+}
+
+message RepeatedRules {
+  optional uint64 min_items = 1;
+  optional uint64 max_items = 2;
+  optional bool unique = 3;
+}

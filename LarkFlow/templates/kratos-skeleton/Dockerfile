@@ -24,11 +24,12 @@ COPY . .
 
 RUN go mod download && go mod tidy
 
-# Kratos cmd 子模块（protoc-gen-go-http / protoc-gen-go-errors）tag 与主库不同步，使用 @latest
+# Kratos cmd 子模块（protoc-gen-go-http / protoc-gen-go-errors）tag 与主库不同步，
+# 固定到已验证 revision，避免 @latest 带来的版本漂移与额外 list 查询
 RUN go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.33.0 \
     && go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.3.0 \
-    && go install github.com/go-kratos/kratos/cmd/protoc-gen-go-http/v2@latest \
-    && go install github.com/go-kratos/kratos/cmd/protoc-gen-go-errors/v2@latest \
+    && go install github.com/go-kratos/kratos/cmd/protoc-gen-go-http/v2@f149714c1d54 \
+    && go install github.com/go-kratos/kratos/cmd/protoc-gen-go-errors/v2@fb8e43efb207 \
     && go install github.com/google/wire/cmd/wire@v0.6.0
 
 ENV PATH="/go/bin:${PATH}"

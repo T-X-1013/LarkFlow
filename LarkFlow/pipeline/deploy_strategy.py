@@ -8,10 +8,14 @@ from __future__ import annotations
 
 import abc
 import os
+import re
 import subprocess
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict
+
+from scripts.check_kratos_contract import validate_project
 
 
 @dataclass
@@ -70,6 +74,7 @@ class DockerfileGoStrategy(DeployStrategy):
     IMAGE_TAG = "demo-app"
     CONTAINER_NAME = "demo-app-container"
     PORT = 8080
+    _IMPORT_PATTERN = re.compile(r'^\s*import\s+"([^"]+)";', re.MULTILINE)
 
     _DEFAULT_DOCKERFILE = (
         "ARG GO_IMAGE=golang:1.22-alpine\n"
@@ -94,6 +99,10 @@ class DockerfileGoStrategy(DeployStrategy):
 
     def deploy(self, target_dir: str, logger: Any) -> DeployOutcome:
         self._ensure_dockerfile(target_dir)
+        preflight_error = self._preflight(target_dir)
+        if preflight_error:
+            logger.error(preflight_error, extra={"event": "deploy_preflight_failed"})
+            return DeployOutcome(success=False, reason=preflight_error)
         build_command = ["docker", "build", "--pull=false", "-t", self.IMAGE_TAG]
         _append_build_arg(build_command, "GO_IMAGE", os.getenv("LARKFLOW_GO_IMAGE", ""))
         _append_build_arg(build_command, "ALPINE_MIRROR", os.getenv("LARKFLOW_ALPINE_MIRROR", ""))
@@ -147,8 +156,60 @@ class DockerfileGoStrategy(DeployStrategy):
     def _ensure_dockerfile(self, target_dir: str) -> None:
         dockerfile = os.path.join(target_dir, "Dockerfile")
         if not os.path.exists(dockerfile):
+            template_dockerfile = self._template_dockerfile_path()
+            if template_dockerfile.exists():
+                with open(template_dockerfile, "r", encoding="utf-8") as src:
+                    content = src.read()
+            else:
+                content = self._DEFAULT_DOCKERFILE
             with open(dockerfile, "w", encoding="utf-8") as f:
-                f.write(self._DEFAULT_DOCKERFILE)
+                f.write(content)
+
+    def _template_dockerfile_path(self) -> Path:
+        return Path(__file__).resolve().parents[1] / "templates" / "kratos-skeleton" / "Dockerfile"
+
+    def _preflight(self, target_dir: str) -> str:
+        missing_core_files = [
+            name for name in ("Makefile", "go.mod") if not os.path.exists(os.path.join(target_dir, name))
+        ]
+        if missing_core_files:
+            return f"目标项目缺少关键构建文件：{', '.join(missing_core_files)}。"
+
+        missing_imports = self._find_missing_proto_imports(target_dir)
+        if missing_imports:
+            return (
+                "目标项目缺少 proto 依赖，无法执行 make api："
+                + ", ".join(missing_imports)
+                + "。请检查 third_party 模板是否完整。"
+            )
+
+        contract_findings = validate_project(Path(target_dir))
+        if contract_findings:
+            return "目标项目未满足 Kratos 骨架契约：" + "；".join(contract_findings) + "。"
+
+        return ""
+
+    def _find_missing_proto_imports(self, target_dir: str) -> list[str]:
+        api_root = Path(target_dir) / "api"
+        conf_root = Path(target_dir) / "internal" / "conf"
+        proto_files = []
+        if api_root.exists():
+            proto_files.extend(api_root.rglob("*.proto"))
+        if conf_root.exists():
+            proto_files.extend(conf_root.rglob("*.proto"))
+
+        search_roots = [Path(target_dir), Path(target_dir) / "third_party", Path("/usr/include")]
+        missing: set[str] = set()
+        for proto_file in proto_files:
+            content = proto_file.read_text(encoding="utf-8")
+            for imported in self._IMPORT_PATTERN.findall(content):
+                if imported.startswith("google/protobuf/"):
+                    continue
+                if any((root / imported).exists() for root in search_roots):
+                    continue
+                missing.add(imported)
+
+        return sorted(missing)
 
     def _inspect_container_failure(self) -> str:
         """检查容器是否立即退出；已退出则返回带分类的错误信息。"""
@@ -189,6 +250,12 @@ class DockerfileGoStrategy(DeployStrategy):
 
         if "go mod download" in text or "go mod tidy" in text:
             return "Go 依赖下载失败。"
+
+        if "make wire" in text or "inject wireapp" in text or "wire:" in text:
+            return "Wire 依赖注入生成失败。"
+
+        if "make build" in text:
+            return "Go 编译失败。"
 
         if "requires go >=" in text:
             return "Go 版本与项目要求不匹配。"

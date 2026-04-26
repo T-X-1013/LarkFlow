@@ -4,7 +4,7 @@ LarkFlow 飞书事件入口（WebSocket 长连模式）
 负责：
 1. 通过 lark-oapi SDK 的 WebSocket 客户端订阅飞书事件推送，无需公网可达
 2. 对 event_id 做 24 小时幂等，避免重复点击或重复推送多次触发 pipeline
-3. 处理卡片审批回调并唤醒对应的需求流程；同时提供 start_demand 的内部入口
+3. 处理卡片审批回调并唤醒对应的需求流程
 
 SDK 已负责 URL 校验、verification token 校验、签名校验、加密解密，本文件只处理业务层事件。
 """
@@ -24,7 +24,16 @@ from lark_oapi.event.callback.model.p2_card_action_trigger import (
     P2CardActionTrigger,
     P2CardActionTriggerResponse,
 )
+from lark_oapi.api.drive.v1 import P2DriveFileBitableRecordChangedV1
 
+from pipeline.lark_bitable_listener import (
+    STATUS_FAILED,
+    STATUS_PROCESSING,
+    STATUS_REJECTED,
+    on_record_changed,
+    subscribe_demand_base,
+    update_demand_status,
+)
 from pipeline.utils.lark_doc import LarkDocError, fetch_lark_doc_content
 from pipeline.utils.lark_sdk import get_lark_client
 
@@ -268,10 +277,18 @@ def process_card_action(
         print(f"[LarkListener] 忽略重复事件: {event_id}")
         return update_card_status("⏳ 请求已处理，请勿重复点击")
 
-    action_type = action_value.get("action") if isinstance(action_value, dict) else None
-    demand_id = action_value.get("demand_id") if isinstance(action_value, dict) else None
-    if not action_type or not demand_id:
+    action_type = None
+    demand_id = None
+    if isinstance(action_value, dict):
+        action_type = action_value.get("action_type") or action_value.get("action")
+        demand_id = action_value.get("demand_id")
+
+    if not action_type:
         print(f"[LarkListener] 收到无效的 action 数据: {action_value}")
+        return update_card_status(f"解析失败，收到的数据: {action_value}")
+
+    if not demand_id:
+        print(f"[LarkListener] 收到缺少 demand_id 的 action 数据: {action_value}")
         return update_card_status(f"解析失败，收到的数据: {action_value}")
 
     if action_type == "approve":
@@ -306,6 +323,32 @@ def process_card_action(
         _launch_background_task(run_reject)
         return update_card_status("❌ 已驳回，AI 正在重新设计...")
 
+    if action_type == "start_demand":
+        # 方案 B：Base 新增需求行后发送的启动审批卡片点击「开始处理」
+        record_id = action_value.get("record_id") if isinstance(action_value, dict) else None
+        doc_url = action_value.get("doc_url", "") if isinstance(action_value, dict) else ""
+        print(f"[LarkListener] 启动新需求: demand_id={demand_id} record={record_id}")
+
+        if record_id and not update_demand_status(record_id, STATUS_PROCESSING):
+            # 回写失败不阻止流程推进，但给卡片一个明确的告警
+            print(f"[LarkListener] 记录 {record_id} 状态回写「处理中」失败，继续启动")
+
+        try:
+            handle_start_request({"demand_id": demand_id, "doc_url": doc_url})
+        except Exception as exc:  # noqa: BLE001
+            print(f"[LarkListener] 启动需求失败 demand_id={demand_id}: {exc}")
+            if record_id:
+                update_demand_status(record_id, STATUS_FAILED)
+            return update_card_status(f"❌ 启动失败: {exc}")
+        return update_card_status(f"🚀 已开始处理需求 {demand_id}")
+
+    if action_type == "reject_demand":
+        record_id = action_value.get("record_id") if isinstance(action_value, dict) else None
+        print(f"[LarkListener] 需求 {demand_id} 在启动前被驳回 record={record_id}")
+        if record_id:
+            update_demand_status(record_id, STATUS_REJECTED)
+        return update_card_status(f"❌ 已驳回需求 {demand_id}")
+
     return update_card_status(f"unsupported action: {action_type}")
 
 
@@ -332,9 +375,22 @@ def _on_card_action(event: P2CardActionTrigger) -> P2CardActionTriggerResponse:
     )
 
 
+def _on_bitable_record_changed(event: P2DriveFileBitableRecordChangedV1) -> None:
+    """
+    Base 记录变更事件的 WS 回调壳；实际业务在 lark_bitable_listener 内处理
+
+    @params:
+        event: SDK 解析好的事件对象
+
+    @return:
+        无返回值
+    """
+    on_record_changed(event)
+
+
 def _build_event_handler() -> "lark.EventDispatcherHandler":
     """
-    构建 lark-oapi 事件分发 handler，注册卡片点击回调
+    构建 lark-oapi 事件分发 handler，注册卡片点击 + Base 记录变更回调
 
     @params:
         无入参
@@ -345,6 +401,7 @@ def _build_event_handler() -> "lark.EventDispatcherHandler":
     return (
         lark.EventDispatcherHandler.builder("", "")
         .register_p2_card_action_trigger(_on_card_action)
+        .register_p2_drive_file_bitable_record_changed_v1(_on_bitable_record_changed)
         .build()
     )
 
@@ -370,6 +427,9 @@ def run_event_loop(app_id: Optional[str] = None, app_secret: Optional[str] = Non
 
     # 预热共享 Client，保证出站消息与入站事件共用同一份 token 缓存
     get_lark_client()
+
+    # 幂等订阅需求 Base 的文件事件；未配置 BASE_TOKEN 时 listener 内部会跳过
+    subscribe_demand_base()
 
     ws_client = lark.ws.Client(
         resolved_app_id,

@@ -20,7 +20,9 @@ LarkFlow 作为一个由 Python Pipeline 驱动的状态机运行，它协调多
 - `pipeline/llm_adapter.py` 负责统一 Anthropic、OpenAI、Qwen/DashScope 与 Doubao/Ark 四种 provider 的调用接口与会话状态；Qwen 通过 DashScope 的 OpenAI-compatible Chat Completions API 接入，Doubao 通过火山方舟在线推理 Responses API 接入，并支持 `ep-...` 共享 Endpoint ID 作为 `DOUBAO_MODEL`。
 - `pipeline/utils/lark_sdk.py` 提供共享的 `lark-oapi` Client 工厂，出站消息、文档读取、入站事件共用一份 `tenant_access_token` 缓存。
 - `pipeline/lark_client.py` 负责飞书卡片构建与消息发送（基于 `client.im.v1.message.create`）。
-- `pipeline/lark_interaction.py` 基于 `lark_oapi.ws.Client` 建立 WebSocket 长连，订阅 `card.action.trigger` 事件；URL 校验 / verification token / 签名 / 加密由 SDK 兜底，本文件只做 24 小时 `event_id` 幂等与状态机恢复。
+- `pipeline/lark_interaction.py` 基于 `lark_oapi.ws.Client` 建立 WebSocket 长连，订阅 `card.action.trigger` 与 `drive.file.bitable_record_changed_v1` 事件；URL 校验 / verification token / 签名 / 加密由 SDK 兜底，本文件只做 24 小时 `event_id` 幂等与状态机恢复。
+- `pipeline/lark_bitable_listener.py` 负责订阅需求 Base 的文件事件，并在新增/编辑记录到达时向审批群发送「需求启动」卡片；状态列回写作为幂等去重。
+- `pipeline/deploy_strategy.py` 负责 `demo-app` 的 Docker 预检查、构建、运行和失败分类；部署前会先执行 `scripts/check_kratos_contract.py`，把 `wire.go`、本地 import、proto `go_package`、明显错误的 data-layer DB 调用等结构问题拦在 `docker build` 之前。
 
 ## 快速参考
 关于环境配置与部署说明，请参阅 `README.md` 文件。
