@@ -9,7 +9,7 @@ LarkFlow 飞书消息发送客户端
 
 import json
 import os
-from typing import Any
+from typing import Any, Optional
 
 from lark_oapi.api.im.v1 import CreateMessageRequest, CreateMessageRequestBody
 
@@ -99,14 +99,20 @@ def _get_receive_id_type() -> str:
     return os.getenv("LARK_RECEIVE_ID_TYPE", "open_id")
 
 
-def _send_message(target: str, msg_type: str, content: dict[str, Any]) -> dict[str, Any]:
+def _send_message(
+    target: str,
+    msg_type: str,
+    content: dict[str, Any],
+    receive_id_type: Optional[str] = None,
+) -> dict[str, Any]:
     """
     通过 SDK 调用 IM v1 message.create 发送飞书消息
 
     @params:
-        target: 消息接收方 ID，语义由 LARK_RECEIVE_ID_TYPE 决定（open_id/chat_id 等）
+        target: 消息接收方 ID，语义由 receive_id_type 决定（open_id/chat_id 等）
         msg_type: 飞书消息类型，例如 interactive 或 text
         content: 消息内容；interactive 传卡片结构，text 传 {"text": "..."}
+        receive_id_type: 显式指定的 receive_id_type；为空时回退到 LARK_RECEIVE_ID_TYPE
 
     @return:
         返回统一结构 {"code": int, "msg": str, "data": Any}；非 0 为失败
@@ -123,7 +129,7 @@ def _send_message(target: str, msg_type: str, content: dict[str, Any]) -> dict[s
     )
     request = (
         CreateMessageRequest.builder()
-        .receive_id_type(_get_receive_id_type())
+        .receive_id_type(receive_id_type or _get_receive_id_type())
         .request_body(request_body)
         .build()
     )
@@ -169,3 +175,103 @@ def send_lark_text(target: str, text: str) -> dict[str, Any]:
         返回统一响应结构 {"code": int, "msg": str, "data": Any}
     """
     return _send_message(target, "text", {"text": text})
+
+
+def build_demand_start_card(
+    demand_id: str,
+    doc_url: str,
+    base_token: str,
+    table_id: str,
+    record_id: str,
+) -> dict[str, Any]:
+    """
+    构建「新需求启动审批」交互式卡片（对应方案 B 的入口卡片）
+
+    @params:
+        demand_id: Base 里的业务唯一键（需求ID 列值）
+        doc_url: 需求文档链接
+        base_token: 需求 Base 的 file_token，用于按钮回调时写回状态列
+        table_id: 需求表的 table_id
+        record_id: 当前记录 record_id
+
+    @return:
+        返回可直接发送给飞书的卡片 JSON 结构
+    """
+    base_ctx = {
+        "base_token": base_token,
+        "table_id": table_id,
+        "record_id": record_id,
+        "demand_id": demand_id,
+    }
+
+    return {
+        "config": {"wide_screen_mode": True},
+        "header": {
+            "title": {
+                "tag": "plain_text",
+                "content": f"🆕 新需求待启动 (需求 ID: {demand_id})",
+            },
+            "template": "orange",
+        },
+        "elements": [
+            {
+                "tag": "markdown",
+                "content": (
+                    "**Base 里新增了一条需求，请确认是否启动 AI 流水线：**\n\n"
+                    f"**📌 需求 ID**：{demand_id}\n\n"
+                    f"**📄 需求文档**：{doc_url or '（未提供）'}\n"
+                ),
+            },
+            {"tag": "hr"},
+            {
+                "tag": "action",
+                "actions": [
+                    {
+                        "tag": "button",
+                        "text": {"tag": "plain_text", "content": "🚀 开始处理"},
+                        "type": "primary",
+                        "value": {
+                            "action": "start_demand",
+                            "doc_url": doc_url,
+                            **base_ctx,
+                        },
+                    },
+                    {
+                        "tag": "button",
+                        "text": {"tag": "plain_text", "content": "❌ 驳回"},
+                        "type": "danger",
+                        "value": {
+                            "action": "reject_demand",
+                            **base_ctx,
+                        },
+                    },
+                ],
+            },
+        ],
+    }
+
+
+def send_demand_start_card(
+    chat_id: str,
+    demand_id: str,
+    doc_url: str,
+    base_token: str,
+    table_id: str,
+    record_id: str,
+) -> dict[str, Any]:
+    """
+    把「新需求启动审批」卡片发送到指定群聊
+
+    @params:
+        chat_id: 目标群 chat_id（强制 receive_id_type=chat_id）
+        demand_id: 需求 ID
+        doc_url: 需求文档链接
+        base_token: Base 的 file_token
+        table_id: 需求表 table_id
+        record_id: 需求行 record_id
+
+    @return:
+        返回统一响应结构 {"code": int, "msg": str, "data": Any}
+    """
+    card = build_demand_start_card(demand_id, doc_url, base_token, table_id, record_id)
+    return _send_message(chat_id, "interactive", card, receive_id_type="chat_id")

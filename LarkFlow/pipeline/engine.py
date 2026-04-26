@@ -4,7 +4,7 @@ import random
 import shutil
 import sys
 import time
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 # 将项目根目录加入 sys.path，解决直接运行脚本时的模块导入问题
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -32,7 +32,7 @@ load_dotenv()
 STORE: SessionStore = default_store()
 
 
-def _load_session(demand_id: str) -> Dict[str, Any] | None:
+def _load_session(demand_id: str) -> Optional[Dict[str, Any]]:
     """从 STORE 读取 session 并重建 transient 字段 (client / logger)。"""
     session = STORE.get(demand_id)
     if session is None:
@@ -142,7 +142,7 @@ def _create_turn_with_retry(session, system_prompt, logger, phase):
     timeout = _env_int("AGENT_TURN_TIMEOUT", 120)
     max_retries = _env_int("AGENT_MAX_RETRIES", 3)
 
-    last_exc: Exception | None = None
+    last_exc: Optional[Exception] = None
     for attempt in range(max_retries):
         try:
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
@@ -317,6 +317,15 @@ _NEXT_PHASE: Dict[str, str] = {
     PHASE_REVIEWING: PHASE_DEPLOYING,
 }
 
+# 终端 banner 用的阶段序号与中文名；仅用于人眼可读的提示，不影响结构化日志
+_PHASE_BANNER: Dict[str, tuple] = {
+    PHASE_DESIGN: (1, "Design 设计"),
+    PHASE_CODING: (2, "Coding 编码"),
+    PHASE_TESTING: (3, "Testing 测试"),
+    PHASE_REVIEWING: (4, "Reviewing 代码审查"),
+    PHASE_DEPLOYING: (5, "Deploying 部署"),
+}
+
 
 def _mark_failed(demand_id: str, phase: str, error: str) -> None:
     """把 session 置为 failed 并落盘，同时飞书告警（如有配置）。"""
@@ -339,11 +348,17 @@ def _mark_failed(demand_id: str, phase: str, error: str) -> None:
             pass
 
 
-def _advance_to_phase(demand_id: str, phase: str) -> Dict[str, Any] | None:
+def _advance_to_phase(demand_id: str, phase: str) -> Optional[Dict[str, Any]]:
     """切换 session 到指定 phase，按需追加 kickoff 文本，并落盘。"""
     if phase not in _PHASE_CONFIG:
         raise ValueError(f"unknown phase: {phase}")
     logger = get_logger(demand_id, phase)
+    banner = _PHASE_BANNER.get(phase)
+    if banner:
+        print(
+            f"\n========== [需求 {demand_id}] Phase {banner[0]}: {banner[1]} 开始 ==========\n",
+            flush=True,
+        )
     logger.info("enter phase", extra={"event": "phase_enter", "phase": phase})
     session = _load_session(demand_id)
     if not session:
@@ -378,6 +393,11 @@ def start_new_demand(demand_id: str, requirement: str):
     入口：飞书多维表格录入新需求，触发 Pipeline
     """
     logger = get_logger(demand_id, PHASE_DESIGN)
+    banner = _PHASE_BANNER[PHASE_DESIGN]
+    print(
+        f"\n========== [需求 {demand_id}] Phase {banner[0]}: {banner[1]} 开始 ==========\n",
+        flush=True,
+    )
     logger.info(
         "demand started",
         extra={"event": "demand_started", "phase": PHASE_DESIGN},
