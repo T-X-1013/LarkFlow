@@ -283,20 +283,11 @@ DOUBAO_RETRY_MAX_SECONDS=60
 PYTHONPATH=. python -m pipeline.lark_interaction
 ```
 
-<<<<<<< HEAD
 多维表格录入新需求后，由 `pipeline/lark_bitable_listener.py` 通过同一条 WebSocket 长连接收 `drive.file.bitable_record_changed_v1` 事件，自动向审批群发送「需求启动」卡片——**不再需要公网 HTTP 入口、不再需要单独进程**。
-=======
-如果业务需要“通过多维表格自动化直接触发启动需求”，还需要额外启动一个极小 HTTP ingress，专门接表格工作流的 `发送 HTTP 请求`。这个进程和 WebSocket 监听器是两个独立入口，`start_ingress` 不会被 `lark_interaction` 自动带起来：
-
-```bash
-PYTHONPATH=. uvicorn pipeline.start_ingress:app --host 0.0.0.0 --port 8001
-```
->>>>>>> 53b47cb (修复docker部署demo-app拉取镜像失败； SDK + WebSocket + Bot API 启动服务)
 
 对应环境变量：
 
 ```env
-<<<<<<< HEAD
 LARK_DEMAND_BASE_TOKEN=<Base 的 obj_token；知识库内的 Base 需先用 wiki.get_node 换算>
 LARK_DEMAND_TABLE_ID=<需求表 table_id>
 LARK_DEMAND_APPROVE_CHAT_ID=<oc_ 开头的审批群 chat_id>
@@ -314,29 +305,6 @@ LARK_DEMAND_APPROVE_CHAT_ID=<oc_ 开头的审批群 chat_id>
 飞书开放平台侧需要：`docs:event:subscribe` + `bitable:app` + `bitable:app:readonly` scope；事件订阅里勾选「多维表格记录变更」；机器人被加为该 Base（或所在 wiki 空间）的协作者/成员。
 
 也可以通过 Docker 构建并启动（无需发布端口，容器主动连飞书）：
-=======
-LARK_START_INGRESS_TOKEN=replace-with-a-random-token
-```
-
-多维表格工作流调用时，在 Header 中带：
-
-```text
-X-LarkFlow-Token: <LARK_START_INGRESS_TOKEN>
-```
-
-请求体示例：
-
-```json
-{
-  "demand_id": "{{需求ID}}",
-  "doc_url": "{{需求文档链接}}"
-}
-```
-
-如果在本地联调该 HTTP ingress，还需要使用 `ngrok`/`cloudflared`/`frp` 暴露公网 HTTPS 地址，再把 URL 配到多维表格工作流中。
-
-也可以通过 Docker 构建并启动 WebSocket 监听器（无需发布端口，容器主动连飞书）：
->>>>>>> 53b47cb (修复docker部署demo-app拉取镜像失败； SDK + WebSocket + Bot API 启动服务)
 
 ```bash
 docker build -t larkflow LarkFlow/
