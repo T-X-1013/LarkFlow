@@ -73,6 +73,7 @@ graph TD
 │   │   ├── engine.py
 │   │   ├── lark_client.py
 │   │   ├── lark_interaction.py
+│   │   ├── lark_bitable_listener.py  # Base 记录事件 → 审批群发启动卡
 │   │   ├── llm_adapter.py
 │   │   ├── tools_runtime.py
 │   │   ├── tools_schema.py
@@ -167,8 +168,11 @@ graph TD
 
 - 通过 `lark_oapi.ws.Client` 与飞书建立 WebSocket 长连，由 SDK 兜底 URL 校验、verification token、签名与加密
 - 通过 `EventDispatcherHandler.register_p2_card_action_trigger` 订阅卡片按钮点击
+- 通过 `register_p2_drive_file_bitable_record_changed_v1` 订阅多维表格记录变更，作为新需求的入向触发（替代旧的 HTTP webhook 方案）
 - 维护 24 小时 `event_id` 幂等 SQLite（`LARK_EVENT_STORE_PATH`），避免重复点击二次触发 pipeline
 - 唤醒已挂起的 Pipeline（approve → 进入 coding，reject → 回 design）
+
+`LarkFlow/pipeline/lark_bitable_listener.py` 负责进程启动时向飞书订阅需求 Base 的文件事件，并在新增/编辑记录到达时向审批群发送「需求启动」卡片；状态列回写（`待启动 → 已发卡 → 处理中 → 已启动 / 驳回 / 失败`）作为幂等去重标记。
 
 `LarkFlow/pipeline/lark_client.py` 通过 `client.im.v1.message.create` 统一发送飞书卡片/文本消息；`LarkFlow/pipeline/utils/lark_sdk.py` 作为共享的 `lark-oapi` Client 工厂，让出站消息、文档读取、入站事件共用一份 token 缓存；`LarkFlow/pipeline/utils/lark_doc.py` 通过 `client.wiki.v2.space.get_node` 与 `client.docx.v1.document.raw_content` 读取飞书云文档。
 
@@ -279,47 +283,33 @@ DOUBAO_RETRY_MAX_SECONDS=60
 PYTHONPATH=. python -m pipeline.lark_interaction
 ```
 
-如果业务需要“通过多维表格自动化直接触发启动需求”，还需要额外启动一个极小 HTTP ingress，专门接表格工作流的 `发送 HTTP 请求`。这个进程和 WebSocket 监听器是两个独立入口，`start_ingress` 不会被 `lark_interaction` 自动带起来：
-
-```bash
-PYTHONPATH=. uvicorn pipeline.start_ingress:app --host 0.0.0.0 --port 8001
-```
+多维表格录入新需求后，由 `pipeline/lark_bitable_listener.py` 通过同一条 WebSocket 长连接收 `drive.file.bitable_record_changed_v1` 事件，自动向审批群发送「需求启动」卡片——**不再需要公网 HTTP 入口、不再需要单独进程**。
 
 对应环境变量：
 
 ```env
-LARK_START_INGRESS_TOKEN=replace-with-a-random-token
+LARK_DEMAND_BASE_TOKEN=<Base 的 obj_token；知识库内的 Base 需先用 wiki.get_node 换算>
+LARK_DEMAND_TABLE_ID=<需求表 table_id>
+LARK_DEMAND_APPROVE_CHAT_ID=<oc_ 开头的审批群 chat_id>
+# 以下三项字段名有默认值，仅在 Base 里列名不同时覆盖
+# LARK_DEMAND_STATUS_FIELD=状态
+# LARK_DEMAND_ID_FIELD=需求ID
+# LARK_DEMAND_DOC_FIELD=需求文档
 ```
 
-多维表格工作流调用时，在 Header 中带：
+需求 Base 的最低要求：
+- 有 `状态` 单选列（选项需包含：`待启动 / 已发卡 / 处理中 / 已启动 / 驳回 / 失败`）
+- 有 `需求ID` 列（自增编号或其他业务唯一键；留空会 fallback 到 record_id）
+- 有 `需求文档` 列（作为"完成信号"：填入内容后才发卡，避免新增空行就触发）
 
-```text
-X-LarkFlow-Token: <LARK_START_INGRESS_TOKEN>
-```
+飞书开放平台侧需要：`docs:event:subscribe` + `bitable:app` + `bitable:app:readonly` scope；事件订阅里勾选「多维表格记录变更」；机器人被加为该 Base（或所在 wiki 空间）的协作者/成员。
 
-请求体示例：
-
-```json
-{
-  "demand_id": "{{需求ID}}",
-  "doc_url": "{{需求文档链接}}"
-}
-```
-
-如果在本地联调该 HTTP ingress，还需要使用 `ngrok`/`cloudflared`/`frp` 暴露公网 HTTPS 地址，再把 URL 配到多维表格工作流中。
-
-也可以通过 Docker 构建并启动 WebSocket 监听器（无需发布端口，容器主动连飞书）：
+也可以通过 Docker 构建并启动（无需发布端口，容器主动连飞书）：
 
 ```bash
 docker build -t larkflow LarkFlow/
 docker run --rm --env-file LarkFlow/.env larkflow
 ```
-
-注意：
-
-- 上面的 `docker run` 只会启动 `python -m pipeline.lark_interaction`
-- 如果你还需要 `start_ingress`，应单独起第二个进程或第二个容器
-- `start_ingress` 是 HTTP 服务，只有它需要发布端口
 
 如果希望保留 session 数据、日志和生成产物，推荐挂载 volume：
 
@@ -330,16 +320,6 @@ docker run --rm \
   -v "$PWD/LarkFlow/.larkflow:/app/.larkflow" \
   -v "$PWD/LarkFlow/logs:/app/logs" \
   larkflow
-```
-
-如果要在容器里单独运行 `start_ingress`，可以覆盖默认命令：
-
-```bash
-docker run --rm \
-  -p 8001:8001 \
-  --env-file LarkFlow/.env \
-  larkflow \
-  python -m uvicorn pipeline.start_ingress:app --host 0.0.0.0 --port 8001
 ```
 
 如果团队需要使用稳定、可控的镜像源，当前支持通过环境变量统一配置构建参数：
