@@ -11,6 +11,11 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 # 导入我们之前写的模块
 from pipeline.lark_client import send_lark_card, send_lark_text
+from pipeline.lark_doc_client import (
+    LarkDocWriteError,
+    create_tech_doc,
+    grant_doc_access,
+)
 from pipeline.llm_adapter import (
     ToolCall,
     append_tool_result,
@@ -176,6 +181,80 @@ def _create_turn_with_retry(session, system_prompt, logger, phase):
     raise last_exc
 
 
+def _prepare_tech_doc(
+    demand_id: str,
+    design_doc: str,
+    logger,
+    existing_token: Optional[str] = None,
+    existing_url: Optional[str] = None,
+    record_id: Optional[str] = None,
+) -> tuple[Optional[str], Optional[str]]:
+    """
+    为审批卡准备飞书技术方案文档链接
+
+    幂等：若 session.pending_approval 里已有 (token, url)，直接复用，避免重试重建文档。
+    降级：建文档 / 授权任一失败都返回 (None, None)，调用方继续发截断卡，不阻塞审批链路。
+
+    @params:
+        demand_id: 需求 ID，用作文档标题
+        design_doc: 技术方案全文 markdown
+        logger: 阶段 logger，失败路径打 warning
+        existing_token: pending_approval 里已缓存的 token；非空即复用
+        existing_url: pending_approval 里已缓存的 url；非空即复用
+
+    @return:
+        (tech_doc_token, tech_doc_url)；失败时返回 (None, None)
+    """
+    if existing_url:
+        return existing_token, existing_url
+
+    title = f"技术方案 - {demand_id}"
+    try:
+        token, url = create_tech_doc(title, design_doc)
+    except LarkDocWriteError as exc:
+        logger.warning(
+            f"tech doc create failed, fallback to truncated card: {exc}",
+            extra={"event": "tech_doc_create_failed", "demand_id": demand_id},
+        )
+        return None, None
+
+    # 按 env 配置授权审批目标：chat_id → openchat，open_id → openid
+    approve_target = (os.getenv("LARK_DEMAND_APPROVE_TARGET") or "").strip()
+    approve_type = (os.getenv("LARK_DEMAND_APPROVE_RECEIVE_ID_TYPE") or "open_id").strip()
+    member_type = "openchat" if approve_type == "chat_id" else "openid"
+    if approve_target:
+        try:
+            grant_doc_access(token, approve_target, member_type=member_type, perm="full_access")
+        except LarkDocWriteError as exc:
+            logger.warning(
+                f"tech doc grant failed, approver may get 403: {exc}",
+                extra={"event": "tech_doc_grant_failed", "demand_id": demand_id},
+            )
+    else:
+        logger.warning(
+            "LARK_DEMAND_APPROVE_TARGET not configured, skip tech doc grant",
+            extra={"event": "tech_doc_grant_skipped", "demand_id": demand_id},
+        )
+
+    # 成功拿到 url 后回写 Base 技术方案文档列，失败仅告警不阻塞审批链路
+    if record_id:
+        try:
+            from pipeline.lark_bitable_listener import update_demand_tech_doc_url
+
+            if not update_demand_tech_doc_url(record_id, url):
+                logger.warning(
+                    "tech doc url writeback to Base returned False",
+                    extra={"event": "tech_doc_writeback_failed", "demand_id": demand_id},
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                f"tech doc url writeback exception: {exc}",
+                extra={"event": "tech_doc_writeback_exception", "demand_id": demand_id},
+            )
+
+    return token, url
+
+
 def run_agent_loop(demand_id: str, system_prompt: str) -> bool:
     """
     运行 Agent 循环，直到它给出最终文本回复，或者调用了挂起工具(ask_human_approval)
@@ -240,21 +319,38 @@ def run_agent_loop(demand_id: str, system_prompt: str) -> bool:
                         "approval requested",
                         extra={"event": "approval_requested", "phase": phase},
                     )
+                    summary = tool_args.get("summary", "")
+                    design_doc = tool_args.get("design_doc", "")
+
+                    # 幂等：如果之前已为本需求建过 tech doc，复用；否则尝试新建 + 授权
+                    prev_pending = session.get("pending_approval") or {}
+                    tech_doc_token, tech_doc_url = _prepare_tech_doc(
+                        demand_id,
+                        design_doc,
+                        logger,
+                        existing_token=prev_pending.get("tech_doc_token"),
+                        existing_url=prev_pending.get("tech_doc_url"),
+                        record_id=session.get("record_id"),
+                    )
+
                     session["pending_approval"] = {
                         "tool_call_id": tool_call.id,
                         "tool_name": tool_name,
-                        "summary": tool_args.get("summary", ""),
-                        "design_doc": tool_args.get("design_doc", "")
+                        "summary": summary,
+                        "design_doc": design_doc,
+                        "tech_doc_token": tech_doc_token,
+                        "tech_doc_url": tech_doc_url,
                     }
                     _save_session(demand_id, session)
 
                     lark_target = os.getenv("LARK_CHAT_ID")
                     if lark_target:
                         send_lark_card(
-                            lark_target,
-                            demand_id,
-                            session["pending_approval"]["summary"],
-                            session["pending_approval"]["design_doc"]
+                            target=lark_target,
+                            demand_id=demand_id,
+                            summary=summary,
+                            design_doc=design_doc,
+                            tech_doc_url=tech_doc_url,
                         )
                     else:
                         logger.warning(
@@ -399,9 +495,18 @@ def _run_phase(demand_id: str, phase: str) -> bool:
         return False
 
 
-def start_new_demand(demand_id: str, requirement: str):
+def start_new_demand(
+    demand_id: str,
+    requirement: str,
+    record_id: Optional[str] = None,
+):
     """
     入口：飞书多维表格录入新需求，触发 Pipeline
+
+    @params:
+        demand_id: 需求 ID（Base 自增编号）
+        requirement: 需求文本 / markdown
+        record_id: Base 行 record_id；留存到 session 供后续回写技术方案链接等字段
     """
     with trace_demand_start(demand_id, PHASE_DESIGN) as span:
         logger = get_logger(demand_id, PHASE_DESIGN)
@@ -431,6 +536,8 @@ def start_new_demand(demand_id: str, requirement: str):
         session["target_dir"] = target_dir
         session["workspace_root"] = workspace_root
         session["phase"] = PHASE_DESIGN
+        if record_id:
+            session["record_id"] = record_id
         _save_session(demand_id, session)
 
         # 进入 Phase 1: Design

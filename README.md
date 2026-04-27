@@ -290,7 +290,7 @@ mkdir -p logs
 PYTHONPATH=. PYTHONUNBUFFERED=1 python -m pipeline.lark_interaction >> logs/lark_listener.log 2>&1
 ```
 
-这样 `BitableListener` / `LarkListener` / 飞书 SDK 的控制台输出会持续写入 `logs/lark_listener.log`，再由 `demo-app/otel/promtail-config.yaml` 采集到 `Loki`。
+这样 `BitableListener` / `LarkListener` / 飞书 SDK 的控制台输出会持续写入 `logs/lark_listener.log`，再由模板中的 `LarkFlow/templates/kratos-skeleton/otel/promtail-config.yaml`（物化后对应 `demo-app/otel/promtail-config.yaml`）采集到 `Loki`。
 
 注意：
 
@@ -298,14 +298,17 @@ PYTHONPATH=. PYTHONUNBUFFERED=1 python -m pipeline.lark_interaction >> logs/lark
 - 同一时刻只应保留一个进程；不要同时执行两条命令各起一份实例。
 - 如果希望既保留终端查看能力、又让 `Loki` 实时采集，推荐使用重定向到 `logs/lark_listener.log` 的方式，再配合 `tail -f logs/lark_listener.log` 本地查看。
 
-多维表格录入新需求后，由 `pipeline/lark_bitable_listener.py` 通过同一条 WebSocket 长连接收 `drive.file.bitable_record_changed_v1` 事件，自动向审批群发送「需求启动」卡片——**不再需要公网 HTTP 入口、不再需要单独进程**。
+多维表格录入新需求后，由 `pipeline/lark_bitable_listener.py` 通过同一条 WebSocket 长连接收 `drive.file.bitable_record_changed_v1` 事件，自动向配置好的接收方发送「需求启动」卡片——**不再需要公网 HTTP 入口、不再需要单独进程**。
 
 对应环境变量：
 
 ```env
 LARK_DEMAND_BASE_TOKEN=<Base 的 obj_token；知识库内的 Base 需先用 wiki.get_node 换算>
 LARK_DEMAND_TABLE_ID=<需求表 table_id>
-LARK_DEMAND_APPROVE_CHAT_ID=<oc_ 开头的审批群 chat_id>
+# 启动卡片 / 技术方案文档授权的接收方：target 可以是群 chat_id，也可以是某个人的 open_id
+LARK_DEMAND_APPROVE_TARGET=<ou_xxx 或 oc_xxx>
+# chat_id（发群）或 open_id（发私聊），默认 open_id
+LARK_DEMAND_APPROVE_RECEIVE_ID_TYPE=open_id
 # 以下三项字段名有默认值，仅在 Base 里列名不同时覆盖
 # LARK_DEMAND_STATUS_FIELD=状态
 # LARK_DEMAND_ID_FIELD=需求ID

@@ -4,8 +4,12 @@ LarkFlow 多维表格（Base）事件监听
 负责方案 B 的入向链路：
 1. 进程启动时向飞书订阅目标 Base 的文件事件（幂等）
 2. 收到 bitable_record_changed 事件后，按 table_id 过滤
-3. 读取记录的当前字段值，状态列为空或「待启动」时发送审批卡片到指定群
+3. 读取记录的当前字段值，状态列为空或「待启动」时，按 env 配置的 target + receive_id_type 发卡
 4. 发卡后回写状态列为「已发卡」，作为去重标记；异常时回写「失败」
+
+接收方通过两个 env 决定：
+  - LARK_DEMAND_APPROVE_TARGET：chat_id 或 open_id 字符串
+  - LARK_DEMAND_APPROVE_RECEIVE_ID_TYPE：chat_id / open_id，默认 open_id
 
 所有状态变更都走 Base 状态列，避免额外依赖 DB 做幂等；事件重复投递时，
 状态列已变就天然跳过。
@@ -40,6 +44,9 @@ STATUS_FAILED = "失败"
 # 状态列处于这些值时，事件到达会重新发卡；其它值一律跳过
 _TRIGGER_STATUSES = {STATUS_EMPTY, STATUS_PENDING}
 
+# 记录已被删除 / 事件延迟投递导致 record_id 找不到；这是正常场景，静默跳过
+_ERR_RECORD_NOT_FOUND = 1254043
+
 
 def _demand_base_token() -> str:
     return (os.getenv("LARK_DEMAND_BASE_TOKEN") or "").strip()
@@ -61,8 +68,16 @@ def _demand_doc_field() -> str:
     return (os.getenv("LARK_DEMAND_DOC_FIELD") or "需求文档").strip()
 
 
-def _approve_chat_id() -> str:
-    return (os.getenv("LARK_DEMAND_APPROVE_CHAT_ID") or "").strip()
+def _tech_doc_field() -> str:
+    return (os.getenv("LARK_TECH_DOC_FIELD") or "技术方案文档").strip()
+
+
+def _approve_target() -> str:
+    return (os.getenv("LARK_DEMAND_APPROVE_TARGET") or "").strip()
+
+
+def _approve_receive_id_type() -> str:
+    return (os.getenv("LARK_DEMAND_APPROVE_RECEIVE_ID_TYPE") or "open_id").strip()
 
 
 def subscribe_demand_base() -> None:
@@ -164,9 +179,11 @@ def _get_record_fields(record_id: str) -> Optional[dict[str, Any]]:
         return None
 
     if not response.success():
-        print(
-            f"[BitableListener] 读取记录 {record_id} 失败: code={response.code} msg={response.msg}"
-        )
+        # 记录已删除或事件延迟投递时 code=1254043，是常见无害场景，静默跳过
+        if response.code != _ERR_RECORD_NOT_FOUND:
+            print(
+                f"[BitableListener] 读取记录 {record_id} 失败: code={response.code} msg={response.msg}"
+            )
         return None
 
     data = response.data
@@ -211,6 +228,49 @@ def update_demand_status(record_id: str, status: str) -> bool:
     return True
 
 
+def update_demand_tech_doc_url(record_id: str, url: str) -> bool:
+    """
+    把技术方案文档链接回写到 Base 的技术方案文档列
+
+    @params:
+        record_id: 需求行 record_id
+        url: 飞书云文档 url（docx）
+
+    @return:
+        成功返回 True；失败返回 False 并打印日志
+    """
+    if not record_id or not url:
+        return False
+
+    field_name = _tech_doc_field()
+    # URL 类型字段需要 {"text": <显示名>, "link": <url>} 的对象结构
+    field_value = {"text": url, "link": url}
+    body = AppTableRecord.builder().fields({field_name: field_value}).build()
+    request = (
+        UpdateAppTableRecordRequest.builder()
+        .app_token(_demand_base_token())
+        .table_id(_demand_table_id())
+        .record_id(record_id)
+        .request_body(body)
+        .build()
+    )
+
+    try:
+        response = get_lark_client().bitable.v1.app_table_record.update(request)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[BitableListener] 回写技术方案链接异常 record={record_id}: {exc}")
+        return False
+
+    if not response.success():
+        print(
+            f"[BitableListener] 回写技术方案链接失败 record={record_id}: "
+            f"code={response.code} msg={response.msg}"
+        )
+        return False
+
+    return True
+
+
 def _process_record(record_id: str) -> None:
     """
     针对单条记录执行「读取 → 判断状态 → 发卡 → 回写」逻辑
@@ -241,20 +301,24 @@ def _process_record(record_id: str) -> None:
         # 自增编号字段有时滞后一点，用 record_id 兜底
         demand_id = record_id
 
-    chat_id = _approve_chat_id()
-    if not chat_id:
-        print("[BitableListener] 未配置 LARK_DEMAND_APPROVE_CHAT_ID，无法发卡")
+    target = _approve_target()
+    receive_id_type = _approve_receive_id_type()
+    if not target:
+        print(
+            "[BitableListener] 未配置 LARK_DEMAND_APPROVE_TARGET，无法发卡"
+        )
         update_demand_status(record_id, STATUS_FAILED)
         return
 
     try:
         result = send_demand_start_card(
-            chat_id=chat_id,
+            target=target,
             demand_id=demand_id,
             doc_url=doc_url,
             base_token=_demand_base_token(),
             table_id=_demand_table_id(),
             record_id=record_id,
+            receive_id_type=receive_id_type,
         )
     except Exception as exc:  # noqa: BLE001
         print(f"[BitableListener] 发卡异常 record={record_id}: {exc}")
@@ -275,7 +339,10 @@ def _process_record(record_id: str) -> None:
         )
         return
 
-    print(f"[BitableListener] 已发卡 record={record_id} demand_id={demand_id}")
+    print(
+        f"[BitableListener] 已发卡 record={record_id} demand_id={demand_id} "
+        f"target={target} type={receive_id_type}"
+    )
 
 
 def on_record_changed(event: P2DriveFileBitableRecordChangedV1) -> None:

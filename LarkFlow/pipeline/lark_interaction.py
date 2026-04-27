@@ -223,16 +223,23 @@ def handle_start_request(payload: dict[str, Any]) -> dict[str, Any]:
         返回启动结果 JSON
     """
     demand_id, doc_url = _normalize_start_payload(payload)
+    record_id = payload.get("record_id") if isinstance(payload, dict) else None
     with trace_lark_start_request(demand_id, doc_url):
-        print(f"[LarkListener] 收到启动请求，开始处理新需求: {demand_id}, 文档: {doc_url}")
+        print(
+            f"[LarkListener] 收到启动请求，开始处理新需求: {demand_id}, 文档: {doc_url}, record={record_id}"
+        )
 
-        def run_start() -> None:
-            from pipeline.engine import start_new_demand
+    def run_start() -> None:
+        from pipeline.engine import start_new_demand
 
-            start_new_demand(demand_id, _resolve_requirement_text(doc_url))
+        start_new_demand(
+            demand_id,
+            _resolve_requirement_text(doc_url),
+            record_id=record_id,
+        )
 
-        _launch_background_task(run_start)
-        return {"code": 0, "msg": "success"}
+    _launch_background_task(run_start)
+    return {"code": 0, "msg": "success"}
 
 
 def update_card_status(message: str) -> dict[str, Any]:
@@ -342,7 +349,9 @@ def process_card_action(
                 print(f"[LarkListener] 记录 {record_id} 状态回写「处理中」失败，继续启动")
 
             try:
-                handle_start_request({"demand_id": demand_id, "doc_url": doc_url})
+                handle_start_request(
+                    {"demand_id": demand_id, "doc_url": doc_url, "record_id": record_id}
+                )
             except Exception as exc:  # noqa: BLE001
                 print(f"[LarkListener] 启动需求失败 demand_id={demand_id}: {exc}")
                 if record_id:
@@ -398,6 +407,11 @@ def _on_bitable_record_changed(event: P2DriveFileBitableRecordChangedV1) -> None
         on_record_changed(event)
 
 
+def _noop_event_handler(_event) -> None:
+    """占位 handler：仅为"吞掉"应用订阅了但不需要业务处理的事件类型，避免 SDK 打 ERROR"""
+    return None
+
+
 def _build_event_handler() -> "lark.EventDispatcherHandler":
     """
     构建 lark-oapi 事件分发 handler，注册卡片点击 + Base 记录变更回调
@@ -412,6 +426,10 @@ def _build_event_handler() -> "lark.EventDispatcherHandler":
         lark.EventDispatcherHandler.builder("", "")
         .register_p2_card_action_trigger(_on_card_action)
         .register_p2_drive_file_bitable_record_changed_v1(_on_bitable_record_changed)
+        # 应用订阅了这些事件但业务层不消费，注册 no-op 避免 SDK 刷 ERROR 日志
+        .register_p2_drive_file_bitable_field_changed_v1(_noop_event_handler)
+        .register_p2_im_chat_access_event_bot_p2p_chat_entered_v1(_noop_event_handler)
+        .register_p2_im_message_message_read_v1(_noop_event_handler)
         .build()
     )
 
@@ -434,7 +452,6 @@ def run_event_loop(app_id: Optional[str] = None, app_secret: Optional[str] = Non
         raise RuntimeError(
             "缺少 LARK_APP_ID 或 LARK_APP_SECRET 环境变量，无法启动飞书事件监听"
         )
-
     setup_runtime_otel("larkflow")
 
     # 预热共享 Client，保证出站消息与入站事件共用同一份 token 缓存
