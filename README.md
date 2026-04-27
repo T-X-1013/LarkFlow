@@ -2,7 +2,7 @@
 
 LarkFlow 已经从一个依赖本地 IDE 插件的工具，进化为一个**完全无头（Headless）、基于多阶段多 Agent（串行）自动化研发工作流引擎**。
 
-[![Version](https://img.shields.io/badge/version-1.6.0-blue.svg)](https://github.com/your-repo/larkflow)
+[![Version](https://img.shields.io/badge/version-1.8.0-blue.svg)](https://github.com/your-repo/larkflow)
 [![Architecture](https://img.shields.io/badge/architecture-Multi--Agent-orange.svg)](#architecture)
 [![Scaffold](https://img.shields.io/badge/scaffold-Kratos%20v2.7-00ADD8.svg)](#kratos-骨架自动物化)
 
@@ -379,6 +379,7 @@ LARK_DEMAND_APPROVE_RECEIVE_ID_TYPE=open_id
 - 有 `状态` 单选列（选项需包含：`待启动 / 已发卡 / 处理中 / 已启动 / 驳回 / 失败`）
 - 有 `需求ID` 列（自增编号或其他业务唯一键；留空会 fallback 到 record_id）
 - 有 `需求文档` 列（作为"完成信号"：填入内容后才发卡，避免新增空行就触发）
+- 有 `技术方案文档`列（技术方案会回写到该位置）
 
 飞书开放平台侧需要：`docs:event:subscribe` + `bitable:app` + `bitable:app:readonly` scope；事件订阅里勾选「多维表格记录变更」；机器人被加为该 Base（或所在 wiki 空间）的协作者/成员。
 
