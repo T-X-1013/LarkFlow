@@ -304,18 +304,29 @@ LARK_DEMAND_APPROVE_CHAT_ID=<oc_ 开头的审批群 chat_id>
 
 飞书开放平台侧需要：`docs:event:subscribe` + `bitable:app` + `bitable:app:readonly` scope；事件订阅里勾选「多维表格记录变更」；机器人被加为该 Base（或所在 wiki 空间）的协作者/成员。
 
-也可以通过 Docker 构建并启动（无需发布端口，容器主动连飞书）：
+也可以通过 Docker 构建并启动（无需发布端口，容器主动连飞书）。
+下面的命令假设当前目录是仓库根目录 `LarkFlow/`：
 
 ```bash
 docker build -t larkflow LarkFlow/
 docker run --rm --env-file LarkFlow/.env larkflow
 ```
 
+这两条命令分别等价于：
+
+- `docker build -t larkflow LarkFlow/`
+  - 使用 [LarkFlow/Dockerfile](/Users/tao/PyCharmProject/LarkFlow/LarkFlow/Dockerfile) 构建服务镜像
+- `docker run --rm --env-file LarkFlow/.env larkflow`
+  - 在容器里启动默认入口 `python -m pipeline.lark_interaction`
+
 注意：
 
 - 上面的 `docker run` 只会启动 `python -m pipeline.lark_interaction`
-- 如果你还需要 `start_ingress`，应单独起第二个进程或第二个容器
-- `start_ingress` 是 HTTP 服务，只有它需要发布端口
+- 当前默认模式下，`lark_interaction` 会建立飞书 WebSocket 长连，因此**不需要** `-p 8000:8000` 这类端口映射
+- 启动成功后，日志里应看到类似：
+  - `[LarkListener] WebSocket 长连已启动，等待飞书事件...`
+  - `[Lark] ... connected to wss://msg-frontier.feishu.cn/ws/v2 ...`
+- 当前项目的飞书需求启动、审批回调和后续流程恢复，都走同一条 SDK WebSocket 长连链路，不再需要单独的 HTTP 启动入口
 
 如果希望保留 session 数据、日志和生成产物，推荐挂载 volume：
 
@@ -328,15 +339,11 @@ docker run --rm \
   larkflow
 ```
 
-如果要在容器里单独运行 `start_ingress`，可以覆盖默认命令：
+其中：
 
-```bash
-docker run --rm \
-  -p 8001:8001 \
-  --env-file LarkFlow/.env \
-  larkflow \
-  python -m uvicorn pipeline.start_ingress:app --host 0.0.0.0 --port 8001
-```
+- `demo-app`：保存生成产物，便于宿主机继续查看和调试
+- `LarkFlow/.larkflow`：保存 session SQLite、运行态状态
+- `LarkFlow/logs`：保存结构化日志文件
 
 如果团队需要使用稳定、可控的镜像源，当前支持通过环境变量统一配置构建参数：
 
