@@ -16,19 +16,34 @@ from lark_oapi.api.im.v1 import CreateMessageRequest, CreateMessageRequestBody
 from pipeline.utils.lark_sdk import get_lark_client
 
 
-def build_approval_card(demand_id: str, summary: str, design_doc: str) -> dict[str, Any]:
+def build_approval_card(
+    demand_id: str,
+    summary: str,
+    design_doc: str = "",
+    tech_doc_url: Optional[str] = None,
+    tech_doc_title: Optional[str] = None,
+) -> dict[str, Any]:
     """
     构建飞书交互式审批卡片
 
     @params:
         demand_id: 当前需求 ID
         summary: 设计方案摘要
-        design_doc: 设计文档全文
+        design_doc: 设计文档全文；无 tech_doc_url 时按旧逻辑截断 500 字展示
+        tech_doc_url: 飞书文档链接；非空时卡片用"📄 查看完整技术方案"链接替代截断正文
+        tech_doc_title: 链接文案，默认"查看完整技术方案"
 
     @return:
         返回可直接发送给飞书的卡片 JSON 结构
     """
-    display_doc = design_doc[:500] + "..." if len(design_doc) > 500 else design_doc
+    if tech_doc_url:
+        link_text = tech_doc_title or "查看完整技术方案"
+        detail_section = (
+            f"**📄 详细设计**\n[{link_text}]({tech_doc_url})"
+        )
+    else:
+        display_doc = design_doc[:500] + "..." if len(design_doc) > 500 else design_doc
+        detail_section = f"**📄 详细设计 (部分)**\n{display_doc}"
 
     return {
         "config": {
@@ -47,7 +62,7 @@ def build_approval_card(demand_id: str, summary: str, design_doc: str) -> dict[s
                 "content": (
                     "**AI 助手已完成技术方案设计，请审批：**\n\n"
                     f"**📝 方案摘要**\n{summary}\n\n"
-                    f"**📄 详细设计 (部分)**\n{display_doc}"
+                    f"{detail_section}"
                 ),
             },
             {
@@ -147,20 +162,36 @@ def _send_message(
     }
 
 
-def send_lark_card(target: str, demand_id: str, summary: str, design_doc: str) -> dict[str, Any]:
+def send_lark_card(
+    target: str,
+    demand_id: str,
+    summary: str,
+    design_doc: str = "",
+    tech_doc_url: Optional[str] = None,
+    tech_doc_title: Optional[str] = None,
+) -> dict[str, Any]:
     """
-    发送审批卡片到飞书
+    发送审批卡片到飞书；tech_doc_url 非空时卡片走"飞书文档链接"渲染，否则回退到截断正文
 
     @params:
         target: 飞书消息接收方 ID（与 LARK_RECEIVE_ID_TYPE 匹配）
         demand_id: 当前需求 ID
         summary: 设计方案摘要
-        design_doc: 设计文档全文
+        design_doc: 设计文档全文；当 tech_doc_url 为空时用作截断展示
+        tech_doc_url: 飞书文档链接；优先渲染为可点击链接
+        tech_doc_title: 链接文案，默认"查看完整技术方案"
 
     @return:
         返回统一响应结构 {"code": int, "msg": str, "data": Any}
     """
-    return _send_message(target, "interactive", build_approval_card(demand_id, summary, design_doc))
+    card = build_approval_card(
+        demand_id,
+        summary,
+        design_doc=design_doc,
+        tech_doc_url=tech_doc_url,
+        tech_doc_title=tech_doc_title,
+    )
+    return _send_message(target, "interactive", card)
 
 
 def send_lark_text(target: str, text: str) -> dict[str, Any]:
@@ -252,26 +283,31 @@ def build_demand_start_card(
 
 
 def send_demand_start_card(
-    chat_id: str,
+    target: str,
     demand_id: str,
     doc_url: str,
     base_token: str,
     table_id: str,
     record_id: str,
+    receive_id_type: str = "open_id",
 ) -> dict[str, Any]:
     """
-    把「新需求启动审批」卡片发送到指定群聊
+    把「新需求启动审批」卡片发送到指定接收方
+
+    target + receive_id_type 由 env（LARK_DEMAND_APPROVE_TARGET / LARK_DEMAND_APPROVE_RECEIVE_ID_TYPE）
+    决定，可发到群聊或个人私聊。
 
     @params:
-        chat_id: 目标群 chat_id（强制 receive_id_type=chat_id）
+        target: 接收方 ID
         demand_id: 需求 ID
         doc_url: 需求文档链接
         base_token: Base 的 file_token
         table_id: 需求表 table_id
         record_id: 需求行 record_id
+        receive_id_type: 接收方 ID 类型，默认 open_id
 
     @return:
         返回统一响应结构 {"code": int, "msg": str, "data": Any}
     """
     card = build_demand_start_card(demand_id, doc_url, base_token, table_id, record_id)
-    return _send_message(chat_id, "interactive", card, receive_id_type="chat_id")
+    return _send_message(target, "interactive", card, receive_id_type=receive_id_type)
