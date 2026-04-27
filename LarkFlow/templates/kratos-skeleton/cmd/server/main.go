@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"os"
+	"time"
 
 	"demo-app/internal/conf"
 
@@ -37,6 +39,16 @@ func newApp(logger log.Logger, hs *http.Server, gs *grpc.Server) *kratos.App {
 
 func main() {
 	flag.Parse()
+	shutdownTelemetry, err := initTelemetry(context.Background(), Name, Version)
+	if err != nil {
+		panic(err)
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = shutdownTelemetry(shutdownCtx)
+	}()
+
 	logger := log.With(log.NewStdLogger(os.Stdout),
 		"ts", log.DefaultTimestamp,
 		"caller", log.DefaultCaller,

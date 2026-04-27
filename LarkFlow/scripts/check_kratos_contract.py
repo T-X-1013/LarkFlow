@@ -110,12 +110,37 @@ def _find_missing_third_party_imports(project_root: Path) -> list[str]:
 def _find_wrong_local_imports(project_root: Path, module_name: str) -> list[str]:
     wrong = []
     for path in project_root.rglob("*.go"):
-        for imported in _GO_IMPORT_PATTERN.findall(path.read_text(encoding="utf-8")):
+        for imported in _extract_go_imports(path.read_text(encoding="utf-8")):
             if imported.startswith("github.com/") and f"/{module_name}/" in imported:
                 wrong.append(f"{path.relative_to(project_root)}: {imported}")
             if imported.startswith("internal/") or imported.startswith("api/"):
                 wrong.append(f"{path.relative_to(project_root)}: {imported}")
     return sorted(set(wrong))
+
+
+def _extract_go_imports(content: str) -> list[str]:
+    imports: list[str] = []
+    in_block = False
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if not in_block:
+            if not line.startswith("import"):
+                continue
+            if line == "import (":
+                in_block = True
+                continue
+            match = _GO_IMPORT_PATTERN.search(line)
+            if match:
+                imports.append(match.group(1))
+            continue
+
+        if line == ")":
+            in_block = False
+            continue
+        match = _GO_IMPORT_PATTERN.search(line)
+        if match:
+            imports.append(match.group(1))
+    return imports
 
 
 def _find_wrong_proto_go_packages(project_root: Path, module_name: str) -> list[str]:

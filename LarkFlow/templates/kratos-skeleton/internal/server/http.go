@@ -5,6 +5,7 @@ import (
 
 	"github.com/go-kratos/kratos/v2/log"
 	"github.com/go-kratos/kratos/v2/middleware/recovery"
+	ktracing "github.com/go-kratos/kratos/v2/middleware/tracing"
 	"github.com/go-kratos/kratos/v2/transport/http"
 )
 
@@ -14,6 +15,7 @@ func NewHTTPServer(c *conf.Server, logger log.Logger) *http.Server {
 	var opts = []http.ServerOption{
 		http.Middleware(
 			recovery.Recovery(),
+			ktracing.Server(),
 		),
 	}
 	if c.Http.Network != "" {
