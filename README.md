@@ -73,7 +73,7 @@ graph TD
 │   │   ├── engine.py
 │   │   ├── lark_client.py
 │   │   ├── lark_interaction.py
-│   │   ├── lark_bitable_listener.py  # Base 记录事件 → 审批群发启动卡
+│   │   ├── lark_bitable_listener.py  # Base 记录事件 → 按 env target 发启动卡
 │   │   ├── llm_adapter.py
 │   │   ├── tools_runtime.py
 │   │   ├── tools_schema.py
@@ -283,14 +283,17 @@ DOUBAO_RETRY_MAX_SECONDS=60
 PYTHONPATH=. python -m pipeline.lark_interaction
 ```
 
-多维表格录入新需求后，由 `pipeline/lark_bitable_listener.py` 通过同一条 WebSocket 长连接收 `drive.file.bitable_record_changed_v1` 事件，自动向审批群发送「需求启动」卡片——**不再需要公网 HTTP 入口、不再需要单独进程**。
+多维表格录入新需求后，由 `pipeline/lark_bitable_listener.py` 通过同一条 WebSocket 长连接收 `drive.file.bitable_record_changed_v1` 事件，自动向配置好的接收方发送「需求启动」卡片——**不再需要公网 HTTP 入口、不再需要单独进程**。
 
 对应环境变量：
 
 ```env
 LARK_DEMAND_BASE_TOKEN=<Base 的 obj_token；知识库内的 Base 需先用 wiki.get_node 换算>
 LARK_DEMAND_TABLE_ID=<需求表 table_id>
-LARK_DEMAND_APPROVE_CHAT_ID=<oc_ 开头的审批群 chat_id>
+# 启动卡片 / 技术方案文档授权的接收方：target 可以是群 chat_id，也可以是某个人的 open_id
+LARK_DEMAND_APPROVE_TARGET=<ou_xxx 或 oc_xxx>
+# chat_id（发群）或 open_id（发私聊），默认 open_id
+LARK_DEMAND_APPROVE_RECEIVE_ID_TYPE=open_id
 # 以下三项字段名有默认值，仅在 Base 里列名不同时覆盖
 # LARK_DEMAND_STATUS_FIELD=状态
 # LARK_DEMAND_ID_FIELD=需求ID
