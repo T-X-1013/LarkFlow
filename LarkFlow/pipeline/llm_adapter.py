@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
 from pipeline.tools_schema import get_anthropic_tools, get_chat_completion_tools, get_openai_tools
+from telemetry.otel import start_span
 
 
 _RESPONSES_PROVIDERS = {"openai", "doubao"}
@@ -163,15 +164,56 @@ def create_turn(session: Dict[str, Any], system_prompt: str) -> AgentTurn:
     """执行一轮模型调用，并返回统一后的结果"""
     provider = session["provider"]
     client = session["client"]
+    demand_id = session.get("demand_id")
+    phase = session.get("phase")
 
-    # 对外暴露统一的 create_turn，内部再按 provider 分发到各自的 SDK 协议。
+    with start_span(
+        "llm.call",
+        {
+            "demand_id": demand_id,
+            "phase": phase,
+            "llm.provider": provider,
+            "llm.model": _resolve_model_name(provider),
+        },
+    ) as span:
+        # 对外暴露统一的 create_turn，内部再按 provider 分发到各自的 SDK 协议。
+        if provider == "anthropic":
+            turn = _create_anthropic_turn(session, client, system_prompt)
+        elif provider == "openai":
+            turn = _create_openai_turn(session, client, system_prompt)
+        elif provider == "doubao":
+            turn = _create_doubao_turn(session, client, system_prompt)
+        else:
+            turn = _create_qwen_turn(session, client, system_prompt)
+
+        usage = turn.usage or {}
+        span.set_attribute("llm.finished", turn.finished)
+        span.set_attribute("llm.tool_call_count", len(turn.tool_calls))
+        for key in ("latency_ms", "prompt_tokens", "completion_tokens", "total_tokens"):
+            if key in usage:
+                span.set_attribute(f"llm.{key}", int(usage[key] or 0))
+        return turn
+
+
+def _resolve_model_name(provider: str) -> str:
     if provider == "anthropic":
-        return _create_anthropic_turn(session, client, system_prompt)
+        return os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
     if provider == "openai":
-        return _create_openai_turn(session, client, system_prompt)
+        return os.getenv("OPENAI_MODEL", "gpt-5-codex")
+    if provider == "qwen":
+        return (
+            os.getenv("QWEN_MODEL")
+            or os.getenv("DASHSCOPE_MODEL")
+            or "qwen3.6-plus"
+        )
     if provider == "doubao":
-        return _create_doubao_turn(session, client, system_prompt)
-    return _create_qwen_turn(session, client, system_prompt)
+        return (
+            os.getenv("DOUBAO_MODEL")
+            or os.getenv("ARK_MODEL")
+            or os.getenv("ARK_ENDPOINT_ID")
+            or ""
+        )
+    return ""
 
 
 def _create_anthropic_turn(session: Dict[str, Any], client: Any, system_prompt: str) -> AgentTurn:

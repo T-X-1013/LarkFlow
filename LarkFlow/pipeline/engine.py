@@ -24,6 +24,13 @@ from pipeline.tools_runtime import ToolContext, execute as execute_local_tool
 from pipeline.persistence import SessionStore, default_store
 from pipeline.observability import accumulate_metrics, get_logger, log_turn_metrics
 from pipeline.deploy_strategy import get_strategy
+from telemetry.hooks import (
+    trace_approval_resume,
+    trace_demand_start,
+    trace_deploy_phase,
+    trace_phase_execution,
+    trace_phase_resume,
+)
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -260,6 +267,7 @@ def run_agent_loop(demand_id: str, system_prompt: str) -> bool:
                 workspace_root, target_dir = _resolve_workspace_and_target(session.get("target_dir"))
                 tool_ctx = ToolContext(
                     demand_id=demand_id,
+                    phase=session.get("phase"),
                     workspace_root=workspace_root,
                     target_dir=target_dir,
                     logger=session.get("logger"),
@@ -376,8 +384,11 @@ def _run_phase(demand_id: str, phase: str) -> bool:
     prompt_file = _PHASE_CONFIG[phase]["prompt"]
     logger = get_logger(demand_id, phase)
     try:
-        system_prompt = load_prompt(prompt_file)
-        return run_agent_loop(demand_id, system_prompt)
+        with trace_phase_execution(demand_id, phase, prompt_file) as span:
+            system_prompt = load_prompt(prompt_file)
+            completed = run_agent_loop(demand_id, system_prompt)
+            span.set_attribute("phase.completed", completed)
+            return completed
     except Exception as exc:
         logger.error(
             f"phase crashed: {exc}",
@@ -392,46 +403,50 @@ def start_new_demand(demand_id: str, requirement: str):
     """
     入口：飞书多维表格录入新需求，触发 Pipeline
     """
-    logger = get_logger(demand_id, PHASE_DESIGN)
-    banner = _PHASE_BANNER[PHASE_DESIGN]
-    print(
-        f"\n========== [需求 {demand_id}] Phase {banner[0]}: {banner[1]} 开始 ==========\n",
-        flush=True,
-    )
-    logger.info(
-        "demand started",
-        extra={"event": "demand_started", "phase": PHASE_DESIGN},
-    )
+    with trace_demand_start(demand_id, PHASE_DESIGN) as span:
+        logger = get_logger(demand_id, PHASE_DESIGN)
+        banner = _PHASE_BANNER[PHASE_DESIGN]
+        print(
+            f"\n========== [需求 {demand_id}] Phase {banner[0]}: {banner[1]} 开始 ==========\n",
+            flush=True,
+        )
+        logger.info(
+            "demand started",
+            extra={"event": "demand_started", "phase": PHASE_DESIGN},
+        )
 
-    # 将 Kratos 骨架模板物化为本次需求的产物目录，Phase 2 Agent 会在骨架基础上追加业务代码
-    workspace_root, target_dir = _resolve_workspace_and_target()
-    _ensure_target_scaffold(workspace_root, target_dir)
-    logger.info(
-        "scaffold ready",
-        extra={"event": "scaffold_ready", "phase": PHASE_DESIGN},
-    )
+        # 将 Kratos 骨架模板物化为本次需求的产物目录，Phase 2 Agent 会在骨架基础上追加业务代码
+        workspace_root, target_dir = _resolve_workspace_and_target()
+        _ensure_target_scaffold(workspace_root, target_dir)
+        span.set_attribute("target_dir", target_dir)
+        logger.info(
+            "scaffold ready",
+            extra={"event": "scaffold_ready", "phase": PHASE_DESIGN},
+        )
 
-    provider = get_provider_name()
-    client = build_client(provider)
-    session = initialize_session(provider, f"新需求：{requirement}", client)
-    session["target_dir"] = target_dir
-    session["workspace_root"] = workspace_root
-    session["phase"] = PHASE_DESIGN
-    _save_session(demand_id, session)
+        provider = get_provider_name()
+        client = build_client(provider)
+        session = initialize_session(provider, f"新需求：{requirement}", client)
+        session["demand_id"] = demand_id
+        session["target_dir"] = target_dir
+        session["workspace_root"] = workspace_root
+        session["phase"] = PHASE_DESIGN
+        _save_session(demand_id, session)
 
-    # 进入 Phase 1: Design
-    completed = _run_phase(demand_id, PHASE_DESIGN)
+        # 进入 Phase 1: Design
+        completed = _run_phase(demand_id, PHASE_DESIGN)
+        span.set_attribute("phase.completed", completed)
 
-    if not completed:
-        # 审批挂起或失败；区分两种语义用 session.phase
-        latest = _load_session(demand_id)
-        if latest and latest.get("pending_approval"):
-            latest["phase"] = PHASE_DESIGN_PENDING
-            _save_session(demand_id, latest)
-            logger.info(
-                "demand suspended awaiting approval",
-                extra={"event": "demand_suspended", "phase": PHASE_DESIGN_PENDING},
-            )
+        if not completed:
+            # 审批挂起或失败；区分两种语义用 session.phase
+            latest = _load_session(demand_id)
+            if latest and latest.get("pending_approval"):
+                latest["phase"] = PHASE_DESIGN_PENDING
+                _save_session(demand_id, latest)
+                logger.info(
+                    "demand suspended awaiting approval",
+                    extra={"event": "demand_suspended", "phase": PHASE_DESIGN_PENDING},
+                )
 
 
 def resume_from_phase(demand_id: str, phase: str) -> None:
@@ -444,94 +459,96 @@ def resume_from_phase(demand_id: str, phase: str) -> None:
         raise ValueError(
             f"resume_from_phase: unsupported phase {phase!r}, must be one of {sorted(allowed)}"
         )
-    logger = get_logger(demand_id, phase)
-    logger.info("resume from phase", extra={"event": "phase_resume", "phase": phase})
+    with trace_phase_resume(demand_id, phase):
+        logger = get_logger(demand_id, phase)
+        logger.info("resume from phase", extra={"event": "phase_resume", "phase": phase})
 
-    # coding → testing → reviewing 依靠 agent loop，每一阶段完成后进入下一阶段
-    current = phase
-    while current in (PHASE_CODING, PHASE_TESTING, PHASE_REVIEWING):
-        if _advance_to_phase(demand_id, current) is None:
+        # coding → testing → reviewing 依靠 agent loop，每一阶段完成后进入下一阶段
+        current = phase
+        while current in (PHASE_CODING, PHASE_TESTING, PHASE_REVIEWING):
+            if _advance_to_phase(demand_id, current) is None:
+                return
+            completed = _run_phase(demand_id, current)
+            if not completed:
+                # agent 挂起、超轮数或异常。_run_phase 已按需打日志/置 failed
+                return
+            current = _NEXT_PHASE[current]
+
+        # current == PHASE_DEPLOYING：执行部署并以结果定 phase 终态
+        if _advance_to_phase(demand_id, PHASE_DEPLOYING) is None:
             return
-        completed = _run_phase(demand_id, current)
-        if not completed:
-            # agent 挂起、超轮数或异常。_run_phase 已按需打日志/置 failed
+        try:
+            deploy_ok = deploy_app(demand_id)
+        except Exception as exc:
+            logger.error(
+                f"deploy crashed: {exc}",
+                extra={"event": "phase_failed", "phase": PHASE_DEPLOYING},
+                exc_info=True,
+            )
+            _mark_failed(demand_id, PHASE_DEPLOYING, str(exc))
             return
-        current = _NEXT_PHASE[current]
 
-    # current == PHASE_DEPLOYING：执行部署并以结果定 phase 终态
-    if _advance_to_phase(demand_id, PHASE_DEPLOYING) is None:
-        return
-    try:
-        deploy_ok = deploy_app(demand_id)
-    except Exception as exc:
-        logger.error(
-            f"deploy crashed: {exc}",
-            extra={"event": "phase_failed", "phase": PHASE_DEPLOYING},
-            exc_info=True,
-        )
-        _mark_failed(demand_id, PHASE_DEPLOYING, str(exc))
-        return
-
-    session = _load_session(demand_id)
-    if session is None:
-        return
-    if deploy_ok:
-        session["phase"] = PHASE_DONE
-        _save_session(demand_id, session)
-        logger.info("demand done", extra={"event": "demand_done", "phase": PHASE_DONE})
-    else:
-        _mark_failed(demand_id, PHASE_DEPLOYING, "deploy reported failure")
+        session = _load_session(demand_id)
+        if session is None:
+            return
+        if deploy_ok:
+            session["phase"] = PHASE_DONE
+            _save_session(demand_id, session)
+            logger.info("demand done", extra={"event": "demand_done", "phase": PHASE_DONE})
+        else:
+            _mark_failed(demand_id, PHASE_DEPLOYING, "deploy reported failure")
 
 
 def resume_after_approval(demand_id: str, approved: bool, feedback: str):
     """
     由 lark_interaction.py 的 Webhook 调用：吸收审批结果 -> 交给 resume_from_phase 链式推进。
     """
-    logger = get_logger(demand_id)
-    logger.info(
-        "approval resumed",
-        extra={"event": "approval_resumed", "approved": approved},
-    )
-    session = _load_session(demand_id)
-    if not session:
-        return
-
-    pending_approval = session.get("pending_approval")
-    if not pending_approval:
-        logger.warning(
-            "no pending approval to resume",
-            extra={"event": "approval_missing"},
-        )
-        return
-
-    append_tool_result(
-        session,
-        ToolCall(
-            id=pending_approval["tool_call_id"],
-            name=pending_approval["tool_name"],
-            arguments={
-                "summary": pending_approval["summary"],
-                "design_doc": pending_approval["design_doc"],
-            },
-        ),
-        feedback,
-    )
-    session["pending_approval"] = None
-    _save_session(demand_id, session)
-
-    if approved:
-        resume_from_phase(demand_id, PHASE_CODING)
-    else:
-        # 驳回：回到 Phase 1 重新设计
+    with trace_approval_resume(demand_id, approved):
+        logger = get_logger(demand_id)
         logger.info(
-            "approval rejected, retry design",
-            extra={"event": "approval_rejected", "phase": PHASE_DESIGN},
+            "approval resumed",
+            extra={"event": "approval_resumed", "approved": approved},
         )
         session = _load_session(demand_id)
-        if session:
-            session["phase"] = PHASE_DESIGN
-            _save_session(demand_id, session)
-        _run_phase(demand_id, PHASE_DESIGN)
+        if not session:
+            return
+
+        pending_approval = session.get("pending_approval")
+        if not pending_approval:
+            logger.warning(
+                "no pending approval to resume",
+                extra={"event": "approval_missing"},
+            )
+            return
+
+        append_tool_result(
+            session,
+            ToolCall(
+                id=pending_approval["tool_call_id"],
+                name=pending_approval["tool_name"],
+                arguments={
+                    "summary": pending_approval["summary"],
+                    "design_doc": pending_approval["design_doc"],
+                },
+            ),
+            feedback,
+        )
+        session["pending_approval"] = None
+        _save_session(demand_id, session)
+
+        if approved:
+            resume_from_phase(demand_id, PHASE_CODING)
+        else:
+            # 驳回：回到 Phase 1 重新设计
+            logger.info(
+                "approval rejected, retry design",
+                extra={"event": "approval_rejected", "phase": PHASE_DESIGN},
+            )
+            session = _load_session(demand_id)
+            if session:
+                session["phase"] = PHASE_DESIGN
+                _save_session(demand_id, session)
+            _run_phase(demand_id, PHASE_DESIGN)
 
 # ==========================================
 # 4. 部署编排 (A5)
@@ -542,32 +559,38 @@ def deploy_app(demand_id: str) -> bool:
     读取 session 中的 target_dir 与 deploy_strategy，委托策略执行部署。
     返回 True 表示成功，False 表示已捕获的失败。
     """
-    logger = get_logger(demand_id, PHASE_DEPLOYING)
-    logger.info("deploy started", extra={"event": "deploy_started", "phase": PHASE_DEPLOYING})
+    with trace_deploy_phase(demand_id, PHASE_DEPLOYING) as span:
+        logger = get_logger(demand_id, PHASE_DEPLOYING)
+        logger.info("deploy started", extra={"event": "deploy_started", "phase": PHASE_DEPLOYING})
 
-    session = _load_session(demand_id) or {}
-    _, target_dir = _resolve_workspace_and_target(session.get("target_dir"))
-    strategy = get_strategy(session.get("deploy_strategy"))
+        session = _load_session(demand_id) or {}
+        _, target_dir = _resolve_workspace_and_target(session.get("target_dir"))
+        strategy = get_strategy(session.get("deploy_strategy"))
+        span.set_attribute("target_dir", target_dir)
+        span.set_attribute("deploy_strategy", strategy.name)
 
-    outcome = strategy.deploy(target_dir, logger)
+        outcome = strategy.deploy(target_dir, logger)
+        span.set_attribute("deploy.success", outcome.success)
+        span.set_attribute("deploy.access_url", outcome.access_url)
+        span.set_attribute("deploy.reason", outcome.reason)
 
-    lark_target = os.getenv("LARK_CHAT_ID")
-    if outcome.success:
-        logger.info("deploy success", extra={"event": "deploy_success", "phase": PHASE_DEPLOYING})
+        lark_target = os.getenv("LARK_CHAT_ID")
+        if outcome.success:
+            logger.info("deploy success", extra={"event": "deploy_success", "phase": PHASE_DEPLOYING})
+            if lark_target:
+                send_lark_text(
+                    lark_target,
+                    f"🎉 需求 {demand_id} 部署成功！\n测试环境已就绪，体验地址：{outcome.access_url}",
+                )
+            return True
+
+        logger.error(
+            f"deploy failed: {outcome.reason}",
+            extra={"event": "deploy_failed", "phase": PHASE_DEPLOYING},
+        )
         if lark_target:
-            send_lark_text(
-                lark_target,
-                f"🎉 需求 {demand_id} 部署成功！\n测试环境已就绪，体验地址：{outcome.access_url}",
-            )
-        return True
-
-    logger.error(
-        f"deploy failed: {outcome.reason}",
-        extra={"event": "deploy_failed", "phase": PHASE_DEPLOYING},
-    )
-    if lark_target:
-        send_lark_text(lark_target, f"❌ 需求 {demand_id} 部署失败：{outcome.reason}")
-    return False
+            send_lark_text(lark_target, f"❌ 需求 {demand_id} 部署失败：{outcome.reason}")
+        return False
 
 # ==========================================
 # 测试入口 (模拟运行)

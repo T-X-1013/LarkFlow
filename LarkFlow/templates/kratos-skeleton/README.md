@@ -21,7 +21,7 @@ third_party/                   # google/api 等外部 proto
 
 - **禁止跨层调用**：`service` 只能调 `biz`；`biz` 只能调 `data`；`data` 只操作 DB；`server` 不直接访问任何层，只做注册。
 - **新增一个 domain** 必须同时出现：`api/<domain>/v1/<domain>.proto` + `internal/biz/<domain>.go` + `internal/data/<domain>.go` + `internal/service/<domain>.go`，并在对应层的 `ProviderSet` 里追加 wire provider。
-- **`cmd/server/wire.go` 的中心 ProviderSet 常驻启用**：`biz.ProviderSet`、`data.ProviderSet`、`service.ProviderSet` 默认保持启用，不要注释掉。新增 domain 时只需要往中心 `ProviderSet` 追加 provider。
+- **`cmd/server/wire.go` 在空骨架下默认只保留 `server.ProviderSet`**：这样模板在尚未新增任何 domain 时也能直接通过 `make wire` / `make build`。当新增 domain 后，再把 `biz.ProviderSet`、`data.ProviderSet`、`service.ProviderSet` 加回 `wire.Build(...)`。
 - **Repo 层 DB 入口固定**：`internal/data/*.go` 一律从 `r.data.DB.WithContext(ctx)` 开始查询，禁止写 `r.data.DB(ctx)`。
 - **持久化模型映射要显式转型**：如果 persistence model 嵌入 `gorm.Model`，其 `ID` 是 `uint`；映射回 biz struct 时要显式转成目标类型，例如 `int64(po.ID)`。
 - **金额** 一律 `int64`（单位：分），不使用 `float`。
@@ -49,6 +49,37 @@ docker run --rm -p 8080:8080 -p 9000:9000 demo-app
 ```
 
 HTTP 端口 `8080`，gRPC 端口 `9000`。
+
+## 本地可观测性
+
+模板内置了最小 OTEL 接入和一套本地观测栈配置，物化到 `demo-app/` 后可直接使用：
+
+```bash
+cd otel
+docker compose -f docker-compose.yml up -d --build
+```
+
+默认会启动：
+
+- `demo-app`
+- `otel-collector`
+- `tempo`
+- `grafana`
+- `prometheus`
+- `loki`
+- `promtail`
+
+其中：
+
+- `OTEL_EXPORTER_OTLP_ENDPOINT` 未设置时，应用 OTEL 为 no-op，不影响原始启动链路
+- 宿主机运行 `LarkFlow` 时，若需要把 `logs/*.jsonl` 和 `logs/*.log` 一并送入 Loki，可设置 `LARKFLOW_LOGS_DIR`
+- Grafana 默认账号密码为 `admin / admin`
+
+最小 trace 验证：
+
+```bash
+curl http://localhost:8080/v1/greeter/tao
+```
 
 ## 已知事项
 

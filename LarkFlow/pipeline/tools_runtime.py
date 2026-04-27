@@ -12,10 +12,12 @@ import re
 import signal
 import sqlite3
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 from urllib.parse import unquote, urlparse
+from telemetry.otel import start_span
 
 
 # run_bash 的默认超时时间
@@ -72,10 +74,11 @@ class ToolContext:
     @return:
         返回 ToolContext 实例，供各工具执行函数共享运行时边界
     """
-    demand_id: str       # 当前需求 ID
-    workspace_root: str  # 允许读取项目上下文的工作区根目录
-    target_dir: str      # 允许写入本次需求产物的目标目录
-    logger: Any = None   # 结构化 logger；未接入时回退到 print
+    demand_id: str               # 当前需求 ID
+    workspace_root: str          # 允许读取项目上下文的工作区根目录
+    target_dir: str              # 允许写入本次需求产物的目标目录
+    logger: Any = None           # 结构化 logger；未接入时回退到 print
+    phase: Optional[str] = None
 
 
 def _log(ctx: ToolContext, message: str) -> None:
@@ -674,62 +677,83 @@ def execute(tool_name: str, args: dict, ctx: ToolContext) -> str:
         返回字符串结果；成功时返回工具输出，失败时返回可读的错误文本
     """
     _log(ctx, f"  [Tool Execution] 正在执行 {tool_name}，参数: {args}")
+    started_at = time.monotonic()
+    result_text = ""
 
-    if tool_name == "inspect_db":
-        # 设计阶段依赖这个工具理解现有数据结构；这里返回真实 schema，而不是继续伪造占位数据
-        try:
-            query = args.get("query", "")
-            return _execute_inspect_db(query, ctx)
-        except Exception as e:
-            return f"Inspect DB failed: {str(e)}"
+    with start_span(
+        "tool.execute",
+        {
+            "demand_id": ctx.demand_id,
+            "phase": ctx.phase,
+            "tool.name": tool_name,
+        },
+    ) as span:
+        if tool_name == "inspect_db":
+            # 设计阶段依赖这个工具理解现有数据结构；这里返回真实 schema，而不是继续伪造占位数据
+            try:
+                query = args.get("query", "")
+                result_text = _execute_inspect_db(query, ctx)
+            except Exception as e:
+                result_text = f"Inspect DB failed: {str(e)}"
+        elif tool_name == "file_editor":
+            # file_editor 统一承接受控文件访问：可读项目上下文与目标代码，只可写目标产物目录
+            action = args.get("action")
+            span.set_attribute("tool.action", action)
+            try:
+                path = _resolve_tool_path(args.get("path", ""), ctx)
+                span.set_attribute("tool.path", str(path))
+                if action == "read":
+                    _ensure_read_allowed(path, ctx)
+                    result_text = path.read_text(encoding="utf-8")
+                elif action == "list_dir":
+                    _ensure_read_allowed(path, ctx)
+                    if not path.is_dir():
+                        raise ValueError(f"Not a directory: {path}")
+                    result_text = "\n".join(sorted(item.name for item in path.iterdir()))
+                elif action == "write":
+                    _ensure_write_allowed(path, ctx)
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text(args.get("content", ""), encoding="utf-8")
+                    result_text = f"Successfully wrote to {path}"
+                elif action == "replace":
+                    _ensure_write_allowed(path, ctx)
+                    result_text = _replace_file_content(
+                        path,
+                        args.get("old_content"),
+                        args.get("content", ""),
+                    )
+                else:
+                    result_text = f"Unsupported file_editor action: {action}"
+            except Exception as e:
+                result_text = f"File operation failed: {str(e)}"
+        elif tool_name == "run_bash":
+            # run_bash 负责测试、构建等命令执行，并补充 cwd 约束、危险命令拦截、真实超时终止和输出截断
+            try:
+                cmd = args.get("command", "")
+                cwd = _resolve_bash_cwd(args.get("cwd"), ctx)
+                span.set_attribute("tool.cwd", str(cwd))
+                _ensure_bash_cwd_allowed(cwd, ctx)
+                _validate_bash_command(cmd)
+                timeout_seconds = _resolve_bash_timeout(args.get("timeout"))
+                span.set_attribute("tool.timeout_seconds", timeout_seconds)
+                result_text = _run_bash_command(cmd, cwd, timeout_seconds)
+            except Exception as e:
+                result_text = f"Command execution failed: {str(e)}"
+        else:
+            result_text = f"Unknown tool: {tool_name}"
 
-    if tool_name == "file_editor":
-        # file_editor 统一承接受控文件访问：可读项目上下文与目标代码，只可写目标产物目录
-        action = args.get("action")
+        duration_ms = int((time.monotonic() - started_at) * 1000)
+        span.set_attribute("tool.duration_ms", duration_ms)
+        span.set_attribute("tool.success", not _looks_like_tool_failure(result_text))
+        return result_text
 
-        try:
-            path = _resolve_tool_path(args.get("path", ""), ctx)
-            if action == "read":
-                # read 用于读取 rules/、skills/、agents/ 以及 target_dir 中的已有代码，供模型建立上下文
-                _ensure_read_allowed(path, ctx)
-                return path.read_text(encoding="utf-8")
-            if action == "list_dir":
-                # list_dir 只返回目录名列表，让模型先感知文件结构，再决定后续 read / write / replace
-                _ensure_read_allowed(path, ctx)
-                if not path.is_dir():
-                    raise ValueError(f"Not a directory: {path}")
-                return "\n".join(sorted(item.name for item in path.iterdir()))
-            if action == "write":
-                # write 适合新建文件或整体覆盖目标文件，例如生成 demo-app 下的新代码、测试或迁移文件
-                # 代码产物只能写入 target_dir
-                # rules/、skills/、pipeline/ 默认只读
-                _ensure_write_allowed(path, ctx)
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(args.get("content", ""), encoding="utf-8")
-                return f"Successfully wrote to {path}"
-            if action == "replace":
-                # replace 适合小范围精确修改已有文件，要求调用方先读取文件，再提交唯一命中的 old_content
-                # replace 与 write 共享同一写权限边界，只允许改目标产物目录内的文件
-                _ensure_write_allowed(path, ctx)
-                return _replace_file_content(
-                    path,
-                    args.get("old_content"),
-                    args.get("content", ""),
-                )
-            return f"Unsupported file_editor action: {action}"
-        except Exception as e:
-            return f"File operation failed: {str(e)}"
 
-    if tool_name == "run_bash":
-        # run_bash 负责测试、构建等命令执行，并补充 cwd 约束、危险命令拦截、真实超时终止和输出截断
-        try:
-            cmd = args.get("command", "")
-            cwd = _resolve_bash_cwd(args.get("cwd"), ctx)
-            _ensure_bash_cwd_allowed(cwd, ctx)
-            _validate_bash_command(cmd)
-            timeout_seconds = _resolve_bash_timeout(args.get("timeout"))
-            return _run_bash_command(cmd, cwd, timeout_seconds)
-        except Exception as e:
-            return f"Command execution failed: {str(e)}"
-
-    return f"Unknown tool: {tool_name}"
+def _looks_like_tool_failure(result_text: str) -> bool:
+    prefixes = (
+        "Inspect DB failed:",
+        "File operation failed:",
+        "Command execution failed:",
+        "Unknown tool:",
+        "Unsupported file_editor action:",
+    )
+    return (result_text or "").startswith(prefixes)

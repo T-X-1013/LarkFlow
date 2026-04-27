@@ -36,6 +36,12 @@ from pipeline.lark_bitable_listener import (
 )
 from pipeline.utils.lark_doc import LarkDocError, fetch_lark_doc_content
 from pipeline.utils.lark_sdk import get_lark_client
+from telemetry.hooks import (
+    setup_runtime_otel,
+    trace_bitable_record_changed,
+    trace_lark_card_action,
+    trace_lark_start_request,
+)
 
 load_dotenv()
 os.environ.setdefault("SSL_CERT_FILE", certifi.where())
@@ -217,15 +223,16 @@ def handle_start_request(payload: dict[str, Any]) -> dict[str, Any]:
         返回启动结果 JSON
     """
     demand_id, doc_url = _normalize_start_payload(payload)
-    print(f"[LarkListener] 收到启动请求，开始处理新需求: {demand_id}, 文档: {doc_url}")
+    with trace_lark_start_request(demand_id, doc_url):
+        print(f"[LarkListener] 收到启动请求，开始处理新需求: {demand_id}, 文档: {doc_url}")
 
-    def run_start() -> None:
-        from pipeline.engine import start_new_demand
+        def run_start() -> None:
+            from pipeline.engine import start_new_demand
 
-        start_new_demand(demand_id, _resolve_requirement_text(doc_url))
+            start_new_demand(demand_id, _resolve_requirement_text(doc_url))
 
-    _launch_background_task(run_start)
-    return {"code": 0, "msg": "success"}
+        _launch_background_task(run_start)
+        return {"code": 0, "msg": "success"}
 
 
 def update_card_status(message: str) -> dict[str, Any]:
@@ -273,83 +280,84 @@ def process_card_action(
     @return:
         返回用于回写卡片的 JSON 结构（update_card_status 风格）
     """
-    if event_id and not _remember_event_id(event_id):
-        print(f"[LarkListener] 忽略重复事件: {event_id}")
-        return update_card_status("⏳ 请求已处理，请勿重复点击")
-
     action_type = None
     demand_id = None
     if isinstance(action_value, dict):
         action_type = action_value.get("action_type") or action_value.get("action")
         demand_id = action_value.get("demand_id")
 
-    if not action_type:
-        print(f"[LarkListener] 收到无效的 action 数据: {action_value}")
-        return update_card_status(f"解析失败，收到的数据: {action_value}")
+    with trace_lark_card_action(event_id, demand_id, action_type):
+        if event_id and not _remember_event_id(event_id):
+            print(f"[LarkListener] 忽略重复事件: {event_id}")
+            return update_card_status("⏳ 请求已处理，请勿重复点击")
 
-    if not demand_id:
-        print(f"[LarkListener] 收到缺少 demand_id 的 action 数据: {action_value}")
-        return update_card_status(f"解析失败，收到的数据: {action_value}")
+        if not action_type:
+            print(f"[LarkListener] 收到无效的 action 数据: {action_value}")
+            return update_card_status(f"解析失败，收到的数据: {action_value}")
 
-    if action_type == "approve":
-        print(f"[LarkListener] 需求 {demand_id} 已通过审批，准备进入 Coding 阶段...")
+        if not demand_id:
+            print(f"[LarkListener] 收到缺少 demand_id 的 action 数据: {action_value}")
+            return update_card_status(f"解析失败，收到的数据: {action_value}")
 
-        def run_resume() -> None:
-            time.sleep(1)
-            from pipeline.engine import resume_after_approval
+        if action_type == "approve":
+            print(f"[LarkListener] 需求 {demand_id} 已通过审批，准备进入 Coding 阶段...")
 
-            resume_after_approval(
-                demand_id,
-                approved=True,
-                feedback="人类已同意该设计方案。请进入 Phase 2: Coding 阶段，开始编写代码。",
-            )
+            def run_resume() -> None:
+                time.sleep(1)
+                from pipeline.engine import resume_after_approval
 
-        _launch_background_task(run_resume)
-        return update_card_status("✅ 已通过审批，AI 正在疯狂编码中...")
+                resume_after_approval(
+                    demand_id,
+                    approved=True,
+                    feedback="人类已同意该设计方案。请进入 Phase 2: Coding 阶段，开始编写代码。",
+                )
 
-    if action_type == "reject":
-        print(f"[LarkListener] 需求 {demand_id} 被驳回，要求 AI 重新设计...")
+            _launch_background_task(run_resume)
+            return update_card_status("✅ 已通过审批，AI 正在疯狂编码中...")
 
-        def run_reject() -> None:
-            time.sleep(1)
-            from pipeline.engine import resume_after_approval
+        if action_type == "reject":
+            print(f"[LarkListener] 需求 {demand_id} 被驳回，要求 AI 重新设计...")
 
-            resume_after_approval(
-                demand_id,
-                approved=False,
-                feedback="人类驳回了该方案。请重新检查需求并修改你的设计文档。",
-            )
+            def run_reject() -> None:
+                time.sleep(1)
+                from pipeline.engine import resume_after_approval
 
-        _launch_background_task(run_reject)
-        return update_card_status("❌ 已驳回，AI 正在重新设计...")
+                resume_after_approval(
+                    demand_id,
+                    approved=False,
+                    feedback="人类驳回了该方案。请重新检查需求并修改你的设计文档。",
+                )
 
-    if action_type == "start_demand":
-        # 方案 B：Base 新增需求行后发送的启动审批卡片点击「开始处理」
-        record_id = action_value.get("record_id") if isinstance(action_value, dict) else None
-        doc_url = action_value.get("doc_url", "") if isinstance(action_value, dict) else ""
-        print(f"[LarkListener] 启动新需求: demand_id={demand_id} record={record_id}")
+            _launch_background_task(run_reject)
+            return update_card_status("❌ 已驳回，AI 正在重新设计...")
 
-        if record_id and not update_demand_status(record_id, STATUS_PROCESSING):
-            # 回写失败不阻止流程推进，但给卡片一个明确的告警
-            print(f"[LarkListener] 记录 {record_id} 状态回写「处理中」失败，继续启动")
+        if action_type == "start_demand":
+            # 方案 B：Base 新增需求行后发送的启动审批卡片点击「开始处理」
+            record_id = action_value.get("record_id") if isinstance(action_value, dict) else None
+            doc_url = action_value.get("doc_url", "") if isinstance(action_value, dict) else ""
+            print(f"[LarkListener] 启动新需求: demand_id={demand_id} record={record_id}")
 
-        try:
-            handle_start_request({"demand_id": demand_id, "doc_url": doc_url})
-        except Exception as exc:  # noqa: BLE001
-            print(f"[LarkListener] 启动需求失败 demand_id={demand_id}: {exc}")
+            if record_id and not update_demand_status(record_id, STATUS_PROCESSING):
+                # 回写失败不阻止流程推进，但给卡片一个明确的告警
+                print(f"[LarkListener] 记录 {record_id} 状态回写「处理中」失败，继续启动")
+
+            try:
+                handle_start_request({"demand_id": demand_id, "doc_url": doc_url})
+            except Exception as exc:  # noqa: BLE001
+                print(f"[LarkListener] 启动需求失败 demand_id={demand_id}: {exc}")
+                if record_id:
+                    update_demand_status(record_id, STATUS_FAILED)
+                return update_card_status(f"❌ 启动失败: {exc}")
+            return update_card_status(f"🚀 已开始处理需求 {demand_id}")
+
+        if action_type == "reject_demand":
+            record_id = action_value.get("record_id") if isinstance(action_value, dict) else None
+            print(f"[LarkListener] 需求 {demand_id} 在启动前被驳回 record={record_id}")
             if record_id:
-                update_demand_status(record_id, STATUS_FAILED)
-            return update_card_status(f"❌ 启动失败: {exc}")
-        return update_card_status(f"🚀 已开始处理需求 {demand_id}")
+                update_demand_status(record_id, STATUS_REJECTED)
+            return update_card_status(f"❌ 已驳回需求 {demand_id}")
 
-    if action_type == "reject_demand":
-        record_id = action_value.get("record_id") if isinstance(action_value, dict) else None
-        print(f"[LarkListener] 需求 {demand_id} 在启动前被驳回 record={record_id}")
-        if record_id:
-            update_demand_status(record_id, STATUS_REJECTED)
-        return update_card_status(f"❌ 已驳回需求 {demand_id}")
-
-    return update_card_status(f"unsupported action: {action_type}")
+        return update_card_status(f"unsupported action: {action_type}")
 
 
 def _on_card_action(event: P2CardActionTrigger) -> P2CardActionTriggerResponse:
@@ -385,7 +393,9 @@ def _on_bitable_record_changed(event: P2DriveFileBitableRecordChangedV1) -> None
     @return:
         无返回值
     """
-    on_record_changed(event)
+    event_id = event.header.event_id if event.header and event.header.event_id else ""
+    with trace_bitable_record_changed(event_id):
+        on_record_changed(event)
 
 
 def _build_event_handler() -> "lark.EventDispatcherHandler":
@@ -424,6 +434,8 @@ def run_event_loop(app_id: Optional[str] = None, app_secret: Optional[str] = Non
         raise RuntimeError(
             "缺少 LARK_APP_ID 或 LARK_APP_SECRET 环境变量，无法启动飞书事件监听"
         )
+
+    setup_runtime_otel("larkflow")
 
     # 预热共享 Client，保证出站消息与入站事件共用同一份 token 缓存
     get_lark_client()
