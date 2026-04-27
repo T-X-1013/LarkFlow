@@ -26,6 +26,22 @@ scrape_configs:
         target_label: stream
 
   - job_name: larkflow-file
+    pipeline_stages:
+      - json:
+          expressions:
+            ts: ts
+            level: level
+            demand_id: demand_id
+            phase: phase
+            event: event
+      - timestamp:
+          source: ts
+          format: "2006-01-02T15:04:05"
+          location: Asia/Shanghai
+      - labels:
+          level:
+          phase:
+          event:
     static_configs:
       - targets: [localhost]
         labels:
