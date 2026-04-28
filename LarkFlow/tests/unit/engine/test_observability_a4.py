@@ -66,11 +66,61 @@ class ObservabilityA4TestCase(unittest.TestCase):
 
         entry = self._read_log_lines()[0]
         self.assertEqual(entry["event"], "agent_turn")
+        self.assertEqual(entry["tokens_input"], 100)
+        self.assertEqual(entry["tokens_output"], 50)
+        self.assertEqual(entry["duration_ms"], 1200)
         self.assertEqual(entry["tokens_in"], 100)
         self.assertEqual(entry["tokens_out"], 50)
         self.assertEqual(entry["total_tokens"], 150)
         self.assertEqual(entry["latency_ms"], 1200)
         self.assertEqual(entry["tool_name"], "file_editor")
+
+    def test_llm_events_record_provider_model_and_retry_fields(self):
+        # 这里单独验证 LLM 事件 schema，避免后续改日志字段时只改了实现、忘了同步查询约定。
+        log = observability.get_logger("D3", phase="coding")
+        observability.log_llm_call_started(log, "coding", "openai", "gpt-5-codex")
+        observability.log_llm_retry(
+            log,
+            "coding",
+            "openai",
+            "gpt-5-codex",
+            "request failed",
+            attempt=1,
+            max_retries=3,
+            wait_seconds=2.5,
+        )
+        observability.log_llm_call_finished(
+            log,
+            "coding",
+            "openai",
+            "gpt-5-codex",
+            {
+                "prompt_tokens": 12,
+                "completion_tokens": 8,
+                "total_tokens": 20,
+                "latency_ms": 340,
+            },
+            finished=True,
+            tool_call_count=0,
+        )
+
+        lines = self._read_log_lines()
+        self.assertEqual(lines[0]["event"], "llm_call_start")
+        self.assertEqual(lines[0]["provider"], "openai")
+        self.assertEqual(lines[0]["model"], "gpt-5-codex")
+
+        self.assertEqual(lines[1]["event"], "llm_retry")
+        self.assertEqual(lines[1]["reason"], "request failed")
+        self.assertEqual(lines[1]["attempt"], 1)
+        self.assertEqual(lines[1]["max_retries"], 3)
+        self.assertEqual(lines[1]["wait_seconds"], 2.5)
+
+        self.assertEqual(lines[2]["event"], "llm_call_end")
+        self.assertEqual(lines[2]["tokens_input"], 12)
+        self.assertEqual(lines[2]["tokens_output"], 8)
+        self.assertEqual(lines[2]["duration_ms"], 340)
+        self.assertEqual(lines[2]["finished"], True)
+        self.assertEqual(lines[2]["tool_call_count"], 0)
 
     def test_accumulate_metrics_sums_across_turns(self):
         session = {}
@@ -83,10 +133,14 @@ class ObservabilityA4TestCase(unittest.TestCase):
             "total_tokens": 20, "latency_ms": 300,
         })
         m = session["metrics"]
+        # 新旧字段同时断言，确保历史聚合脚本和新的可观测性面板口径都不会被回归打断。
         self.assertEqual(m["turns"], 2)
+        self.assertEqual(m["tokens_input"], 15)
+        self.assertEqual(m["tokens_output"], 35)
         self.assertEqual(m["tokens_in"], 15)
         self.assertEqual(m["tokens_out"], 35)
         self.assertEqual(m["total_tokens"], 50)
+        self.assertEqual(m["duration_ms"], 800)
         self.assertEqual(m["latency_ms"], 800)
 
     def test_accumulate_metrics_tolerates_empty_usage(self):
