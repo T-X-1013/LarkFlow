@@ -511,3 +511,24 @@ D1–D3 主干闭环：pipeline 从"黑箱自动跑"升级为"可操控流水线
 - **Swagger UI**：启动后访问 `http://localhost:8000/docs` 查看完整 §八 契约；健康检查 `GET /healthz`。
 - **第 2 HITL 行为变更**：原先 Review 通过即自动部署；现在默认**挂起等部署审批卡**，审批方在飞书按钮或 `POST /pipelines/{id}/checkpoints/deploy/approve` 二选一放行。若期望沿用旧自动部署，可在 `engine.resume_from_phase` 侧改写；但赛题 Must-have 要求 ≥ 2 个 HITL，生产默认保留新行为。
 - **契约变化提示给前端/tao**：`PipelineStatus` 合法值集合为 `pending / running / paused / waiting_approval / stopped / failed / rejected / succeeded`；`CheckpointName` 仅两个 `design / deploy`；前端 MSW mock 严格按 `pipeline/contracts.py` 模型生成 fixture，D4 首次联调只做 1 个端点串通验证。
+
+## v1.9.1 (2026-04-28)
+
+### Overview
+收口 `llm_adapter` provider registry、补上 LLM 结构化 observability、落地前端控制台脚手架与页面、补前端 CI / 安装文档，并新增 `git_tool.py` 与工具侧测试。
+
+### Added
+- **Provider Registry 基础**：`pipeline/llm_adapter.py` 引入 `ProviderSpec` 与 registry 机制，统一管理 Anthropic / OpenAI / Qwen / Doubao 的 client 构建、turn 归一、model 解析和 session mode；新增 runtime 入口 `register_provider()`、`list_provider_names()`、`reload_provider_registry()`。
+- **LLM 结构化埋点**：`pipeline/observability.py` 新增 `llm_call_start`、`llm_call_end`、`llm_retry` 事件，补充 `provider`、`model`、`tokens_input`、`tokens_output`、`duration_ms`、`attempt`、`max_retries`、`wait_seconds` 等字段；`llm_adapter.py` 在统一 `create_turn()` 入口和 OpenAI Responses 重试路径接入这些事件。
+- **前端控制台**：新增 `frontend/`，基于 `Vite + React + TypeScript + MSW` 落地首页、Pipeline 列表页、详情页、仪表盘，以及对应的 mock store、handlers、fixtures、类型层和 API 抽象层。
+- **前端工程化**：新增 `.github/workflows/frontend-ci.yml`，在前端改动时自动执行 `npm install` 与 `npm run build`；补充 `docs/install.md` 记录后端双入口、前端 MSW、构建与联调命令。
+- **Git 工具库**：新增 `pipeline/git_tool.py`，提供分支名、commit message、PR 标题、变更语义摘要、`gh pr create` 命令构造与 dry-run 能力，作为后续 Agent 自动交付的库层基础。
+
+### Changed
+- **工具测试补强**：新增 `tests/unit/tools/test_git_tool.py`、`tests/unit/tools/test_tools_schema.py`，并增强 `tests/unit/tools/test_tools_runtime.py`，覆盖 `git_tool` 核心路径、`file_editor.replace` 契约、`list_dir` 边界与 provider 适配格式一致性。
+- **前端 mock 一致性修复**：列表页和仪表盘的统计不再停留在首屏旧快照，改为基于共享 mock store 实时计算；所有 mock 写操作同步刷新 `updated_at`，避免详情页、列表页、仪表盘之间状态不一致。
+- **前端构建兼容**：新增 `frontend/src/vite-env.d.ts`，修复 `import.meta.env` 在 `tsc -b` 下的类型错误，确保 `npm run build` 通过。
+
+### Notes
+- 当前前端仍默认走 `MSW` mock，真实 API 联调属于后续阶段。
+- `git_tool.py` 目前是独立库层和单测，尚未接入 `tools_schema` 实际工具列表和 `tools_runtime.execute()` 分发。
