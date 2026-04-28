@@ -75,11 +75,12 @@ docker compose -f docker-compose.yml up -d --build
 - 宿主机运行 `LarkFlow` 时，若需要把 `logs/*.jsonl` 和 `logs/*.log` 一并送入 Loki，可设置 `LARKFLOW_LOGS_DIR`
 - Grafana 默认账号密码为 `admin / admin`
 
-最小 trace 验证：
+模板当前是**空骨架**：默认不注册任何业务路由，因此 `http://localhost:8080/` 以及 `/v1/greeter/tao` 返回 `404` 都是正常的。
 
-```bash
-curl http://localhost:8080/v1/greeter/tao
-```
+如果需要验证 trace：
+
+- 先让 Agent 物化并注册真实业务接口
+- 或者后续为骨架补一个专用的 `healthz` / `ping` 示例端点
 
 ## 已知事项
 
