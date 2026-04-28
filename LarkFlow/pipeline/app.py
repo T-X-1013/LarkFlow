@@ -3,8 +3,9 @@
 Docker 入口：python -m pipeline.app
 本地：python -m pipeline.app  或  uvicorn pipeline.app:app
 
-WS (lark_interaction.run_event_loop) 是阻塞 IO，跑在 thread executor；
-FastAPI 由 uvicorn.Server 以协程方式跑在同一个 event loop，共享进程状态。
+WS (lark_interaction.run_event_loop) 内部跑 lark-oapi 的全局 asyncio loop，
+SDK 未暴露 stop 接口，因此以 daemon 线程随进程退出；HTTP 端走 uvicorn
+原生 should_exit 优雅关停。
 """
 from __future__ import annotations
 
@@ -12,6 +13,7 @@ import asyncio
 import logging
 import os
 import signal
+import threading
 from typing import Optional
 
 import uvicorn
@@ -28,7 +30,7 @@ logger = logging.getLogger("larkflow.app")
 app = create_app()
 
 
-async def _run_http(host: str, port: int) -> None:
+async def _run_http(host: str, port: int, stop_event: asyncio.Event) -> None:
     config = uvicorn.Config(
         app,
         host=host,
@@ -38,15 +40,48 @@ async def _run_http(host: str, port: int) -> None:
         lifespan="on",
     )
     server = uvicorn.Server(config)
-    await server.serve()
+    # 由外层统一处理 SIGINT/SIGTERM，避免与 main() 的 handler 互相覆盖；
+    # uvicorn 的 Config 不接受 install_signal_handlers 参数，需覆盖 Server 方法
+    server.install_signal_handlers = lambda: None  # type: ignore[method-assign]
+    serve_task = asyncio.create_task(server.serve(), name="uvicorn-serve")
+
+    async def _watch_stop() -> None:
+        await stop_event.wait()
+        server.should_exit = True
+
+    watcher = asyncio.create_task(_watch_stop(), name="uvicorn-stop-watch")
+    try:
+        await serve_task
+    finally:
+        watcher.cancel()
 
 
 async def _run_ws() -> None:
-    """WS 长连是阻塞调用，丢到默认 executor 避免阻塞 asyncio loop。"""
+    """
+    lark-oapi 的 ws.Client.start() 使用 SDK 模块级全局 loop 并阻塞在 _select()，
+    没有公开的停止接口。用 daemon 线程承载，让它随主进程退出；线程内抛错时
+    通过 Future 透传回主 loop，避免静默吞掉异常。
+    """
     loop = asyncio.get_running_loop()
+    future: asyncio.Future[None] = loop.create_future()
+
+    def _runner() -> None:
+        try:
+            run_event_loop()
+        except BaseException as exc:  # noqa: BLE001
+            loop.call_soon_threadsafe(
+                lambda: future.done() or future.set_exception(exc)
+            )
+        else:
+            loop.call_soon_threadsafe(
+                lambda: future.done() or future.set_result(None)
+            )
+
+    threading.Thread(target=_runner, daemon=True, name="lark-ws").start()
+
     try:
-        await loop.run_in_executor(None, run_event_loop)
-    except Exception:  # noqa: BLE001
+        await future
+    except Exception:
         logger.exception("lark ws listener crashed")
         raise
 
@@ -54,11 +89,6 @@ async def _run_ws() -> None:
 async def main(host: Optional[str] = None, port: Optional[int] = None) -> None:
     resolved_host = host or os.getenv("PIPELINE_HTTP_HOST", "0.0.0.0")
     resolved_port = int(port or os.getenv("PIPELINE_HTTP_PORT", "8000"))
-
-    tasks = [
-        asyncio.create_task(_run_http(resolved_host, resolved_port), name="http"),
-        asyncio.create_task(_run_ws(), name="ws"),
-    ]
 
     loop = asyncio.get_running_loop()
     stop_event = asyncio.Event()
@@ -74,15 +104,27 @@ async def main(host: Optional[str] = None, port: Optional[int] = None) -> None:
             # Windows 不支持 add_signal_handler
             pass
 
-    done, pending = await asyncio.wait(
-        [*tasks, asyncio.create_task(stop_event.wait(), name="stop")],
+    http_task = asyncio.create_task(
+        _run_http(resolved_host, resolved_port, stop_event), name="http"
+    )
+    ws_task = asyncio.create_task(_run_ws(), name="ws")
+
+    # 任一侧先退出（正常或异常）都要拉动另一侧一起下线
+    done, _pending = await asyncio.wait(
+        {http_task, ws_task},
         return_when=asyncio.FIRST_COMPLETED,
     )
-    for task in pending:
-        task.cancel()
+    stop_event.set()
+
+    # 等 HTTP 走完 uvicorn 的优雅关停；WS 是 daemon 线程，随进程死
+    if not http_task.done():
+        try:
+            await http_task
+        except Exception:
+            logger.exception("http server exited with error")
+
+    # 把先完成任务里的异常抛出来（如果有）
     for task in done:
-        if task.get_name() == "stop":
-            continue
         exc = task.exception()
         if exc:
             raise exc
