@@ -5,6 +5,11 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
+from pipeline.observability import (
+    log_llm_call_finished,
+    log_llm_call_started,
+    log_llm_retry,
+)
 from pipeline.tools_schema import get_anthropic_tools, get_chat_completion_tools, get_openai_tools
 from telemetry.otel import start_span
 
@@ -46,7 +51,15 @@ _PROVIDER_REGISTRY: Dict[str, ProviderSpec] = {}
 
 
 def _normalize_provider_name(provider: str) -> str:
-    """把环境变量和运行时输入统一归一到小写 provider 名。"""
+    """
+    把环境变量和运行时输入统一归一到小写 provider 名。
+
+    @params:
+        provider: 原始 provider 输入
+
+    @return:
+        返回去空格并转小写后的 provider 名
+    """
     return (provider or "").strip().lower()
 
 
@@ -89,24 +102,57 @@ def register_provider(
 
 
 def list_provider_names() -> List[str]:
-    """返回当前 registry 中可用的 provider 名称列表。"""
+    """
+    返回当前 registry 中可用的 provider 名称列表。
+
+    @params:
+        无
+
+    @return:
+        返回按字典序排序后的 provider 名称列表
+    """
     _ensure_provider_registry()
     return sorted(_PROVIDER_REGISTRY)
 
 
 def reload_provider_registry() -> None:
-    """重置 registry，便于测试和运行时刷新内置 Provider。"""
+    """
+    重置 registry，便于测试和运行时刷新内置 Provider。
+
+    @params:
+        无
+
+    @return:
+        无返回值；会清空旧 registry 并重新注册内置 Provider
+    """
     _PROVIDER_REGISTRY.clear()
     _register_builtin_providers()
 
 
 def _ensure_provider_registry() -> None:
-    """按需加载内置 Provider，避免模块导入时过早触发 SDK 依赖。"""
+    """
+    按需加载内置 Provider，避免模块导入时过早触发 SDK 依赖。
+
+    @params:
+        无
+
+    @return:
+        无返回值；当 registry 为空时完成一次延迟初始化
+    """
     if not _PROVIDER_REGISTRY:
         _register_builtin_providers()
 
 
 def _get_provider_spec(provider: str) -> ProviderSpec:
+    """
+    从 registry 中读取指定 provider 的规格定义。
+
+    @params:
+        provider: 待解析的 provider 名称，可为大小写混合输入
+
+    @return:
+        返回匹配到的 ProviderSpec；找不到时抛出 ValueError
+    """
     _ensure_provider_registry()
     normalized = _normalize_provider_name(provider)
     spec = _PROVIDER_REGISTRY.get(normalized)
@@ -117,25 +163,60 @@ def _get_provider_spec(provider: str) -> ProviderSpec:
 
 
 def get_provider_name(provider: Optional[str] = None) -> str:
-    """读取当前配置的模型提供方，并通过 registry 校验。"""
+    """
+    读取当前配置的模型提供方，并通过 registry 校验。
+
+    @params:
+        provider: 可选显式 provider；为空时回退到环境变量 `LLM_PROVIDER`
+
+    @return:
+        返回归一化后的 provider 名称
+    """
     resolved = provider if provider is not None else os.getenv("LLM_PROVIDER", "anthropic")
     return _get_provider_spec(resolved).name
 
 
 def _require_config(value: str, message: str) -> str:
-    """读取必填配置项，不存在时抛出可读错误。"""
+    """
+    读取必填配置项，不存在时抛出可读错误。
+
+    @params:
+        value: 待校验的配置值
+        message: 配置缺失时抛出的错误信息
+
+    @return:
+        返回非空配置值
+    """
     if value:
         return value
     raise ValueError(message)
 
 
 def build_client(provider: str) -> Any:
-    """根据 provider 初始化对应 SDK Client。"""
+    """
+    根据 provider 初始化对应 SDK Client。
+
+    @params:
+        provider: provider 名称
+
+    @return:
+        返回对应 SDK 的 client 实例
+    """
     return _get_provider_spec(provider).build_client()
 
 
 def initialize_session(provider: str, initial_user_text: str, client: Any) -> Dict[str, Any]:
-    """初始化统一的会话状态"""
+    """
+    初始化统一的会话状态。
+
+    @params:
+        provider: 本次需求使用的 provider
+        initial_user_text: 首轮用户输入
+        client: 已初始化好的 SDK client
+
+    @return:
+        返回统一的 session 字典，包含 history、provider_state 和运行时上下文
+    """
     resolved_provider = get_provider_name(provider)
     # provider_state 专门保存各家 SDK 需要的协议态，history 则保留统一审计视图。
     session = {
@@ -245,6 +326,12 @@ def create_turn(session: Dict[str, Any], system_prompt: str) -> AgentTurn:
     demand_id = session.get("demand_id")
     phase = session.get("phase")
     provider_spec = _get_provider_spec(provider)
+    logger = session.get("logger")
+    model_name = provider_spec.model_name_resolver()
+
+    if logger:
+        # create_turn 是统一入口，在这里补开始/结束日志，能覆盖所有 Provider 分支。
+        log_llm_call_started(logger, phase, provider, model_name)
 
     with start_span(
         "llm.call",
@@ -252,7 +339,7 @@ def create_turn(session: Dict[str, Any], system_prompt: str) -> AgentTurn:
             "demand_id": demand_id,
             "phase": phase,
             "llm.provider": provider,
-            "llm.model": provider_spec.model_name_resolver(),
+            "llm.model": model_name,
         },
     ) as span:
         turn = provider_spec.turn_factory(session, client, system_prompt)
@@ -263,14 +350,42 @@ def create_turn(session: Dict[str, Any], system_prompt: str) -> AgentTurn:
         for key in ("latency_ms", "prompt_tokens", "completion_tokens", "total_tokens"):
             if key in usage:
                 span.set_attribute(f"llm.{key}", int(usage[key] or 0))
+        if logger:
+            log_llm_call_finished(
+                logger,
+                phase,
+                provider,
+                model_name,
+                usage,
+                finished=turn.finished,
+                tool_call_count=len(turn.tool_calls),
+            )
         return turn
 
 
 def _resolve_model_name(provider: str) -> str:
+    """
+    解析指定 provider 当前对应的模型名。
+
+    @params:
+        provider: provider 名称
+
+    @return:
+        返回当前 provider 的模型名
+    """
     return _get_provider_spec(provider).model_name_resolver()
 
 
 def _build_anthropic_client() -> Any:
+    """
+    构建 Anthropic SDK client。
+
+    @params:
+        无
+
+    @return:
+        返回 Anthropic client 实例
+    """
     import anthropic
 
     api_key = os.getenv("ANTHROPIC_AUTH_TOKEN") or os.getenv("ANTHROPIC_API_KEY")
@@ -279,6 +394,15 @@ def _build_anthropic_client() -> Any:
 
 
 def _build_openai_client() -> Any:
+    """
+    构建 OpenAI SDK client。
+
+    @params:
+        无
+
+    @return:
+        返回 OpenAI client 实例
+    """
     from openai import OpenAI
 
     api_key = os.getenv("OPENAI_API_KEY")
@@ -287,6 +411,15 @@ def _build_openai_client() -> Any:
 
 
 def _build_qwen_client() -> Any:
+    """
+    构建 Qwen 兼容 OpenAI 协议的 client。
+
+    @params:
+        无
+
+    @return:
+        返回 OpenAI 兼容 client 实例
+    """
     from openai import OpenAI
 
     api_key = os.getenv("QWEN_API_KEY") or os.getenv("DASHSCOPE_API_KEY")
@@ -299,6 +432,15 @@ def _build_qwen_client() -> Any:
 
 
 def _build_doubao_client() -> Any:
+    """
+    构建 Doubao / ARK 的 OpenAI 兼容 client。
+
+    @params:
+        无
+
+    @return:
+        返回 OpenAI 兼容 client 实例；缺少 API Key 时抛出错误
+    """
     from openai import OpenAI
 
     api_key = _require_config(
@@ -314,14 +456,41 @@ def _build_doubao_client() -> Any:
 
 
 def _resolve_anthropic_model_name() -> str:
+    """
+    解析 Anthropic 当前模型名。
+
+    @params:
+        无
+
+    @return:
+        返回环境变量中的模型名；为空时回退默认值
+    """
     return os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
 
 
 def _resolve_openai_model_name() -> str:
+    """
+    解析 OpenAI 当前模型名。
+
+    @params:
+        无
+
+    @return:
+        返回环境变量中的模型名；为空时回退默认值
+    """
     return os.getenv("OPENAI_MODEL", "gpt-5-codex")
 
 
 def _resolve_qwen_model_name() -> str:
+    """
+    解析 Qwen 当前模型名。
+
+    @params:
+        无
+
+    @return:
+        按优先级返回 QWEN / DASHSCOPE 模型名
+    """
     return (
         os.getenv("QWEN_MODEL")
         or os.getenv("DASHSCOPE_MODEL")
@@ -330,6 +499,15 @@ def _resolve_qwen_model_name() -> str:
 
 
 def _resolve_doubao_model_name() -> str:
+    """
+    解析 Doubao 当前模型名或 endpoint ID。
+
+    @params:
+        无
+
+    @return:
+        按优先级返回 DOUBAO / ARK 模型配置
+    """
     return (
         os.getenv("DOUBAO_MODEL")
         or os.getenv("ARK_MODEL")
@@ -339,6 +517,17 @@ def _resolve_doubao_model_name() -> str:
 
 
 def _create_anthropic_turn(session: Dict[str, Any], client: Any, system_prompt: str) -> AgentTurn:
+    """
+    执行一轮 Anthropic Messages API 调用。
+
+    @params:
+        session: 当前统一会话状态
+        client: Anthropic SDK client
+        system_prompt: 当前阶段系统提示词
+
+    @return:
+        返回归一后的 AgentTurn
+    """
     messages = session["provider_state"].setdefault("messages", [])
     model_name = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
 
@@ -387,6 +576,17 @@ def _create_anthropic_turn(session: Dict[str, Any], client: Any, system_prompt: 
 
 
 def _create_openai_turn(session: Dict[str, Any], client: Any, system_prompt: str) -> AgentTurn:
+    """
+    执行一轮 OpenAI Responses API 调用。
+
+    @params:
+        session: 当前统一会话状态
+        client: OpenAI SDK client
+        system_prompt: 当前阶段系统提示词
+
+    @return:
+        返回归一后的 AgentTurn
+    """
     return _create_responses_turn(
         session,
         client,
@@ -400,6 +600,17 @@ def _create_openai_turn(session: Dict[str, Any], client: Any, system_prompt: str
 
 
 def _create_doubao_turn(session: Dict[str, Any], client: Any, system_prompt: str) -> AgentTurn:
+    """
+    执行一轮 Doubao/ARK Responses API 调用。
+
+    @params:
+        session: 当前统一会话状态
+        client: OpenAI 兼容 client
+        system_prompt: 当前阶段系统提示词
+
+    @return:
+        返回归一后的 AgentTurn
+    """
     return _create_responses_turn(
         session,
         client,
@@ -441,6 +652,8 @@ def _create_responses_turn(
     state = session["provider_state"]
     pending_inputs = list(state.get("pending_inputs", []))
     model_name = _first_env_value(model_env_names, default_model)
+    logger = session.get("logger")
+    phase = session.get("phase")
     if not model_name:
         raise ValueError(
             f"{provider_label} model is not configured; set one of: {', '.join(model_env_names)}"
@@ -470,6 +683,8 @@ def _create_responses_turn(
         provider_label,
         retry_env_prefix,
         model_name,
+        logger=logger,
+        phase=phase,
     )
     latency_ms = _elapsed_ms(started_at)
     usage = _normalize_usage(getattr(response, "usage", None), latency_ms)
@@ -514,7 +729,16 @@ def _create_responses_turn(
 
 
 def _first_env_value(names: List[str], default: str = "") -> str:
-    """按优先级读取第一项非空环境变量。"""
+    """
+    按优先级读取第一项非空环境变量。
+
+    @params:
+        names: 环境变量名列表
+        default: 所有环境变量都为空时的默认值
+
+    @return:
+        返回第一个非空值；全部为空时返回 default
+    """
     for name in names:
         value = os.getenv(name, "").strip()
         if value:
@@ -592,6 +816,17 @@ def _normalize_usage(raw_usage: Any, latency_ms: int) -> Dict[str, int]:
 
 
 def _create_qwen_turn(session: Dict[str, Any], client: Any, system_prompt: str) -> AgentTurn:
+    """
+    执行一轮 Qwen Chat Completions 调用。
+
+    @params:
+        session: 当前统一会话状态
+        client: Qwen 兼容 OpenAI 协议的 client
+        system_prompt: 当前阶段系统提示词
+
+    @return:
+        返回归一后的 AgentTurn
+    """
     state = session["provider_state"]
     messages = state.setdefault("messages", [])
     model_name = os.getenv("QWEN_MODEL") or os.getenv("DASHSCOPE_MODEL") or "qwen-plus"
@@ -660,12 +895,31 @@ def _create_qwen_turn(session: Dict[str, Any], client: Any, system_prompt: str) 
 
 
 def _model_supports_reasoning(model_name: str) -> bool:
-    """仅对支持 reasoning 参数的模型追加 effort 配置。"""
+    """
+    判断模型是否支持 reasoning 参数。
+
+    @params:
+        model_name: 待判断的模型名
+
+    @return:
+        支持时返回 True，否则返回 False
+    """
     name = (model_name or "").lower()
     return name.startswith(("gpt-5", "o1", "o3", "o4"))
 
 
 def _create_openai_response_with_retry(client: Any, request_args: Dict[str, Any], model_name: str) -> Any:
+    """
+    兼容旧调用入口，执行 OpenAI Responses API 重试逻辑。
+
+    @params:
+        client: OpenAI SDK client
+        request_args: 传给 responses.create 的请求参数
+        model_name: 本次调用模型名
+
+    @return:
+        返回 SDK 的原始 response 对象
+    """
     return _create_responses_response_with_retry(
         client,
         request_args,
@@ -681,6 +935,8 @@ def _create_responses_response_with_retry(
     provider_label: str,
     env_prefix: str,
     model_name: str,
+    logger: Any = None,
+    phase: Optional[str] = None,
 ) -> Any:
     """
     调用 Responses API，并对限流与瞬时错误做统一重试。
@@ -691,6 +947,8 @@ def _create_responses_response_with_retry(
         provider_label: Provider 名称，仅用于报错信息
         env_prefix: 重试配置环境变量前缀
         model_name: 本次调用模型名
+        logger: 可选结构化 logger；传入后重试事件会写入 JSON 日志
+        phase: 可选阶段名；仅在写结构化重试日志时使用
 
     @return:
         返回 SDK 的原始 response 对象
@@ -717,6 +975,8 @@ def _create_responses_response_with_retry(
                 sleep_seconds,
                 attempt,
                 max_retries,
+                logger=logger,
+                phase=phase,
             )
             time.sleep(sleep_seconds)
         except Exception:
@@ -731,6 +991,8 @@ def _create_responses_response_with_retry(
                 sleep_seconds,
                 attempt,
                 max_retries,
+                logger=logger,
+                phase=phase,
             )
             time.sleep(sleep_seconds)
 
@@ -764,20 +1026,39 @@ def _log_responses_retry(
     sleep_seconds: float,
     attempt: int,
     max_retries: int,
+    logger: Any = None,
+    phase: Optional[str] = None,
 ) -> None:
     """
     输出 OpenAI 重试日志
 
     @params:
+        provider_label: Provider 展示名
         reason: 重试原因
         model_name: 当前调用的模型名称
         sleep_seconds: 本次重试前等待秒数
         attempt: 当前重试序号，从 0 开始
         max_retries: 最大重试次数
+        logger: 可选结构化 logger；为空时回退到 stdout
+        phase: 可选阶段名；仅在结构化日志分支中使用
 
     @return:
-        无返回值；直接输出日志到 stdout
+        无返回值；直接输出结构化日志或 stdout 文本
     """
+    if logger:
+        # 运行在 engine 主链路时优先走结构化 logger，便于 Loki 按 phase / provider / event 检索。
+        log_llm_retry(
+            logger,
+            phase,
+            provider_label.lower(),
+            model_name,
+            reason,
+            attempt=attempt + 1,
+            max_retries=max_retries,
+            wait_seconds=sleep_seconds,
+        )
+        return
+
     print(
         f"[LLM] {provider_label} {reason} for model {model_name}; "
         f"retrying in {sleep_seconds:.1f}s "
@@ -786,6 +1067,15 @@ def _log_responses_retry(
 
 
 def _extract_openai_message_text(message: Any) -> List[str]:
+    """
+    从 OpenAI Responses message 中提取可读文本块。
+
+    @params:
+        message: Responses API 返回的 message 项
+
+    @return:
+        返回按顺序提取出的文本块列表
+    """
     texts = []
     for content_item in getattr(message, "content", []):
         content_type = getattr(content_item, "type", "")
@@ -797,6 +1087,15 @@ def _extract_openai_message_text(message: Any) -> List[str]:
 
 
 def _safe_json_loads(raw: str) -> dict:
+    """
+    尝试把工具参数字符串解析为 JSON。
+
+    @params:
+        raw: 模型返回的原始 arguments 字符串
+
+    @return:
+        解析成功时返回字典；失败时返回带 `raw_arguments` 的兜底结构
+    """
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
@@ -804,6 +1103,15 @@ def _safe_json_loads(raw: str) -> dict:
 
 
 def _extract_retry_after_seconds(error_text: str) -> float:
+    """
+    从限流错误文案中提取服务端建议的等待秒数。
+
+    @params:
+        error_text: OpenAI SDK 抛出的错误文本
+
+    @return:
+        提取成功时返回秒数；没有匹配到时返回 0
+    """
     match = re.search(r"Please try again in ([0-9.]+)s", error_text)
     if not match:
         return 0.0
@@ -815,6 +1123,15 @@ def _extract_retry_after_seconds(error_text: str) -> float:
 
 
 def _register_builtin_providers() -> None:
+    """
+    注册仓库内置支持的 Provider。
+
+    @params:
+        无
+
+    @return:
+        无返回值；直接把内置 Provider 写入全局 registry
+    """
     register_provider(
         "anthropic",
         build_client=_build_anthropic_client,

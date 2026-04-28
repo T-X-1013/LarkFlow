@@ -136,6 +136,26 @@ class LlmAdapterB6TestCase(unittest.TestCase):
         self.assertGreaterEqual(turn.usage["latency_ms"], 0)
         self.assertEqual(session["history"][-1]["usage"], turn.usage)
 
+    def test_create_turn_emits_llm_start_and_end_events_when_logger_present(self):
+        session = initialize_session(
+            "anthropic",
+            "hello",
+            FakeAnthropicClient(),
+        )
+        # 用任意非空对象占位即可；这里测试的是 create_turn 是否走了结构化日志分支，而不是 logger 实现本身。
+        session["logger"] = object()
+
+        with patch("pipeline.llm_adapter.log_llm_call_started") as start_mock, \
+             patch("pipeline.llm_adapter.log_llm_call_finished") as finish_mock, \
+             patch.dict(os.environ, {"ANTHROPIC_MODEL": "claude-test"}, clear=False):
+            turn = create_turn(session, "system prompt")
+
+        self.assertTrue(turn.finished)
+        start_mock.assert_called_once()
+        finish_mock.assert_called_once()
+        self.assertEqual(start_mock.call_args[0][2], "anthropic")
+        self.assertEqual(finish_mock.call_args[0][2], "anthropic")
+
     def test_openai_turn_normalizes_usage(self):
         response = SimpleNamespace(
             id="resp-001",
