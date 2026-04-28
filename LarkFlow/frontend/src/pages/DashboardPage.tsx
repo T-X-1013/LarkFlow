@@ -1,26 +1,22 @@
 import { useEffect, useMemo, useState } from "react";
 
-import { listMetrics } from "../lib/api";
+import { buildMetricsResponse } from "../mocks/metrics";
 import { getPipelineSnapshot, subscribePipelines } from "../mocks/store";
-import type { MetricsResponse } from "../types/api";
 
 export function DashboardPage() {
-  const [metrics, setMetrics] = useState<MetricsResponse | null>(null);
   const [pipelines, setPipelines] = useState(() => getPipelineSnapshot());
-
-  useEffect(() => {
-    listMetrics().then(setMetrics).catch(() => setMetrics(null));
-  }, []);
 
   useEffect(() => {
     return subscribePipelines(setPipelines);
   }, []);
 
+  const metrics = useMemo(() => buildMetricsResponse(pipelines), [pipelines]);
+
   const summary = useMemo(() => {
-    const pipelines = metrics?.pipelines ?? [];
-    const total = pipelines.length;
-    const totalDuration = pipelines.reduce((sum, item) => sum + item.duration_ms, 0);
-    const totalTokens = pipelines.reduce(
+    const metricPipelines = metrics.pipelines;
+    const total = metricPipelines.length;
+    const totalDuration = metricPipelines.reduce((sum, item) => sum + item.duration_ms, 0);
+    const totalTokens = metricPipelines.reduce(
       (sum, item) => sum + item.tokens.input + item.tokens.output,
       0,
     );
@@ -28,11 +24,11 @@ export function DashboardPage() {
       total,
       avgDuration: total ? Math.round(totalDuration / total) : 0,
       totalTokens,
-      successful: pipelines.filter((item) => item.status === "succeeded").length,
+      successful: metricPipelines.filter((item) => item.status === "succeeded").length,
     };
   }, [metrics]);
 
-  const bars = (metrics?.pipelines ?? []).map((item) => ({
+  const bars = metrics.pipelines.map((item) => ({
     label: item.pipeline_id,
     value: item.duration_ms,
   }));
@@ -47,7 +43,7 @@ export function DashboardPage() {
   }, [pipelines]);
   const statusBreakdown = useMemo(() => {
     const counts = new Map<string, number>();
-    for (const pipeline of metrics?.pipelines ?? []) {
+    for (const pipeline of metrics.pipelines) {
       counts.set(pipeline.status, (counts.get(pipeline.status) ?? 0) + 1);
     }
     return Array.from(counts.entries()).map(([status, count]) => ({ status, count }));

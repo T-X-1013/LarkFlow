@@ -2,12 +2,9 @@ import type { FormEvent } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
-import {
-  createPipeline,
-  listMetrics,
-} from "../lib/api";
+import { createPipeline } from "../lib/api";
 import { getPipelineSnapshot, subscribePipelines } from "../mocks/store";
-import type { MetricsResponse, PipelineState, PipelineStatus } from "../types/api";
+import type { PipelineState, PipelineStatus } from "../types/api";
 
 function badgeClass(status: PipelineStatus) {
   if (status === "running" || status === "succeeded") return "badge badge--running";
@@ -25,11 +22,6 @@ export function PipelinesPage() {
   const [statusFilter, setStatusFilter] = useState<PipelineStatus | "all">("all");
   const [providerFilter, setProviderFilter] = useState<string>("all");
   const [createdId, setCreatedId] = useState<string | null>(null);
-  const [metrics, setMetrics] = useState<MetricsResponse | null>(null);
-
-  useEffect(() => {
-    listMetrics().then(setMetrics).catch(() => null);
-  }, []);
 
   useEffect(() => {
     return subscribePipelines(setPipelines);
@@ -69,11 +61,7 @@ export function PipelinesPage() {
           <p className="eyebrow">Pipeline Catalog</p>
           <h2>列表页</h2>
         </div>
-        {metrics ? (
-          <span className="badge badge--running">
-            mock metrics: {metrics.pipelines.length} 条
-          </span>
-        ) : null}
+        <span className="badge badge--running">mock metrics: {summary.total} 条</span>
       </div>
 
       <div className="metric-grid">

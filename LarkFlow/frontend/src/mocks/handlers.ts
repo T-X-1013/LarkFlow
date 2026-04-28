@@ -1,6 +1,7 @@
 import { http, HttpResponse } from "msw";
 
 import type { PipelineState } from "../types/api";
+import { buildMetricsResponse } from "./metrics";
 import {
   clonePipeline,
   findPipeline,
@@ -9,23 +10,9 @@ import {
   replacePipeline,
 } from "./store";
 
-function buildMetricsResponse() {
-  const pipelines = getPipelineSnapshot();
-  return {
-    pipelines: pipelines.map((pipeline) => {
-      const stageList = Object.values(pipeline.stages).filter(Boolean);
-      const duration_ms = stageList.reduce((sum, stage) => sum + (stage?.duration_ms ?? 0), 0);
-      const input = stageList.reduce((sum, stage) => sum + (stage?.tokens.input ?? 0), 0);
-      const output = stageList.reduce((sum, stage) => sum + (stage?.tokens.output ?? 0), 0);
-      return {
-        pipeline_id: pipeline.id,
-        status: pipeline.status,
-        duration_ms,
-        tokens: { input, output },
-        stages: pipeline.stages,
-      };
-    }),
-  };
+function stampUpdatedAt(pipeline: PipelineState) {
+  pipeline.updated_at = Math.floor(Date.now() / 1000);
+  return pipeline;
 }
 
 export const handlers = [
@@ -55,7 +42,7 @@ export const handlers = [
     }
     pipeline.status = "running";
     pipeline.current_stage = pipeline.current_stage ?? "design";
-    replacePipeline(pipeline);
+    replacePipeline(stampUpdatedAt(pipeline));
     return HttpResponse.json(pipeline);
   }),
 
@@ -65,7 +52,7 @@ export const handlers = [
       return HttpResponse.json({ detail: "not found" }, { status: 404 });
     }
     pipeline.status = "paused";
-    replacePipeline(pipeline);
+    replacePipeline(stampUpdatedAt(pipeline));
     return HttpResponse.json(pipeline);
   }),
 
@@ -75,7 +62,7 @@ export const handlers = [
       return HttpResponse.json({ detail: "not found" }, { status: 404 });
     }
     pipeline.status = "running";
-    replacePipeline(pipeline);
+    replacePipeline(stampUpdatedAt(pipeline));
     return HttpResponse.json(pipeline);
   }),
 
@@ -85,7 +72,7 @@ export const handlers = [
       return HttpResponse.json({ detail: "not found" }, { status: 404 });
     }
     pipeline.status = "stopped";
-    replacePipeline(pipeline);
+    replacePipeline(stampUpdatedAt(pipeline));
     return HttpResponse.json(pipeline);
   }),
 
@@ -125,7 +112,7 @@ export const handlers = [
       checkpoint.resolved_at = Math.floor(Date.now() / 1000);
     }
     pipeline.status = checkpointName === "deploy" ? "succeeded" : "running";
-    replacePipeline(pipeline);
+    replacePipeline(stampUpdatedAt(pipeline));
     return HttpResponse.json(pipeline);
   }),
 
@@ -143,7 +130,7 @@ export const handlers = [
       checkpoint.resolved_at = Math.floor(Date.now() / 1000);
     }
     pipeline.status = "rejected";
-    replacePipeline(pipeline);
+    replacePipeline(stampUpdatedAt(pipeline));
     return HttpResponse.json(pipeline);
   }),
 
@@ -154,12 +141,12 @@ export const handlers = [
     }
     const body = (await request.json()) as { provider: string };
     pipeline.provider = body.provider;
-    replacePipeline(pipeline);
+    replacePipeline(stampUpdatedAt(pipeline));
     return HttpResponse.json(pipeline);
   }),
 
   http.get("/metrics/pipelines", () => {
-    return HttpResponse.json(buildMetricsResponse());
+    return HttpResponse.json(buildMetricsResponse(getPipelineSnapshot()));
   }),
 
   http.get("/healthz", () => {
