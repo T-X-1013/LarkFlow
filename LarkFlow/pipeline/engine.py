@@ -29,6 +29,7 @@ from pipeline.tools_runtime import ToolContext, execute as execute_local_tool
 from pipeline.persistence import SessionStore, default_store
 from pipeline.observability import accumulate_metrics, get_logger, log_turn_metrics
 from pipeline.deploy_strategy import get_strategy
+from pipeline.engine_control import PipelineCancelled, check_lifecycle
 from telemetry.hooks import (
     trace_approval_resume,
     trace_demand_start,
@@ -279,6 +280,8 @@ def run_agent_loop(demand_id: str, system_prompt: str) -> bool:
                 f"agent loop exceeded AGENT_MAX_TURNS={max_turns} at phase {phase}"
             )
         turn_count += 1
+        # 每个 agent turn 前检查 pause/stop；长耗时 LLM 调用期间允许中断
+        check_lifecycle(demand_id)
         logger.info(
             "agent thinking",
             extra={"event": "agent_thinking", "phase": phase},
@@ -394,6 +397,7 @@ PHASE_CODING = "coding"
 PHASE_TESTING = "testing"
 PHASE_REVIEWING = "reviewing"
 PHASE_DEPLOYING = "deploying"
+PHASE_DEPLOY_PENDING = "deploy_pending"  # 第 2 HITL：Review 通过后等部署审批
 PHASE_DONE = "done"
 PHASE_FAILED = "failed"
 
@@ -414,12 +418,26 @@ _PHASE_CONFIG: Dict[str, Dict[str, Any]] = {
     PHASE_DEPLOYING: {"prompt": None, "kickoff": None},
 }
 
-# 正常完成时的下一个阶段；用于链式推进
-_NEXT_PHASE: Dict[str, str] = {
-    PHASE_CODING: PHASE_TESTING,
-    PHASE_TESTING: PHASE_REVIEWING,
-    PHASE_REVIEWING: PHASE_DEPLOYING,
-}
+# 正常完成时的下一个阶段；由 default DAG 构造（YAML 驱动）
+# DAG 定义在 pipeline/dag/default.yaml，stage 名为契约名（test/review），
+# 映射到 engine phase 名（testing/reviewing）。deploying 不在 DAG 内，
+# 作为 review 之后的终点动作保留。
+def _build_next_phase_from_dag() -> Dict[str, str]:
+    from pipeline.dag import default_dag
+    from pipeline.engine_control import stage_to_phase
+
+    dag = default_dag()
+    order = [stage_to_phase(s) for s in dag.topo_order()]
+    nxt: Dict[str, str] = {}
+    for i in range(1, len(order)):
+        nxt[order[i - 1]] = order[i]
+    # 最后一个 DAG 阶段（reviewing）→ deploying 为 engine 既有约定
+    if order:
+        nxt[order[-1]] = PHASE_DEPLOYING
+    return nxt
+
+
+_NEXT_PHASE: Dict[str, str] = _build_next_phase_from_dag()
 
 # 终端 banner 用的阶段序号与中文名；仅用于人眼可读的提示，不影响结构化日志
 _PHASE_BANNER: Dict[str, tuple] = {
@@ -480,11 +498,19 @@ def _run_phase(demand_id: str, phase: str) -> bool:
     prompt_file = _PHASE_CONFIG[phase]["prompt"]
     logger = get_logger(demand_id, phase)
     try:
+        # 协作式 pause/stop 检查（未注册 pipeline 的旧入口会直接返回）
+        check_lifecycle(demand_id)
         with trace_phase_execution(demand_id, phase, prompt_file) as span:
             system_prompt = load_prompt(prompt_file)
             completed = run_agent_loop(demand_id, system_prompt)
             span.set_attribute("phase.completed", completed)
             return completed
+    except PipelineCancelled:
+        logger.info(
+            "phase cancelled",
+            extra={"event": "phase_cancelled", "phase": phase},
+        )
+        return False
     except Exception as exc:
         logger.error(
             f"phase crashed: {exc}",
@@ -581,29 +607,9 @@ def resume_from_phase(demand_id: str, phase: str) -> None:
                 return
             current = _NEXT_PHASE[current]
 
-        # current == PHASE_DEPLOYING：执行部署并以结果定 phase 终态
-        if _advance_to_phase(demand_id, PHASE_DEPLOYING) is None:
-            return
-        try:
-            deploy_ok = deploy_app(demand_id)
-        except Exception as exc:
-            logger.error(
-                f"deploy crashed: {exc}",
-                extra={"event": "phase_failed", "phase": PHASE_DEPLOYING},
-                exc_info=True,
-            )
-            _mark_failed(demand_id, PHASE_DEPLOYING, str(exc))
-            return
-
-        session = _load_session(demand_id)
-        if session is None:
-            return
-        if deploy_ok:
-            session["phase"] = PHASE_DONE
-            _save_session(demand_id, session)
-            logger.info("demand done", extra={"event": "demand_done", "phase": PHASE_DONE})
-        else:
-            _mark_failed(demand_id, PHASE_DEPLOYING, "deploy reported failure")
+        # 第 2 HITL：Review 通过后挂起等部署审批，真正部署由
+        # engine_api.approve_checkpoint(DEPLOY) → trigger_deploy 触发
+        _request_deploy_approval(demand_id, logger)
 
 
 def resume_after_approval(demand_id: str, approved: bool, feedback: str):
@@ -656,6 +662,106 @@ def resume_after_approval(demand_id: str, approved: bool, feedback: str):
                 session["phase"] = PHASE_DESIGN
                 _save_session(demand_id, session)
             _run_phase(demand_id, PHASE_DESIGN)
+
+# ==========================================
+# 第 2 HITL：部署审批（D3）
+# ==========================================
+def _request_deploy_approval(demand_id: str, logger) -> None:
+    """Review 通过后挂起，推送部署审批卡片，等 approve_checkpoint(DEPLOY) 解挂。
+
+    不触发真正部署；仅把 session.phase 置为 deploy_pending 并落盘。
+    """
+    from pipeline.lark_cards import build_deploy_approval_card
+
+    session = _load_session(demand_id)
+    if session is None:
+        return
+
+    # 从 session 里凑一份审查摘要：优先取 Agent 最后一次 assistant 文本，退化为占位
+    review_summary = ""
+    for msg in reversed(session.get("messages", []) or []):
+        if msg.get("role") == "assistant":
+            blocks = msg.get("content") or []
+            if isinstance(blocks, list):
+                for b in blocks:
+                    if isinstance(b, dict) and b.get("type") == "text":
+                        review_summary = (b.get("text") or "").strip()
+                        break
+                    if isinstance(b, str):
+                        review_summary = b.strip()
+                        break
+            elif isinstance(blocks, str):
+                review_summary = blocks.strip()
+            if review_summary:
+                break
+    if not review_summary:
+        review_summary = "代码审查已通过，等待部署确认。"
+
+    target_dir = session.get("target_dir")
+    session["phase"] = PHASE_DEPLOY_PENDING
+    session["pending_deploy_approval"] = {
+        "review_summary": review_summary[:2000],
+        "target_dir": target_dir,
+    }
+    _save_session(demand_id, session)
+
+    lark_target = os.getenv("LARK_CHAT_ID")
+    if lark_target:
+        from pipeline.lark_client import send_lark_card_raw
+        card = build_deploy_approval_card(
+            demand_id=demand_id,
+            review_summary=review_summary[:800],
+            target_dir=target_dir,
+        )
+        try:
+            send_lark_card_raw(lark_target, card)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                f"deploy card send failed: {exc}",
+                extra={"event": "deploy_card_send_failed"},
+            )
+    else:
+        logger.warning(
+            "lark target not configured, skip deploy card",
+            extra={"event": "lark_skip"},
+        )
+    logger.info(
+        "deploy approval requested",
+        extra={"event": "deploy_approval_requested", "phase": PHASE_DEPLOY_PENDING},
+    )
+
+
+def trigger_deploy(demand_id: str) -> None:
+    """engine_api.approve_checkpoint(DEPLOY) 调用：真正执行部署，保留原终态逻辑。"""
+    logger = get_logger(demand_id, PHASE_DEPLOYING)
+    logger.info(
+        "deploy approved, start deploy",
+        extra={"event": "deploy_approved", "phase": PHASE_DEPLOYING},
+    )
+    if _advance_to_phase(demand_id, PHASE_DEPLOYING) is None:
+        return
+    try:
+        deploy_ok = deploy_app(demand_id)
+    except Exception as exc:
+        logger.error(
+            f"deploy crashed: {exc}",
+            extra={"event": "phase_failed", "phase": PHASE_DEPLOYING},
+            exc_info=True,
+        )
+        _mark_failed(demand_id, PHASE_DEPLOYING, str(exc))
+        return
+
+    session = _load_session(demand_id)
+    if session is None:
+        return
+    if deploy_ok:
+        session["phase"] = PHASE_DONE
+        session["pending_deploy_approval"] = None
+        _save_session(demand_id, session)
+        logger.info("demand done", extra={"event": "demand_done", "phase": PHASE_DONE})
+    else:
+        _mark_failed(demand_id, PHASE_DEPLOYING, "deploy reported failure")
+
 
 # ==========================================
 # 4. 部署编排 (A5)

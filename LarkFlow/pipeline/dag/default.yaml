@@ -1,0 +1,28 @@
+name: default
+description: Design -> Coding -> Test -> Review，线性模板，含两个 HITL
+
+entry: design
+
+nodes:
+  design:
+    prompt_file: phase1_design.md
+    depends_on: []
+    checkpoint: design          # 第 1 HITL：Design 产出审批
+    retry:
+      max_attempts: 1
+  coding:
+    prompt_file: phase2_coding.md
+    depends_on: [design]
+    retry:
+      max_attempts: 1
+  test:
+    prompt_file: phase3_test.md
+    depends_on: [coding]
+    retry:
+      max_attempts: 1
+  review:
+    prompt_file: phase4_review.md
+    depends_on: [test]
+    checkpoint: deploy          # 第 2 HITL：Review 通过后是否部署
+    retry:
+      max_attempts: 1

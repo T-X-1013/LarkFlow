@@ -194,6 +194,14 @@ def send_lark_card(
     return _send_message(target, "interactive", card)
 
 
+def send_lark_card_raw(target: str, card: dict[str, Any]) -> dict[str, Any]:
+    """直接发送已构建好的卡片 JSON（绕过 build_approval_card 固定模板）。
+
+    D3 第 2 HITL deploy 卡片不走 design 卡片模板，直接传 lark_cards 构建的 JSON。
+    """
+    return _send_message(target, "interactive", card)
+
+
 def send_lark_text(target: str, text: str) -> dict[str, Any]:
     """
     发送普通文本消息到飞书
