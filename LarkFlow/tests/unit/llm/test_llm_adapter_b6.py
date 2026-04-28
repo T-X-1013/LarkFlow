@@ -7,12 +7,18 @@ from pipeline.llm_adapter import (
     _create_openai_response_with_retry,
     append_tool_result,
     create_turn,
+    get_provider_name,
     initialize_session,
+    list_provider_names,
+    register_provider,
+    reload_provider_registry,
     ToolCall,
 )
 
 
 class FakeAnthropicMessages:
+    """模拟 Anthropic messages.create 的最小返回结构。"""
+
     def create(self, **kwargs):
         return SimpleNamespace(
             content=[
@@ -27,11 +33,15 @@ class FakeAnthropicMessages:
 
 
 class FakeAnthropicClient:
+    """模拟 Anthropic client，只暴露 llm_adapter 当前需要的 messages 接口。"""
+
     def __init__(self):
         self.messages = FakeAnthropicMessages()
 
 
 class FakeOpenAIResponses:
+    """模拟 OpenAI Responses API，支持记录调用参数和按顺序吐出响应。"""
+
     def __init__(self, responses):
         if isinstance(responses, list):
             self.responses = list(responses)
@@ -45,11 +55,15 @@ class FakeOpenAIResponses:
 
 
 class FakeOpenAIClient:
+    """模拟带有 responses 子对象的 OpenAI 兼容 client。"""
+
     def __init__(self, responses):
         self.responses = FakeOpenAIResponses(responses)
 
 
 class FakeQwenCompletions:
+    """模拟 Qwen Chat Completions API。"""
+
     def __init__(self, responses):
         self.responses = list(responses)
         self.calls = []
@@ -60,11 +74,52 @@ class FakeQwenCompletions:
 
 
 class FakeQwenClient:
+    """模拟 DashScope/OpenAI 兼容的 qwen client 入口。"""
+
     def __init__(self, responses):
         self.chat = SimpleNamespace(completions=FakeQwenCompletions(responses))
 
 
 class LlmAdapterB6TestCase(unittest.TestCase):
+    """覆盖 Provider 注册、usage 归一、重试和工具回填等关键适配行为。"""
+
+    def tearDown(self):
+        reload_provider_registry()
+
+    def test_builtin_provider_registry_is_available(self):
+        self.assertEqual(
+            list_provider_names(),
+            ["anthropic", "doubao", "openai", "qwen"],
+        )
+
+    def test_register_provider_allows_runtime_extension_until_reload(self):
+        register_provider(
+            "mock",
+            build_client=lambda: "mock-client",
+            turn_factory=lambda session, client, system_prompt: SimpleNamespace(
+                text_blocks=["mock"],
+                tool_calls=[],
+                finished=True,
+                raw_response=None,
+                usage={},
+            ),
+            model_name_resolver=lambda: "mock-model",
+            session_mode="messages",
+        )
+
+        with patch.dict(os.environ, {"LLM_PROVIDER": "mock"}, clear=False):
+            self.assertEqual(get_provider_name(), "mock")
+
+        reload_provider_registry()
+        with patch.dict(os.environ, {"LLM_PROVIDER": "mock"}, clear=False):
+            with self.assertRaises(ValueError):
+                get_provider_name()
+
+    def test_get_provider_name_rejects_unknown_provider(self):
+        with patch.dict(os.environ, {"LLM_PROVIDER": "unknown"}, clear=False):
+            with self.assertRaises(ValueError):
+                get_provider_name()
+
     def test_anthropic_turn_normalizes_usage(self):
         session = initialize_session(
             "anthropic",
@@ -123,6 +178,7 @@ class LlmAdapterB6TestCase(unittest.TestCase):
         self.assertEqual(session["history"][-1]["usage"], turn.usage)
 
     def test_doubao_turn_supports_shared_endpoint_and_tool_result_roundtrip(self):
+        # 第一轮先返回工具调用，第二轮消费 function_call_output 后再返回最终文本。
         tool_response = SimpleNamespace(
             id="resp-doubao-001",
             output=[
@@ -229,6 +285,7 @@ class LlmAdapterB6TestCase(unittest.TestCase):
         )
 
     def test_openai_retry_handles_generic_exception(self):
+        # 这里不用真实 SDK 异常类型，重点验证非限流的瞬时失败也会按统一策略重试一次。
         response = SimpleNamespace(id="resp-ok")
         calls = []
 
@@ -261,6 +318,7 @@ class LlmAdapterB6TestCase(unittest.TestCase):
         sleep_mock.assert_called_once_with(0.0)
 
     def test_qwen_turn_supports_tool_call_and_tool_result_roundtrip(self):
+        # Qwen 走 Chat Completions 协议，工具结果需要回填成 role=tool 的消息结构。
         tool_response = SimpleNamespace(
             choices=[
                 SimpleNamespace(
