@@ -29,7 +29,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 复制项目代码
 COPY . .
 
-# WebSocket 长连模式下无需暴露端口，飞书事件通过 lark-oapi SDK 主动连接拉取
+# 暴露 FastAPI 端口；WS 长连由 lark-oapi SDK 主动连接拉取，不占入站端口
+EXPOSE 8000
 
-# 启动飞书 WebSocket 事件监听器
-CMD ["python", "-m", "pipeline.lark_interaction"]
+# 双入口：asyncio 并行 lark WS 长连 + FastAPI HTTP server
+CMD ["python", "-m", "pipeline.app"]

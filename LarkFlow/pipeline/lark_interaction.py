@@ -289,9 +289,12 @@ def process_card_action(
     """
     action_type = None
     demand_id = None
+    checkpoint = None
     if isinstance(action_value, dict):
         action_type = action_value.get("action_type") or action_value.get("action")
         demand_id = action_value.get("demand_id")
+        # D3：第 2 HITL 卡片带 checkpoint 字段；旧 design 卡片也已回填 checkpoint=design
+        checkpoint = action_value.get("checkpoint")
 
     with trace_lark_card_action(event_id, demand_id, action_type):
         if event_id and not _remember_event_id(event_id):
@@ -305,6 +308,28 @@ def process_card_action(
         if not demand_id:
             print(f"[LarkListener] 收到缺少 demand_id 的 action 数据: {action_value}")
             return update_card_status(f"解析失败，收到的数据: {action_value}")
+
+        # D3：部署审批分发到 engine_api.approve_checkpoint(DEPLOY)
+        if checkpoint == "deploy":
+            from pipeline import engine_api
+            from pipeline.contracts import CheckpointName
+
+            if action_type == "approve":
+                print(f"[LarkListener] 需求 {demand_id} 部署审批通过，启动部署...")
+
+                def run_deploy_approve() -> None:
+                    time.sleep(1)
+                    engine_api.approve_checkpoint(demand_id, CheckpointName.DEPLOY)
+
+                _launch_background_task(run_deploy_approve)
+                return update_card_status("🚀 已同意部署，正在构建并运行镜像...")
+
+            if action_type == "reject":
+                print(f"[LarkListener] 需求 {demand_id} 部署审批被驳回，取消部署")
+                engine_api.reject_checkpoint(
+                    demand_id, CheckpointName.DEPLOY, reason="用户取消部署"
+                )
+                return update_card_status("🛑 已取消部署")
 
         if action_type == "approve":
             print(f"[LarkListener] 需求 {demand_id} 已通过审批，准备进入 Coding 阶段...")
