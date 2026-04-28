@@ -63,3 +63,8 @@ LarkFlow/templates/kratos-skeleton/**/*_errors.pb.go
 .coverage
 htmlcov/
 coverage.xml
+
+# Frontend local artifacts
+LarkFlow/frontend/.vite/
+LarkFlow/frontend/dist/
+LarkFlow/frontend/node_modules/
