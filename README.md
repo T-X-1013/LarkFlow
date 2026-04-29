@@ -235,15 +235,11 @@ graph TD
 
 这让后续 `engine_api.set_provider(...)` 的真实接线、provider 动态扩展以及无重启 reload 都有了稳定的库层落点。
 
-### 5. 前端控制台
+### 4. 前端控制台
 
-`LarkFlow/frontend/` 是 D1-D3 并行开发出来的控制台壳，当前定位是“按冻结契约跑通可交互 mock”，而不是立即绑定真实后端：
+`LarkFlow/frontend/` 当前采用 `MSW mock` 方式运行，主要目标是先稳定页面结构、交互流程和契约消费方式。因此，在默认情况下，即使后端服务未启动，前端页面也可以单独运行和演示。在后续的开发中会将 mock 的数据替换为真实的数据。
 
-- 技术栈：`Vite + React + TypeScript + MSW`
-- 页面：`/` 首页、`/pipelines` 列表页、`/pipelines/:pipelineId` 详情页、`/dashboard` 仪表盘
-- 契约来源：`pipeline/contracts.py` + `pipeline/api/routes.py`
-- 当前能力：创建 mock pipeline、状态切换、provider 切换、checkpoint approve/reject、artifact 预览、metrics 展示
-- 当前边界：D1-D3 默认仍走 `MSW`，真实 API 联调属于后续阶段
+更具体的内容可以参考这篇文档：https://jcneyh7qlo8i.feishu.cn/wiki/HJGHwea5XibKjDkPN1ic9wAdn9f 
 
 本地启动命令：
 
@@ -260,19 +256,7 @@ npm run dev
 npm run build
 ```
 
-`LarkFlow/pipeline/lark_interaction.py` 基于 `lark-oapi` SDK 提供事件监听器，负责：
-
-- 通过 `lark_oapi.ws.Client` 与飞书建立 WebSocket 长连，由 SDK 兜底 URL 校验、verification token、签名与加密
-- 通过 `EventDispatcherHandler.register_p2_card_action_trigger` 订阅卡片按钮点击
-- 通过 `register_p2_drive_file_bitable_record_changed_v1` 订阅多维表格记录变更，作为新需求的入向触发（替代旧的 HTTP webhook 方案）
-- 维护 24 小时 `event_id` 幂等 SQLite（`LARK_EVENT_STORE_PATH`），避免重复点击二次触发 pipeline
-- 唤醒已挂起的 Pipeline（approve → 进入 coding，reject → 回 design）
-
-`LarkFlow/pipeline/lark_bitable_listener.py` 负责进程启动时向飞书订阅需求 Base 的文件事件，并在新增/编辑记录到达时向审批群发送「需求启动」卡片；状态列回写（`待启动 → 已发卡 → 处理中 → 已启动 / 驳回 / 失败`）作为幂等去重标记。
-
-`LarkFlow/pipeline/lark_client.py` 通过 `client.im.v1.message.create` 统一发送飞书卡片/文本消息；`LarkFlow/pipeline/utils/lark_sdk.py` 作为共享的 `lark-oapi` Client 工厂，让出站消息、文档读取、入站事件共用一份 token 缓存；`LarkFlow/pipeline/utils/lark_doc.py` 通过 `client.wiki.v2.space.get_node` 与 `client.docx.v1.document.raw_content` 读取飞书云文档。
-
-### 4. 双入口服务 + 控制面
+### 5. 双入口服务 + 控制面
 
 `LarkFlow/pipeline/app.py` 是生产默认启动入口，通过 `asyncio.gather` 并行跑两条链路，共享同一份 engine / SessionStore / logger：
 
@@ -614,199 +598,17 @@ python pipeline/engine.py
 
 ## 本地可观测性
 
-当前仓库已经补齐一套本地可运行的最小可观测性方案，目标是同时覆盖：
+当前仓库已经补齐一套本地可运行的最小可观测性方案，用于集中展示 Pipeline 运行过程中的可观测性数据，帮助开发者和维护人员快速了解需求处理流程的执行状态，并定位运行中的异常问题。主要承载以下能力：
+- 展示 Pipeline 各阶段的运行状态
+- 查看链路追踪信息（Trace）
+- 查看结构化运行日志
+- 观察 LLM 调用情况
+- 辅助定位失败、重试、卡顿等问题
 
-- `demo-app` 的 HTTP / gRPC trace
-- `LarkFlow` 主流程的关键 span
-- 容器日志与 `LarkFlow/logs/larkflow.jsonl` 文件日志
+我们希望 LarkFlow 的运行过程不是黑盒，而是一个可观察、可分析、可排查的问题定位界面。
 
-### 1. 组件与目录
+更加详细的启动和操作流程可以参考这篇文档：https://jcneyh7qlo8i.feishu.cn/wiki/T8tQwd5TFi51tXkxxZUcf3Saneb
 
-版本控制中的 source of truth 位于 `LarkFlow/templates/kratos-skeleton/otel/`，每次物化骨架后会出现在 `demo-app/otel/`。本地编排文件包括：
-
-- `docker-compose.yml`：本地观测栈入口
-- `otel-collector-config.yaml`：OTLP 接收与转发配置
-- `tempo.yaml`：trace 存储
-- `prometheus.yml`：metrics 抓取配置
-- `loki-config.yaml`：日志存储
-- `promtail-config.yaml`：容器日志与文件日志采集
-
-当前 `docker-compose.yml` 会启动：
-
-- `demo-app`
-- `otel-collector`
-- `tempo`
-- `grafana`
-- `prometheus`
-- `loki`
-- `promtail`
-
-### 2. 启动本地 OTEL 栈
-
-在骨架已物化为 `demo-app/` 后，在仓库根目录执行：
-
-```bash
-cd demo-app/otel
-docker compose -f docker-compose.yml up -d --build
-docker compose -f docker-compose.yml ps
-```
-
-启动后默认访问地址：
-
-- `demo-app`：`http://localhost:8080`
-- `Grafana`：`http://localhost:3000`
-- `Prometheus`：`http://localhost:9090`
-- `Tempo`：`http://localhost:3200`
-- `Loki`：`http://localhost:3100`
-
-说明：
-
-- `http://localhost:8080/` 返回 `404` 是正常的，根路径未注册。
-- `http://localhost:3200/` 和 `http://localhost:3100/` 返回 `404` 也正常，`Tempo` 和 `Loki` 主要提供 API，不提供首页 UI。
-- `Grafana` 默认账号密码是 `admin / admin`。
-
-### 3. 如何验证 trace
-
-需要区分两种场景：
-
-- **模板空骨架**：新物化出来的 `demo-app` 默认不注册任何业务路由，因此 `http://localhost:8080/` 以及 `/v1/greeter/tao` 返回 `404` 都是正常的；这只能证明服务进程已启动，不能用来验证业务接口。
-- **业务化 demo-app**：如果当前 `demo-app/` 已经生成了 `Greeter` 等示例接口，再使用对应路由做 trace 验证。
-
-如果你当前运行的是带 `Greeter` 示例的业务化 `demo-app`，可以执行：
-
-```bash
-curl http://localhost:8080/v1/greeter/tao
-curl http://localhost:8080/v1/greeter/test
-```
-
-随后在 `Grafana -> Explore -> Tempo` 中查询 `demo-app` 的最新 trace。具体 operation 名称取决于当前物化项目里实际注册了哪些 HTTP/gRPC 服务，不应再假定一定是 `/greeter.v1.Greeter/SayHello`。
-
-查看更详细的 span 信息时：
-
-1. 进入 `Grafana -> Explore`
-2. 数据源选择 `Tempo`
-3. 点击一条 `Trace ID`
-4. 再点击具体 span
-5. 在详情面板查看 `Attributes`、`Resource attributes`、`Events`
-
-### 4. 如何验证日志
-
-`Loki` 已接入两类日志：
-
-- Docker 容器日志
-- `LarkFlow/logs/larkflow.jsonl` 文件日志
-- `LarkFlow/logs/*.log` 运行时控制台日志
-
-在 `Grafana -> Explore` 中把数据源切换为 `Loki`，可直接使用这些查询：
-
-```logql
-{service="demo-app"}
-```
-
-```logql
-{service="otel-collector"}
-```
-
-```logql
-{service="larkflow"}
-```
-
-如果你是按上面的推荐命令把 `pipeline.lark_interaction` 输出重定向到了 `logs/lark_listener.log`，可以单独查运行时控制台日志：
-
-```logql
-{service="larkflow", filename=~".*lark_listener\\.log"}
-```
-
-如果页面为空，优先检查：
-
-- 时间范围是否至少为 `Last 1 hour`
-- 是否已重新创建 `grafana` 容器以加载新增数据源
-
-也可以直接用 API 验证 Loki：
-
-```bash
-curl http://localhost:3100/ready
-curl http://localhost:3100/loki/api/v1/labels
-```
-
-### 5. `demo-app` 的最小 OTEL 接入范围
-
-为了尽量不影响原有 Docker 启动链路，`demo-app` 目前只做了最小侵入的 trace 接入：
-
-- 通过 `OTEL_EXPORTER_OTLP_ENDPOINT` 环境变量控制是否启用 OTEL
-- `cmd/server/main.go` 初始化 tracer provider
-- `internal/server/http.go` / `grpc.go` 仅增加 tracing middleware
-
-当前目标是先保证：
-
-- 原有服务能继续启动
-- `demo-app -> otel-collector -> tempo -> grafana` 链路可验证
-
-因此这一版没有额外引入：
-
-- 自定义业务 span
-- trace 与应用日志的自动关联字段
-- `demo-app` 自身的 metrics dashboard
-
-### 6. `LarkFlow` 主流程的最小 OTEL 接入
-
-`LarkFlow` 侧把 OTEL 相关实现集中到了 [LarkFlow/telemetry/otel.py](/Users/tao/PyCharmProject/LarkFlow/LarkFlow/telemetry/otel.py) 和 [LarkFlow/telemetry/hooks.py](/Users/tao/PyCharmProject/LarkFlow/LarkFlow/telemetry/hooks.py)，并在以下位置接入了最小 span：
-
-- `pipeline/lark_interaction.py`
-  - `lark.start_request`
-  - `lark.card_action`
-  - `lark.bitable_record_changed`
-- `pipeline/engine.py`
-  - `pipeline.start_new_demand`
-  - `pipeline.resume_from_phase`
-  - `pipeline.resume_after_approval`
-  - `phase.design`
-  - `phase.coding`
-  - `phase.testing`
-  - `phase.reviewing`
-  - `phase.deploying`
-- `pipeline/llm_adapter.py`
-  - `llm.call`
-- `pipeline/tools_runtime.py`
-  - `tool.execute`
-
-这版的定位是“先把主流程看见”，不是完整分布式追踪。当前更适合用：
-
-- `trace` 看流程经过了哪些阶段
-- `logs/larkflow.jsonl` 看具体日志正文
-- `demand_id` 关联跨阶段信息
-
-### 7. `LarkFlow` 启用 OTEL 的环境变量
-
-在 [LarkFlow/.env.example](/Users/tao/PyCharmProject/LarkFlow/LarkFlow/.env.example) 中已经补充：
-
-```env
-OTEL_EXPORTER_OTLP_ENDPOINT=localhost:4317
-OTEL_SERVICE_NAME=larkflow
-```
-
-说明：
-
-- 宿主机直接启动 `LarkFlow` 时，通常使用 `localhost:4317`
-- 如果以后把 `LarkFlow` 也放进 Compose 网络，再改为 `otel-collector:4317`
-- 未设置 `OTEL_EXPORTER_OTLP_ENDPOINT` 时，`LarkFlow` OTEL 为 no-op，不影响原有流程
-
-### 8. 当前验收口径
-
-本地可观测性已验证通过的范围是：
-
-- `docker-compose.yml` 能启动 `otel-collector + tempo + grafana + prometheus + loki + promtail + demo-app`
-- `demo-app` 可通过 `curl /v1/greeter/{name}` 产生 trace
-- `Grafana -> Tempo` 能查到 `demo-app` 的 `SayHello` trace
-- `Grafana -> Loki` 能查到 `demo-app`、`otel-collector` 和 `larkflow` 的日志流
-
-当前仍需注意的边界：
-
-- `Tempo` 和 `Loki` 根路径 `404` 属于正常现象
-- `demo-app` 根路径 `/` 返回 `404` 也正常
-- `LarkFlow` 现在已能发关键流程 span，但还没有把完整日志正文直接嵌进 trace 详情页
-
----
 
 ## 核心特性：按需检索 (RAG) 知识库
 
