@@ -12,6 +12,8 @@ import os
 import sys
 from typing import Any, Dict, Mapping, Optional
 
+from pipeline.contracts import MetricsItem, PipelineState, TokenUsage
+
 _LOGGER_NAME = "larkflow"
 
 # 这里列的是允许写入结构化 JSON 的标准 extra 字段。
@@ -326,3 +328,65 @@ def accumulate_metrics(session: Dict[str, Any], usage: Mapping[str, Any]) -> Non
     metrics["total_tokens"] += int(usage.get("total_tokens") or 0)
     metrics["duration_ms"] += int(usage.get("latency_ms") or 0)
     metrics["latency_ms"] += int(usage.get("latency_ms") or 0)
+
+
+def _coerce_int(value: Any) -> int:
+    """
+    把任意输入尽量转成非负整数。
+
+    @params:
+        value: 待转换的输入值
+
+    @return:
+        成功时返回非负整数；失败时返回 0
+    """
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _read_metric(metrics: Mapping[str, Any], *names: str) -> int:
+    """
+    按顺序读取聚合指标字段，兼容新旧 key。
+
+    @params:
+        metrics: session["metrics"] 字典
+        names: 候选字段名列表
+
+    @return:
+        返回第一个成功解析到的非负整数；全都缺失时返回 0
+    """
+    for name in names:
+        if name in metrics:
+            return _coerce_int(metrics.get(name))
+    return 0
+
+
+def build_metrics_item(
+    pipeline_id: str,
+    state: PipelineState,
+    session: Optional[Mapping[str, Any]],
+) -> MetricsItem:
+    """
+    从 PipelineState + session 快照构造 `/metrics/pipelines` 响应项。
+
+    @params:
+        pipeline_id: pipeline ID
+        state: 由 engine_control.build_state 反射出的运行态
+        session: 原始 session 快照，可为空
+
+    @return:
+        返回填充好 tokens / duration / stages 的 MetricsItem
+    """
+    metrics = (session or {}).get("metrics") or {}
+    return MetricsItem(
+        pipeline_id=pipeline_id,
+        status=state.status,
+        duration_ms=_read_metric(metrics, "duration_ms", "latency_ms"),
+        tokens=TokenUsage(
+            input=_read_metric(metrics, "tokens_input", "tokens_in"),
+            output=_read_metric(metrics, "tokens_output", "tokens_out"),
+        ),
+        stages=state.stages,
+    )

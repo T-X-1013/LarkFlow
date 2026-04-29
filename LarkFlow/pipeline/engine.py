@@ -29,7 +29,13 @@ from pipeline.tools_runtime import ToolContext, execute as execute_local_tool
 from pipeline.persistence import SessionStore, default_store
 from pipeline.observability import accumulate_metrics, get_logger, log_turn_metrics
 from pipeline.deploy_strategy import get_strategy
-from pipeline.engine_control import PipelineCancelled, check_lifecycle
+from pipeline.engine_control import (
+    PipelineCancelled,
+    check_lifecycle,
+    get as get_pipeline_control,
+    phase_to_stage,
+)
+from pipeline.contracts import StageResult, StageStatus, TokenUsage
 from telemetry.hooks import (
     trace_approval_resume,
     trace_demand_start,
@@ -58,6 +64,16 @@ def _load_session(demand_id: str) -> Optional[Dict[str, Any]]:
 
 
 def _save_session(demand_id: str, session: Dict[str, Any]) -> None:
+    """
+    把当前 session 写回持久化存储。
+
+    @params:
+        demand_id: 需求 ID
+        session: 当前运行时 session
+
+    @return:
+        无返回值；直接把 session 保存到 STORE
+    """
     STORE.save(demand_id, session)
 
 # ==========================================
@@ -130,11 +146,35 @@ def _resolve_workspace_and_target(session_target: str = None) -> tuple:
     return workspace_root, target_dir
 
 
+def _resolve_provider_for_new_demand(demand_id: str) -> str:
+    """
+    解析新 pipeline 首次启动时应使用的 provider。
+
+    优先级：
+    1. engine_control 中由 REST 预先写入的 ctl.provider
+    2. 环境变量 `LLM_PROVIDER`
+    """
+    ctl = get_pipeline_control(demand_id)
+    if ctl and ctl.provider:
+        return get_provider_name(ctl.provider)
+    return get_provider_name()
+
+
 # ==========================================
 # 2. 核心 Agent 循环 (处理 Tool Calling)
 # ==========================================
 # A3 可靠性参数：从环境变量读取，给出生产友好的默认值
 def _env_int(name: str, default: int) -> int:
+    """
+    从环境变量读取正整数配置，并提供兜底默认值。
+
+    @params:
+        name: 环境变量名
+        default: 读取失败或值非法时的默认值
+
+    @return:
+        返回不小于 1 的整数配置
+    """
     raw = os.getenv(name)
     if not raw:
         return default
@@ -423,6 +463,15 @@ _PHASE_CONFIG: Dict[str, Dict[str, Any]] = {
 # 映射到 engine phase 名（testing/reviewing）。deploying 不在 DAG 内，
 # 作为 review 之后的终点动作保留。
 def _build_next_phase_from_dag() -> Dict[str, str]:
+    """
+    根据默认 DAG 生成 engine 使用的阶段推进映射。
+
+    @params:
+        无
+
+    @return:
+        返回 `{当前 phase: 下一 phase}` 的映射字典
+    """
     from pipeline.dag import default_dag
     from pipeline.engine_control import stage_to_phase
 
@@ -449,8 +498,111 @@ _PHASE_BANNER: Dict[str, tuple] = {
 }
 
 
+# ==========================================
+# D4: Stage 产物契约落盘
+# ==========================================
+# session 约定字段（dict，运行时 setdefault 注入）：
+#   session["stage_results"]: Dict[stage_value, StageResult.model_dump(mode="json")]
+#   session["_stage_start"]:  Dict[phase, {"ts": float, "tokens_in": int, "tokens_out": int}]
+# stage_value 走 contracts.Stage ("design"/"coding"/"test"/"review")；
+# phase 走 engine 内部 ("design"/"coding"/"testing"/"reviewing")，两者经 phase_to_stage 转换。
+
+
+def _resolve_artifact_path(phase: str, session: Dict[str, Any]) -> Optional[str]:
+    """按 phase 约定解析 artifact 路径；拿不到就返回 None。"""
+    demand_id = session.get("demand_id")
+    target_dir = session.get("target_dir")
+
+    if phase == PHASE_DESIGN:
+        # Design 产物优先用已创建的飞书技术方案文档 URL
+        pending = session.get("pending_approval") or {}
+        tech_url = pending.get("tech_doc_url")
+        if tech_url:
+            return tech_url
+        if demand_id:
+            candidate = os.path.join("tmp", str(demand_id), "design.md")
+            return candidate if os.path.exists(candidate) else None
+        return None
+
+    # Coding / Testing / Reviewing 三阶段产物都沉淀在 target_dir
+    if phase in (PHASE_CODING, PHASE_TESTING, PHASE_REVIEWING) and target_dir:
+        return target_dir
+
+    return None
+
+
+def _record_stage_start(session: Dict[str, Any], phase: str) -> None:
+    """阶段入场记快照（ts + tokens 基线），用于出场时算 duration / tokens delta。"""
+    metrics = session.get("metrics") or {}
+    session.setdefault("_stage_start", {})[phase] = {
+        "ts": time.time(),
+        "tokens_in": int(metrics.get("tokens_input", 0) or 0),
+        "tokens_out": int(metrics.get("tokens_output", 0) or 0),
+    }
+
+
+def _record_stage_result(
+    demand_id: str,
+    phase: str,
+    status: StageStatus,
+    errors: Optional[list] = None,
+    artifact_path: Optional[str] = None,
+) -> None:
+    """
+    出场结算 StageResult 并写入 session['stage_results']。
+
+    - phase: engine 内部命名（design/coding/testing/reviewing）；非契约四阶段（如 deploying）直接跳过
+    - status: StageStatus 枚举（success/failed/rejected/pending）
+    - tokens/duration 从 session['metrics'] 减去 session['_stage_start'][phase] 基线得到
+    - artifact_path 为 None 时走 _resolve_artifact_path 兜底
+    """
+    stage = phase_to_stage(phase)
+    if stage is None:
+        return
+
+    session = _load_session(demand_id)
+    if not session:
+        return
+
+    metrics = session.get("metrics") or {}
+    start = (session.get("_stage_start") or {}).get(phase) or {}
+    tokens_in_delta = max(
+        0,
+        int(metrics.get("tokens_input", 0) or 0) - int(start.get("tokens_in", 0) or 0),
+    )
+    tokens_out_delta = max(
+        0,
+        int(metrics.get("tokens_output", 0) or 0) - int(start.get("tokens_out", 0) or 0),
+    )
+    duration_ms = (
+        int((time.time() - float(start["ts"])) * 1000) if start.get("ts") else 0
+    )
+
+    if artifact_path is None:
+        artifact_path = _resolve_artifact_path(phase, session)
+
+    result = StageResult(
+        stage=stage,
+        status=status,
+        artifact_path=artifact_path,
+        tokens=TokenUsage(input=tokens_in_delta, output=tokens_out_delta),
+        duration_ms=duration_ms,
+        errors=list(errors or []),
+    )
+    session.setdefault("stage_results", {})[stage.value] = result.model_dump(mode="json")
+    _save_session(demand_id, session)
+
+
 def _mark_failed(demand_id: str, phase: str, error: str) -> None:
-    """把 session 置为 failed 并落盘，同时飞书告警（如有配置）。"""
+    """把 session 置为 failed 并落盘，同时飞书告警（如有配置）。
+
+    D4：在翻转 session.phase 之前先把对应 stage 的 StageResult 记为 failed，
+    errors 携带异常文本；phase 不在契约四阶段内（如 deploying）时自动短路。
+    """
+    # 先写 StageResult(failed)，再翻 session.phase；顺序反过来会导致下面
+    # _load_session 里拿到的是 PHASE_FAILED 的 session，但 stage_results 仍应按真实 phase 记
+    _record_stage_result(demand_id, phase, StageStatus.FAILED, errors=[error])
+
     session = _load_session(demand_id)
     if not session:
         return
@@ -494,9 +646,21 @@ def _advance_to_phase(demand_id: str, phase: str) -> Optional[Dict[str, Any]]:
 
 
 def _run_phase(demand_id: str, phase: str) -> bool:
-    """加载指定 phase 的 prompt 并运行 agent loop；异常时置 failed 态。"""
+    """加载指定 phase 的 prompt 并运行 agent loop；异常时置 failed 态。
+
+    D4：入场写 _stage_start 快照；正常完成写 StageResult(success)。
+    pending_approval 与 PipelineCancelled 不写快照，保留中断语义；
+    崩溃路径由 _mark_failed 内部补记 StageResult(failed)。
+    """
     prompt_file = _PHASE_CONFIG[phase]["prompt"]
     logger = get_logger(demand_id, phase)
+
+    # 入场快照：记 ts + tokens 基线，供出场结算 duration / tokens delta
+    session = _load_session(demand_id)
+    if session is not None:
+        _record_stage_start(session, phase)
+        _save_session(demand_id, session)
+
     try:
         # 协作式 pause/stop 检查（未注册 pipeline 的旧入口会直接返回）
         check_lifecycle(demand_id)
@@ -504,6 +668,10 @@ def _run_phase(demand_id: str, phase: str) -> bool:
             system_prompt = load_prompt(prompt_file)
             completed = run_agent_loop(demand_id, system_prompt)
             span.set_attribute("phase.completed", completed)
+            if completed:
+                _record_stage_result(demand_id, phase, StageStatus.SUCCESS)
+            # completed=False 且无异常 → pending_approval 挂起；StageResult 由后续
+            # resume_after_approval 按 approved/rejected 补写，此处刻意不记
             return completed
     except PipelineCancelled:
         logger.info(
@@ -555,7 +723,11 @@ def start_new_demand(
             extra={"event": "scaffold_ready", "phase": PHASE_DESIGN},
         )
 
-        provider = get_provider_name()
+        provider = _resolve_provider_for_new_demand(demand_id)
+        ctl = get_pipeline_control(demand_id)
+        if ctl is not None and ctl.provider != provider:
+            ctl.provider = provider
+            ctl.touch()
         client = build_client(provider)
         session = initialize_session(provider, f"新需求：{requirement}", client)
         session["demand_id"] = demand_id
@@ -650,12 +822,22 @@ def resume_after_approval(demand_id: str, approved: bool, feedback: str):
         _save_session(demand_id, session)
 
         if approved:
+            # Design 在挂起瞬间刻意未写 StageResult（见 _run_phase），
+            # 审批通过后补记 success；duration 含审批等待时间，是已知口径
+            _record_stage_result(demand_id, PHASE_DESIGN, StageStatus.SUCCESS)
             resume_from_phase(demand_id, PHASE_CODING)
         else:
-            # 驳回：回到 Phase 1 重新设计
+            # 驳回：先把当次 Design 记为 rejected，feedback 作为 errors；
+            # 重跑 Design 若成功会再次覆盖为 success，符合"最新真相"语义
             logger.info(
                 "approval rejected, retry design",
                 extra={"event": "approval_rejected", "phase": PHASE_DESIGN},
+            )
+            _record_stage_result(
+                demand_id,
+                PHASE_DESIGN,
+                StageStatus.REJECTED,
+                errors=[feedback] if feedback else [],
             )
             session = _load_session(demand_id)
             if session:
