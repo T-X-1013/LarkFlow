@@ -70,19 +70,19 @@ npm run dev
 - `http://localhost:4173/`
   首页，用于说明当前控制台能力和后续联调方向
 
-  ![frontend](assets/larkflow-fronted/img1.png)
+  ![frontend](assets/larkflow-frontend/img1.png)
 
 - `http://localhost:4173/pipelines`
   Pipeline 列表页，支持 mock 创建、搜索、状态筛选、Provider 筛选
   
-  ![frontend](assets/larkflow-fronted/img2.png)
+  ![frontend](assets/larkflow-frontend/img2.png)
 
 - `http://localhost:4173/pipelines/DEMAND-a1f2c3d4`
   Pipeline 详情页，支持状态切换、Provider 切换、checkpoint approve/reject、artifact 预览
   
-  ![frontend](assets/larkflow-fronted/img3.png)
+  ![frontend](assets/larkflow-frontend/img3.png)
 
 - `http://localhost:4173/dashboard`
   仪表盘页，展示 mock 指标汇总、状态分布、Provider 分布和耗时排名
   
-  ![frontend](assets/larkflow-fronted/img4.png)
+  ![frontend](assets/larkflow-frontend/img4.png)
