@@ -239,7 +239,7 @@ graph TD
 
 `LarkFlow/frontend/` 当前采用 `MSW mock` 方式运行，主要目标是先稳定页面结构、交互流程和契约消费方式。因此，在默认情况下，即使后端服务未启动，前端页面也可以单独运行和演示。在后续的开发中会将 mock 的数据替换为真实的数据。
 
-更具体的内容可以参考这篇文档：[前端说明文档](doc/Larkflow_frontend_introduction.md)
+更具体的内容可以参考这篇文档：[前端说明文档](LarkFlow/docs/Larkflow_frontend_introduction.md)
 
 本地启动命令：
 
@@ -607,7 +607,7 @@ python pipeline/engine.py
 
 我们希望 LarkFlow 的运行过程不是黑盒，而是一个可观察、可分析、可排查的问题定位界面。
 
-更加详细的启动和操作流程可以参考这篇文档：[Grafana 介绍文档](doc/Larkflow_Grafana_introduction.md)
+更加详细的启动和操作流程可以参考这篇文档：[Grafana 介绍文档](LarkFlow/docs/Larkflow_Grafana_introduction.md)
 
 
 ## 核心特性：按需检索 (RAG) 知识库
