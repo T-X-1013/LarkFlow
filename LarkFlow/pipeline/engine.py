@@ -29,7 +29,12 @@ from pipeline.tools_runtime import ToolContext, execute as execute_local_tool
 from pipeline.persistence import SessionStore, default_store
 from pipeline.observability import accumulate_metrics, get_logger, log_turn_metrics
 from pipeline.deploy_strategy import get_strategy
-from pipeline.engine_control import PipelineCancelled, check_lifecycle, phase_to_stage
+from pipeline.engine_control import (
+    PipelineCancelled,
+    check_lifecycle,
+    get as get_pipeline_control,
+    phase_to_stage,
+)
 from pipeline.contracts import StageResult, StageStatus, TokenUsage
 from telemetry.hooks import (
     trace_approval_resume,
@@ -59,6 +64,16 @@ def _load_session(demand_id: str) -> Optional[Dict[str, Any]]:
 
 
 def _save_session(demand_id: str, session: Dict[str, Any]) -> None:
+    """
+    把当前 session 写回持久化存储。
+
+    @params:
+        demand_id: 需求 ID
+        session: 当前运行时 session
+
+    @return:
+        无返回值；直接把 session 保存到 STORE
+    """
     STORE.save(demand_id, session)
 
 # ==========================================
@@ -131,11 +146,35 @@ def _resolve_workspace_and_target(session_target: str = None) -> tuple:
     return workspace_root, target_dir
 
 
+def _resolve_provider_for_new_demand(demand_id: str) -> str:
+    """
+    解析新 pipeline 首次启动时应使用的 provider。
+
+    优先级：
+    1. engine_control 中由 REST 预先写入的 ctl.provider
+    2. 环境变量 `LLM_PROVIDER`
+    """
+    ctl = get_pipeline_control(demand_id)
+    if ctl and ctl.provider:
+        return get_provider_name(ctl.provider)
+    return get_provider_name()
+
+
 # ==========================================
 # 2. 核心 Agent 循环 (处理 Tool Calling)
 # ==========================================
 # A3 可靠性参数：从环境变量读取，给出生产友好的默认值
 def _env_int(name: str, default: int) -> int:
+    """
+    从环境变量读取正整数配置，并提供兜底默认值。
+
+    @params:
+        name: 环境变量名
+        default: 读取失败或值非法时的默认值
+
+    @return:
+        返回不小于 1 的整数配置
+    """
     raw = os.getenv(name)
     if not raw:
         return default
@@ -424,6 +463,15 @@ _PHASE_CONFIG: Dict[str, Dict[str, Any]] = {
 # 映射到 engine phase 名（testing/reviewing）。deploying 不在 DAG 内，
 # 作为 review 之后的终点动作保留。
 def _build_next_phase_from_dag() -> Dict[str, str]:
+    """
+    根据默认 DAG 生成 engine 使用的阶段推进映射。
+
+    @params:
+        无
+
+    @return:
+        返回 `{当前 phase: 下一 phase}` 的映射字典
+    """
     from pipeline.dag import default_dag
     from pipeline.engine_control import stage_to_phase
 
@@ -675,7 +723,11 @@ def start_new_demand(
             extra={"event": "scaffold_ready", "phase": PHASE_DESIGN},
         )
 
-        provider = get_provider_name()
+        provider = _resolve_provider_for_new_demand(demand_id)
+        ctl = get_pipeline_control(demand_id)
+        if ctl is not None and ctl.provider != provider:
+            ctl.provider = provider
+            ctl.touch()
         client = build_client(provider)
         session = initialize_session(provider, f"新需求：{requirement}", client)
         session["demand_id"] = demand_id

@@ -176,6 +176,19 @@ def get_provider_name(provider: Optional[str] = None) -> str:
     return _get_provider_spec(resolved).name
 
 
+def validate_provider_name(provider: str) -> str:
+    """
+    校验并归一化运行时输入的 provider 名称。
+
+    @params:
+        provider: 待校验的 provider 名称
+
+    @return:
+        返回 registry 中归一化后的 provider 名称
+    """
+    return get_provider_name(provider)
+
+
 def _require_config(value: str, message: str) -> str:
     """
     读取必填配置项，不存在时抛出可读错误。

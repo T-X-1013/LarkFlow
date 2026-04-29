@@ -13,6 +13,7 @@ from pipeline.llm_adapter import (
     register_provider,
     reload_provider_registry,
     ToolCall,
+    validate_provider_name,
 )
 
 
@@ -20,6 +21,15 @@ class FakeAnthropicMessages:
     """模拟 Anthropic messages.create 的最小返回结构。"""
 
     def create(self, **kwargs):
+        """
+        返回一条固定的 Anthropic 响应。
+
+        @params:
+            kwargs: 透传的请求参数，本测试中不做进一步断言
+
+        @return:
+            返回带 content、stop_reason 和 usage 的最小响应对象
+        """
         return SimpleNamespace(
             content=[
                 SimpleNamespace(type="text", text="anthropic done"),
@@ -36,6 +46,15 @@ class FakeAnthropicClient:
     """模拟 Anthropic client，只暴露 llm_adapter 当前需要的 messages 接口。"""
 
     def __init__(self):
+        """
+        初始化最小可用的 Anthropic client stub。
+
+        @params:
+            无
+
+        @return:
+            无返回值；挂载 messages stub
+        """
         self.messages = FakeAnthropicMessages()
 
 
@@ -43,6 +62,15 @@ class FakeOpenAIResponses:
     """模拟 OpenAI Responses API，支持记录调用参数和按顺序吐出响应。"""
 
     def __init__(self, responses):
+        """
+        初始化可按顺序返回的 Responses API stub。
+
+        @params:
+            responses: 单个响应对象或响应对象列表
+
+        @return:
+            无返回值；内部保存响应队列和调用记录
+        """
         if isinstance(responses, list):
             self.responses = list(responses)
         else:
@@ -50,6 +78,15 @@ class FakeOpenAIResponses:
         self.calls = []
 
     def create(self, **kwargs):
+        """
+        记录本次调用参数并弹出下一条预设响应。
+
+        @params:
+            kwargs: responses.create 的请求参数
+
+        @return:
+            返回预设响应列表中的下一项
+        """
         self.calls.append(kwargs)
         return self.responses.pop(0)
 
@@ -58,6 +95,15 @@ class FakeOpenAIClient:
     """模拟带有 responses 子对象的 OpenAI 兼容 client。"""
 
     def __init__(self, responses):
+        """
+        初始化带 responses 子对象的 OpenAI client stub。
+
+        @params:
+            responses: 单个响应对象或响应对象列表
+
+        @return:
+            无返回值；挂载 FakeOpenAIResponses
+        """
         self.responses = FakeOpenAIResponses(responses)
 
 
@@ -65,10 +111,28 @@ class FakeQwenCompletions:
     """模拟 Qwen Chat Completions API。"""
 
     def __init__(self, responses):
+        """
+        初始化 Qwen Chat Completions stub。
+
+        @params:
+            responses: 预设响应列表
+
+        @return:
+            无返回值；内部保存响应队列和调用记录
+        """
         self.responses = list(responses)
         self.calls = []
 
     def create(self, **kwargs):
+        """
+        记录本次调用参数并返回下一条预设响应。
+
+        @params:
+            kwargs: chat.completions.create 的请求参数
+
+        @return:
+            返回预设响应列表中的下一项
+        """
         self.calls.append(kwargs)
         return self.responses.pop(0)
 
@@ -77,6 +141,15 @@ class FakeQwenClient:
     """模拟 DashScope/OpenAI 兼容的 qwen client 入口。"""
 
     def __init__(self, responses):
+        """
+        初始化最小可用的 Qwen client stub。
+
+        @params:
+            responses: 预设响应列表
+
+        @return:
+            无返回值；挂载 chat.completions stub
+        """
         self.chat = SimpleNamespace(completions=FakeQwenCompletions(responses))
 
 
@@ -84,15 +157,26 @@ class LlmAdapterB6TestCase(unittest.TestCase):
     """覆盖 Provider 注册、usage 归一、重试和工具回填等关键适配行为。"""
 
     def tearDown(self):
+        """
+        每个用例结束后重置 provider registry。
+
+        @params:
+            无
+
+        @return:
+            无返回值；避免运行时注册的 provider 污染后续测试
+        """
         reload_provider_registry()
 
     def test_builtin_provider_registry_is_available(self):
+        """验证内置 provider 会在 registry 初始化后稳定可见"""
         self.assertEqual(
             list_provider_names(),
             ["anthropic", "doubao", "openai", "qwen"],
         )
 
     def test_register_provider_allows_runtime_extension_until_reload(self):
+        """验证运行时新增 provider 在 reload 前可用，reload 后会被内置列表覆盖"""
         register_provider(
             "mock",
             build_client=lambda: "mock-client",
@@ -116,11 +200,17 @@ class LlmAdapterB6TestCase(unittest.TestCase):
                 get_provider_name()
 
     def test_get_provider_name_rejects_unknown_provider(self):
+        """未知 provider 应立即报错，避免把非法配置带入运行时"""
         with patch.dict(os.environ, {"LLM_PROVIDER": "unknown"}, clear=False):
             with self.assertRaises(ValueError):
                 get_provider_name()
 
+    def test_validate_provider_name_normalizes_case_and_spaces(self):
+        """provider 名称应允许大小写和前后空格，但最终要归一为稳定值"""
+        self.assertEqual(validate_provider_name(" OpenAI "), "openai")
+
     def test_anthropic_turn_normalizes_usage(self):
+        """Anthropic 的 usage 字段应被统一映射为 input/output/total/latency 结构"""
         session = initialize_session(
             "anthropic",
             "hello",
@@ -137,6 +227,7 @@ class LlmAdapterB6TestCase(unittest.TestCase):
         self.assertEqual(session["history"][-1]["usage"], turn.usage)
 
     def test_create_turn_emits_llm_start_and_end_events_when_logger_present(self):
+        """当 session 带 logger 时，create_turn 应补齐开始和结束两类结构化事件"""
         session = initialize_session(
             "anthropic",
             "hello",
@@ -157,6 +248,7 @@ class LlmAdapterB6TestCase(unittest.TestCase):
         self.assertEqual(finish_mock.call_args[0][2], "anthropic")
 
     def test_openai_turn_normalizes_usage(self):
+        """OpenAI Responses API 的 usage 字段应被统一归一到通用结构"""
         response = SimpleNamespace(
             id="resp-001",
             output=[
@@ -198,6 +290,7 @@ class LlmAdapterB6TestCase(unittest.TestCase):
         self.assertEqual(session["history"][-1]["usage"], turn.usage)
 
     def test_doubao_turn_supports_shared_endpoint_and_tool_result_roundtrip(self):
+        """Doubao 应支持工具调用、function_call_output 回填和 previous_response_id 续接"""
         # 第一轮先返回工具调用，第二轮消费 function_call_output 后再返回最终文本。
         tool_response = SimpleNamespace(
             id="resp-doubao-001",
@@ -305,12 +398,22 @@ class LlmAdapterB6TestCase(unittest.TestCase):
         )
 
     def test_openai_retry_handles_generic_exception(self):
+        """非限流类瞬时失败也应按统一策略重试一次"""
         # 这里不用真实 SDK 异常类型，重点验证非限流的瞬时失败也会按统一策略重试一次。
         response = SimpleNamespace(id="resp-ok")
         calls = []
 
         class FlakyResponses:
             def create(self, **kwargs):
+                """
+                首次调用抛错，第二次调用返回成功响应。
+
+                @params:
+                    kwargs: responses.create 请求参数
+
+                @return:
+                    第二次调用时返回预设成功响应
+                """
                 calls.append(kwargs)
                 if len(calls) == 1:
                     raise RuntimeError("temporary failure")
@@ -338,6 +441,7 @@ class LlmAdapterB6TestCase(unittest.TestCase):
         sleep_mock.assert_called_once_with(0.0)
 
     def test_qwen_turn_supports_tool_call_and_tool_result_roundtrip(self):
+        """Qwen 的 Chat Completions 协议应支持工具调用和 role=tool 回填闭环"""
         # Qwen 走 Chat Completions 协议，工具结果需要回填成 role=tool 的消息结构。
         tool_response = SimpleNamespace(
             choices=[

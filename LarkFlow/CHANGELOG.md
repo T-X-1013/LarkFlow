@@ -532,3 +532,38 @@ D1–D3 主干闭环：pipeline 从"黑箱自动跑"升级为"可操控流水线
 ### Notes
 - 当前前端仍默认走 `MSW` mock，真实 API 联调属于后续阶段。
 - `git_tool.py` 目前是独立库层和单测，尚未接入 `tools_schema` 实际工具列表和 `tools_runtime.execute()` 分发。
+
+## v1.10.0 (2026-04-29)
+
+### Overview
+D4 接线完成：把 `provider` 运行时切换从“仅修改状态”补成“真实影响 pipeline 启动 provider”的控制面能力，同时把 `/metrics/pipelines` 从占位返回补成基于 `session["metrics"]` 与 `stage_results` 的真实聚合返回；并补齐对应测试与文档说明。
+
+### Added
+- **Provider 校验入口**：`pipeline/llm_adapter.py` 新增 `validate_provider_name()`，统一复用 registry 完成 provider 名称校验与归一化，避免 REST 层手写 provider 枚举判断。
+- **D4 定向测试**：新增 `tests/unit/engine/test_engine_api_d4.py`，覆盖启动前 provider 切换成功、未知 provider 拒绝、已创建 session 后禁止切换、REST 路由 `400/409` 状态码映射，以及 `/metrics/pipelines` 读取真实聚合数据。
+
+### Changed
+- **Provider 真接线**：
+  - `pipeline/engine_api.py:set_provider()` 不再只是写 `ctl.provider`，而是先做 provider 归一化；一旦 pipeline 已启动或 session 已创建，直接拒绝切换，防止不同 provider 会话协议不兼容。
+  - `pipeline/engine.py:start_new_demand()` 新增 provider 解析优先级：先读 `engine_control` 中由 REST 写入的 `ctl.provider`，否则回退到环境变量 `LLM_PROVIDER`；因此 `PUT /pipelines/{id}/provider` 现在会真实影响后续 `start` 时的 provider。
+- **Metrics 聚合接线**：
+  - `pipeline/observability.py` 新增 `build_metrics_item()`，统一从 `session["metrics"]` 读取 `tokens_input / tokens_output / duration_ms`，并与 `PipelineState.stages` 组合成 `/metrics/pipelines` 响应项。
+  - `pipeline/engine_api.py` 新增 `list_metrics()`；`pipeline/api/routes.py` 的 `GET /metrics/pipelines` 改为调用该聚合入口，不再返回仅带状态的占位结果。
+- **HTTP 错误语义补齐**：`pipeline/api/routes.py:_guard()` 新增异常映射：
+  - `ValueError -> 400`
+  - `RuntimeError -> 409`
+  使非法 provider 和“运行中禁止切换 provider”具备稳定的 REST 行为。
+- **测试补强**：
+  - `tests/unit/llm/test_llm_adapter_b6.py` 补充 provider 名归一测试。
+  - `tests/unit/engine/test_observability_a4.py` 补充 `build_metrics_item()` 对正常 metrics、缺失 metrics、脏数据 metrics 的覆盖。
+- **文档同步**：
+  - 根 `README.md` 更新为已完成态描述：provider 运行时切换已接通、`/metrics/pipelines` 已返回真实聚合值、`GET /pipelines/{id}` 在阶段结果落盘后可返回 `stages.design / coding / test / review` 快照。
+  - `frontend/README.md` 补充 D4 联调现状：后端真实 `provider` 切换与 `metrics` 聚合接口已可用，但前端当前默认仍走 `MSW mock`，真实 API 接线放在 D5。
+
+### Notes
+- 当前 `/metrics/pipelines` 已能在 pipeline 运行过程中返回非零 token 与 duration；但阶段快照 `stages.*` 仍取决于 `stage_results` 何时落盘，因此可能出现“metrics 已有值而 stages 仍为空”的短暂窗口，这属于当前实现口径。
+- D4 实测验证已覆盖：
+  - `start` 前切换 provider 成功并真实生效
+  - 启动后再次切换 provider 被拒绝
+  - `/metrics/pipelines` 返回真实聚合 token / duration
+  - design 审批通过后，`GET /pipelines/{id}` 返回 `stages.design` 的真实阶段快照

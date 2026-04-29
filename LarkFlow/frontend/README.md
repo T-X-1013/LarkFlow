@@ -15,6 +15,12 @@
 - 共享 mock store：详情页状态变化会同步反映到列表页与仪表盘
 - 构建验收：`npm run build` 已通过
 
+后端 D4 已具备真实联调能力：
+
+- `PUT /pipelines/:id/provider` 已可在 `start` 前切换 provider，并真实影响后续 pipeline 启动 provider
+- `GET /metrics/pipelines` 已返回真实 token / duration 聚合
+- 当前前端默认仍走 `MSW mock`，真实 API 接线放在 D5
+
 ## 目录约定
 
 ```text

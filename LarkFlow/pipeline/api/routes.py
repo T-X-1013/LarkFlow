@@ -22,7 +22,6 @@ from pipeline.contracts import (
     CheckpointName,
     CheckpointRejectRequest,
     CreatePipelineRequest,
-    MetricsItem,
     MetricsResponse,
     PipelineCreateResponse,
     PipelineState,
@@ -33,6 +32,15 @@ from pipeline.api.deps import get_engine, require_checkpoint, require_stage
 
 
 def create_app() -> FastAPI:
+    """
+    创建 FastAPI 应用并注册全部 Pipeline 控制端点。
+
+    @params:
+        无
+
+    @return:
+        返回配置完成的 FastAPI 应用实例
+    """
     app = FastAPI(
         title="LarkFlow Pipeline API",
         version="0.1.0",
@@ -49,27 +57,87 @@ def create_app() -> FastAPI:
     # ========== Pipeline CRUD ==========
     @app.post("/pipelines", response_model=PipelineCreateResponse)
     def create_pipeline(body: CreatePipelineRequest, engine=Depends(get_engine)):
+        """
+        创建一条新的 Pipeline 控制记录。
+
+        @params:
+            body: 创建请求，包含需求文本和可选模板名
+            engine: 由依赖注入提供的 engine facade
+
+        @return:
+            返回仅包含 pipeline id 的创建结果
+        """
         state = engine.create_pipeline(body.requirement, body.template)
         return PipelineCreateResponse(id=state.id)
 
     @app.post("/pipelines/{pipeline_id}/start", response_model=PipelineState)
     def start(pipeline_id: str, engine=Depends(get_engine)):
+        """
+        启动指定 Pipeline。
+
+        @params:
+            pipeline_id: 目标 Pipeline ID
+            engine: 由依赖注入提供的 engine facade
+
+        @return:
+            返回启动后的最新 PipelineState
+        """
         return _guard(lambda: engine.start(pipeline_id))
 
     @app.post("/pipelines/{pipeline_id}/pause", response_model=PipelineState)
     def pause(pipeline_id: str, engine=Depends(get_engine)):
+        """
+        暂停指定 Pipeline。
+
+        @params:
+            pipeline_id: 目标 Pipeline ID
+            engine: 由依赖注入提供的 engine facade
+
+        @return:
+            返回暂停后的最新 PipelineState
+        """
         return _guard(lambda: engine.pause(pipeline_id))
 
     @app.post("/pipelines/{pipeline_id}/resume", response_model=PipelineState)
     def resume(pipeline_id: str, engine=Depends(get_engine)):
+        """
+        恢复指定 Pipeline。
+
+        @params:
+            pipeline_id: 目标 Pipeline ID
+            engine: 由依赖注入提供的 engine facade
+
+        @return:
+            返回恢复后的最新 PipelineState
+        """
         return _guard(lambda: engine.resume(pipeline_id))
 
     @app.post("/pipelines/{pipeline_id}/stop", response_model=PipelineState)
     def stop(pipeline_id: str, engine=Depends(get_engine)):
+        """
+        停止指定 Pipeline。
+
+        @params:
+            pipeline_id: 目标 Pipeline ID
+            engine: 由依赖注入提供的 engine facade
+
+        @return:
+            返回停止后的最新 PipelineState
+        """
         return _guard(lambda: engine.stop(pipeline_id))
 
     @app.get("/pipelines/{pipeline_id}", response_model=PipelineState)
     def get(pipeline_id: str, engine=Depends(get_engine)):
+        """
+        查询指定 Pipeline 的当前状态快照。
+
+        @params:
+            pipeline_id: 目标 Pipeline ID
+            engine: 由依赖注入提供的 engine facade
+
+        @return:
+            返回当前 PipelineState
+        """
         return _guard(lambda: engine.get_state(pipeline_id))
 
     # ========== Artifact ==========
@@ -82,6 +150,17 @@ def create_app() -> FastAPI:
         stage: Stage = Depends(require_stage),
         engine=Depends(get_engine),
     ):
+        """
+        查询指定阶段的产物路径。
+
+        @params:
+            pipeline_id: 目标 Pipeline ID
+            stage: 已校验的阶段枚举
+            engine: 由依赖注入提供的 engine facade
+
+        @return:
+            返回阶段产物响应
+        """
         result = _guard(lambda: engine.get_stage_artifact(pipeline_id, stage))
         return ArtifactResponse(
             stage=stage,
@@ -98,6 +177,17 @@ def create_app() -> FastAPI:
         cp: CheckpointName = Depends(require_checkpoint),
         engine=Depends(get_engine),
     ):
+        """
+        通过指定 HITL 检查点。
+
+        @params:
+            pipeline_id: 目标 Pipeline ID
+            cp: 已校验的检查点名称
+            engine: 由依赖注入提供的 engine facade
+
+        @return:
+            返回审批后的最新 PipelineState
+        """
         return _guard(lambda: engine.approve_checkpoint(pipeline_id, cp))
 
     @app.post(
@@ -110,6 +200,18 @@ def create_app() -> FastAPI:
         cp: CheckpointName = Depends(require_checkpoint),
         engine=Depends(get_engine),
     ):
+        """
+        驳回指定 HITL 检查点。
+
+        @params:
+            pipeline_id: 目标 Pipeline ID
+            body: 驳回请求，包含原因
+            cp: 已校验的检查点名称
+            engine: 由依赖注入提供的 engine facade
+
+        @return:
+            返回驳回后的最新 PipelineState
+        """
         return _guard(
             lambda: engine.reject_checkpoint(pipeline_id, cp, body.reason)
         )
@@ -121,31 +223,65 @@ def create_app() -> FastAPI:
         body: ProviderUpdateRequest,
         engine=Depends(get_engine),
     ):
+        """
+        在启动前更新指定 Pipeline 的大模型 Provider。
+
+        @params:
+            pipeline_id: 目标 Pipeline ID
+            body: Provider 更新请求
+            engine: 由依赖注入提供的 engine facade
+
+        @return:
+            返回更新后的最新 PipelineState
+        """
         return _guard(lambda: engine.set_provider(pipeline_id, body.provider))
 
     # ========== Metrics ==========
     @app.get("/metrics/pipelines", response_model=MetricsResponse)
     def metrics(engine=Depends(get_engine)):
-        items = [
-            MetricsItem(
-                pipeline_id=pid,
-                status=state.status,
-                stages=state.stages,
-            )
-            for pid, state in engine.list_states().items()
-        ]
-        return MetricsResponse(pipelines=items)
+        """
+        汇总全部 Pipeline 的指标快照。
+
+        @params:
+            engine: 由依赖注入提供的 engine facade
+
+        @return:
+            返回 MetricsResponse
+        """
+        return MetricsResponse(pipelines=engine.list_metrics())
 
     # ========== Health ==========
     @app.get("/healthz", response_model=Ack)
     def healthz():
+        """
+        返回服务健康检查结果。
+
+        @params:
+            无
+
+        @return:
+            返回固定的 `ok=True` 响应
+        """
         return Ack(ok=True)
 
     return app
 
 
 def _guard(fn):
+    """
+    把 engine facade 抛出的常见异常映射为 HTTP 状态码。
+
+    @params:
+        fn: 需要执行的业务函数
+
+    @return:
+        返回业务函数原始返回值；出错时抛出对应 HTTPException
+    """
     try:
         return fn()
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
