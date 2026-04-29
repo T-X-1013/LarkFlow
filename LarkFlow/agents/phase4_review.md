@@ -122,3 +122,51 @@ Skills consulted: skills/domain/order.md, skills/governance/idempotency.md, skil
 ## Verdict
 Code Review Approved
 ```
+
+## Output Contract (D5 — MACHINE-PARSED, MANDATORY)
+
+The LarkFlow engine parses your final assistant message to decide whether to advance to deploy approval or to auto-regress back to Phase 2 Coding. You MUST conform to the following:
+
+1. **Your final assistant message MUST end with exactly one of these two lines, on its own line, as the last non-empty line:**
+   - `<review-verdict>PASS</review-verdict>` — all 🔴 rules satisfied, ready for deploy approval
+   - `<review-verdict>REGRESS</review-verdict>` — at least one 🔴 rule is violated and cannot be fixed in-place; Phase 2 must rewrite
+
+2. **If and only if the verdict is REGRESS**, immediately before the verdict line you MUST emit:
+   ```
+   <review-findings>
+   - <file:line> — <what is wrong> — <what Phase 2 should do>
+   - ...
+   </review-findings>
+   ```
+   Each bullet must be actionable by a Phase 2 coder who will read only this block (no access to your reasoning). Keep the whole block under 1500 characters.
+
+3. Do NOT emit both tags in the same message. Do NOT wrap the verdict tag in code fences. Do NOT add trailing commentary after the verdict tag.
+
+4. When uncertain, prefer PASS — REGRESS triggers a full re-coding + re-testing cycle (bounded to 3 attempts), so reserve it for genuine 🔴 blockers, not 🟡 polish items.
+
+### Example — PASS
+```
+## Findings
+- [🟡] internal/service/order.go:18 — missing trace_id; fixed in-place.
+
+## Verdict
+Code Review Approved
+
+<review-verdict>PASS</review-verdict>
+```
+
+### Example — REGRESS
+```
+## Findings
+- [🔴] internal/service/order.go:42 — service layer imports gorm directly, violates Kratos layering.
+- [🔴] internal/biz/order.go:15 — usecase depends on concrete *data.OrderRepo instead of biz-owned interface.
+
+## Verdict
+Code Review Blocked
+
+<review-findings>
+- internal/service/order.go:42 — remove gorm import; move DB calls behind biz.OrderRepo interface invoked from usecase.
+- internal/biz/order.go:15 — declare `type OrderRepo interface { ... }` in biz package and depend on it; data package implements it.
+</review-findings>
+<review-verdict>REGRESS</review-verdict>
+```

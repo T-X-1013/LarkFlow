@@ -1,10 +1,12 @@
 import concurrent.futures
 import os
 import random
+import re
 import shutil
 import sys
 import time
-from typing import Dict, Any, Optional
+from datetime import datetime, timezone
+from typing import Dict, Any, Literal, Optional, Tuple
 
 # 将项目根目录加入 sys.path，解决直接运行脚本时的模块导入问题
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -35,7 +37,7 @@ from pipeline.engine_control import (
     get as get_pipeline_control,
     phase_to_stage,
 )
-from pipeline.contracts import StageResult, StageStatus, TokenUsage
+from pipeline.contracts import Stage, StageResult, StageStatus, TokenUsage
 from telemetry.hooks import (
     trace_approval_resume,
     trace_demand_start,
@@ -645,6 +647,137 @@ def _advance_to_phase(demand_id: str, phase: str) -> Optional[Dict[str, Any]]:
     return session
 
 
+# ==========================================
+# D5: Review verdict 解析 —— Phase 4 输出契约见 agents/phase4_review.md
+# ==========================================
+_VERDICT_RE = re.compile(
+    r"<review-verdict>\s*(PASS|REGRESS)\s*</review-verdict>",
+    re.IGNORECASE,
+)
+_FINDINGS_RE = re.compile(
+    r"<review-findings>\s*(.*?)\s*</review-findings>",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _extract_last_assistant_text(session: Dict[str, Any]) -> str:
+    """反向找 session.messages 里最后一条 assistant 文本，支持 str / list[dict|str] 两种格式。"""
+    for msg in reversed(session.get("messages") or []):
+        if msg.get("role") != "assistant":
+            continue
+        content = msg.get("content")
+        if isinstance(content, str):
+            if content.strip():
+                return content
+            continue
+        if isinstance(content, list):
+            parts = []
+            for b in content:
+                if isinstance(b, dict) and b.get("type") == "text":
+                    parts.append(b.get("text") or "")
+                elif isinstance(b, str):
+                    parts.append(b)
+            text = "\n".join(p for p in parts if p)
+            if text.strip():
+                return text
+    return ""
+
+
+def _parse_review_verdict(
+    session: Dict[str, Any],
+) -> Tuple[Literal["pass", "regress"], str]:
+    """解析 Phase 4 Agent 最后一条消息里的 <review-verdict> 与 <review-findings>。
+
+    Returns:
+        (verdict, findings)
+        verdict: "pass" | "regress"
+        findings: REGRESS 时的 findings 文本（可能为空字符串）
+
+    保守策略：找不到标签 → ("pass", "")，避免误伤正常流程。
+    """
+    text = _extract_last_assistant_text(session)
+    if not text:
+        return "pass", ""
+
+    # 取最后一个 verdict 标签（Agent 若在 few-shot 里引用了标签，应以末尾为准）
+    matches = list(_VERDICT_RE.finditer(text))
+    if not matches:
+        return "pass", ""
+    verdict = matches[-1].group(1).upper()
+    if verdict != "REGRESS":
+        return "pass", ""
+
+    findings_match = _FINDINGS_RE.search(text)
+    findings = findings_match.group(1).strip() if findings_match else ""
+    return "regress", findings
+
+
+def _try_regress(demand_id: str, findings: str, logger) -> bool:
+    """Review 结论为 REGRESS 时尝试回退到 on_failure.to 指定的阶段。
+
+    - 从 DAG (default_dag for now, D6 会按 session.template 切换) 读 review.on_failure 策略
+    - 累计 regression.attempts，达 max_attempts 返回 False（上游置 failed）
+    - 否则：递增计数、history 追加、以 user 消息形式注入 findings 作为下轮 Coding 的 kickoff
+    - 返回 True 表示已调度回归，上游应把 current 切换到 policy.to
+    """
+    from pipeline.dag.schema import default_dag
+
+    dag = default_dag()
+    review_node = dag.nodes.get(Stage.REVIEW)
+    if review_node is None:
+        return False
+    policy = review_node.on_failure
+    if policy is None or policy.action != "regress" or policy.to is None:
+        return False
+
+    session = _load_session(demand_id)
+    if session is None:
+        return False
+
+    reg = session.setdefault("regression", {"attempts": 0, "history": []})
+    if reg.get("attempts", 0) >= policy.max_attempts:
+        logger.warning(
+            "regression exhausted",
+            extra={
+                "event": "regression_exhausted",
+                "phase": PHASE_REVIEWING,
+                "attempts": reg.get("attempts", 0),
+                "max": policy.max_attempts,
+            },
+        )
+        return False
+
+    reg["attempts"] = reg.get("attempts", 0) + 1
+    reg.setdefault("history", []).append({
+        "at": datetime.now(timezone.utc).isoformat(),
+        "from": PHASE_REVIEWING,
+        "to": policy.to.value,
+        "findings_len": len(findings),
+    })
+
+    findings_block = findings.strip() or "(Reviewer 未提供具体 findings，请根据上一轮 Review 的整体评价自查并修复。)"
+    kickoff_msg = (
+        f"【自动回归 第 {reg['attempts']} 次 / 上限 {policy.max_attempts}】\n"
+        f"上一轮 Code Review 结论为 REGRESS，需要在现有代码上定向修复以下问题后重跑 Test + Review：\n\n"
+        f"{findings_block}\n\n"
+        f"请严格按 findings 修复，不要引入无关重构；修复后 Phase 3 会重新执行测试。"
+    )
+    append_user_text(session, kickoff_msg)
+    _save_session(demand_id, session)
+
+    logger.info(
+        "regression triggered",
+        extra={
+            "event": "regression_triggered",
+            "phase": PHASE_REVIEWING,
+            "to": policy.to.value,
+            "attempt": reg["attempts"],
+            "max": policy.max_attempts,
+        },
+    )
+    return True
+
+
 def _run_phase(demand_id: str, phase: str) -> bool:
     """加载指定 phase 的 prompt 并运行 agent loop；异常时置 failed 态。
 
@@ -777,6 +910,24 @@ def resume_from_phase(demand_id: str, phase: str) -> None:
             if not completed:
                 # agent 挂起、超轮数或异常。_run_phase 已按需打日志/置 failed
                 return
+
+            # D5：Review 结束后解析 verdict；REGRESS 且未超上限 → 回退到 Coding
+            if current == PHASE_REVIEWING:
+                session = _load_session(demand_id)
+                if session is not None:
+                    verdict, findings = _parse_review_verdict(session)
+                    if verdict == "regress":
+                        if _try_regress(demand_id, findings, logger):
+                            current = PHASE_CODING
+                            continue
+                        # 上限耗尽：置 failed，让外部接管（HITL 或人工介入）
+                        _mark_failed(
+                            demand_id,
+                            PHASE_REVIEWING,
+                            "regression exhausted: review kept returning REGRESS after max attempts",
+                        )
+                        return
+
             current = _NEXT_PHASE[current]
 
         # 第 2 HITL：Review 通过后挂起等部署审批，真正部署由
