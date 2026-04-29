@@ -22,7 +22,6 @@ from pipeline.contracts import (
     Stage,
     StageResult,
     StageStatus,
-    TokenUsage,
 )
 
 
@@ -174,9 +173,6 @@ def cancel(demand_id: str) -> PipelineControl:
 # ==========================================
 # 状态反射：session + control → PipelineState
 # ==========================================
-_TERMINAL_PHASES = {"done", "failed"}
-
-
 def _infer_status(ctl: PipelineControl, session_phase: Optional[str]) -> PipelineStatus:
     if ctl.cancel_flag.is_set():
         return PipelineStatus.STOPPED
@@ -204,22 +200,19 @@ def build_state(ctl: PipelineControl, session: Optional[Dict]) -> PipelineState:
     phase = (session or {}).get("phase") if session else None
     current_stage = phase_to_stage(phase) if phase else None
 
+    # D4：从 session["stage_results"] 反序列化真实 StageResult。
+    # 不存在时返回空 dict；不合法条目跳过，不阻塞状态查询。
     stages: Dict[Stage, StageResult] = {}
-    metrics = (session or {}).get("metrics") or {}
-    # 以 engine 既有累计 metrics 做占位；D4 真实埋点补全
-    if phase and current_stage:
-        stages[current_stage] = StageResult(
-            stage=current_stage,
-            status=(
-                StageStatus.SUCCESS
-                if phase in _TERMINAL_PHASES
-                else StageStatus.PENDING
-            ),
-            tokens=TokenUsage(
-                input=int(metrics.get("input_tokens", 0) or 0),
-                output=int(metrics.get("output_tokens", 0) or 0),
-            ),
-        )
+    raw_stages = (session or {}).get("stage_results") or {}
+    for stage_key, payload in raw_stages.items():
+        try:
+            stage_enum = Stage(stage_key)
+        except ValueError:
+            continue
+        try:
+            stages[stage_enum] = StageResult(**payload)
+        except Exception:  # noqa: BLE001 — 数据损坏不应拖垮 API
+            continue
 
     return PipelineState(
         id=ctl.demand_id,
