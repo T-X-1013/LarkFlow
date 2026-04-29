@@ -237,7 +237,7 @@ graph TD
 
 ### 4. 前端控制台
 
-`LarkFlow/frontend/` 当前采用 `MSW mock` 方式运行，主要目标是先稳定页面结构、交互流程和契约消费方式。因此，在默认情况下，即使后端服务未启动，前端页面也可以单独运行和演示。
+`LarkFlow/frontend/` 当前采用 `MSW mock` 方式运行，主要目标是先稳定页面结构、交互流程和契约消费方式。因此，在默认情况下，即使后端服务未启动，前端页面也可以单独运行和演示。在后续的开发中会将 mock 的数据替换为真实的数据。
 
 更具体的内容可以参考这篇文档：https://jcneyh7qlo8i.feishu.cn/wiki/HJGHwea5XibKjDkPN1ic9wAdn9f 
 
