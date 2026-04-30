@@ -275,6 +275,16 @@ def list_metrics() -> list[MetricsItem]:
     return items
 
 
+def list_pipelines() -> list[PipelineState]:
+    """
+    列出当前全部 Pipeline 状态快照，供列表页消费。
+
+    @return:
+        返回 PipelineState 列表（按 control 注册表顺序）
+    """
+    return list(list_states().values())
+
+
 def list_states() -> Dict[str, PipelineState]:
     """
     读取当前全部 Pipeline 的状态快照。

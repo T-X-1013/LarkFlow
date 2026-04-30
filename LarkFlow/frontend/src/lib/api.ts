@@ -34,6 +34,10 @@ export function listMetrics() {
   return jsonRequest<MetricsResponse>("/metrics/pipelines");
 }
 
+export function listPipelines() {
+  return jsonRequest<PipelineState[]>("/pipelines");
+}
+
 export function getPipeline(id: string) {
   return jsonRequest<PipelineState>(`/pipelines/${id}`);
 }
