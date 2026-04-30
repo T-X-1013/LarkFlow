@@ -7,8 +7,8 @@ export function HomePage() {
         <p className="eyebrow">Sprint Console</p>
         <h2>把飞书需求、Pipeline 生命周期和人工审批放进一个界面里。</h2>
         <p className="muted">
-          当前前端基于冻结契约和 MSW mock 搭建。它的目标不是先接真实后端，而是先把状态机、审批点和 Provider
-          切换的操作流做成可演示、可联调、可替换的控制台壳。
+          当前前端已经按冻结契约统一走 HTTP API；开发态可通过 `MSW` 开关回退到 mock
+          数据源，真实联调和演示页共用同一套控制台结构。
         </p>
         <div className="hero__grid">
           <div className="stat-card">
@@ -64,8 +64,8 @@ export function HomePage() {
               <tr>
                 <th>1</th>
                 <td>
-                  替换 MSW 为真实 <code>GET /pipelines/:id</code> 与{" "}
-                  <code>GET /metrics/pipelines</code>
+                  先读 <code>GET /metrics/pipelines</code>，再补 <code>GET /pipelines/:id</code>
+                  明细
                 </td>
               </tr>
               <tr>

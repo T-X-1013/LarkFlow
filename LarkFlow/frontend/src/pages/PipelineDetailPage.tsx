@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 
 import {
+  ApiError,
   approveCheckpoint,
   getPipeline,
   getStageArtifact,
@@ -15,15 +16,42 @@ import {
 } from "../lib/api";
 import type { ArtifactResponse, CheckpointName, PipelineState, Stage } from "../types/api";
 
+function toActionErrorMessage(error: unknown) {
+  if (error instanceof ApiError) {
+    if (error.status === 404) return "目标 Pipeline 不存在或已被清理。";
+    if (error.status === 409) return error.message || "当前状态不允许执行该操作。";
+    if (error.status === 400) return error.message || "请求参数校验失败。";
+    return `请求失败（${error.status}）: ${error.message}`;
+  }
+  return error instanceof Error ? error.message : "请求失败，请稍后重试。";
+}
+
 export function PipelineDetailPage() {
   const { pipelineId = "" } = useParams();
   const [pipeline, setPipeline] = useState<PipelineState | null>(null);
   const [lastAction, setLastAction] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [selectedStage, setSelectedStage] = useState<Stage>("design");
   const [artifact, setArtifact] = useState<ArtifactResponse | null>(null);
 
   useEffect(() => {
-    getPipeline(pipelineId).then(setPipeline).catch(() => setPipeline(null));
+    let active = true;
+    getPipeline(pipelineId)
+      .then((next) => {
+        if (active) {
+          setPipeline(next);
+          setErrorMessage(null);
+        }
+      })
+      .catch((error) => {
+        if (active) {
+          setPipeline(null);
+          setErrorMessage(toActionErrorMessage(error));
+        }
+      });
+    return () => {
+      active = false;
+    };
   }, [pipelineId]);
 
   useEffect(() => {
@@ -41,39 +69,74 @@ export function PipelineDetailPage() {
       .catch(() => setArtifact(null));
   }, [pipeline, selectedStage]);
 
+  useEffect(() => {
+    if (!pipeline) return;
+    if (pipeline.status !== "running" && pipeline.status !== "waiting_approval") return;
+
+    const timer = window.setInterval(() => {
+      getPipeline(pipeline.id)
+        .then((next) => {
+          setPipeline(next);
+          setErrorMessage(null);
+        })
+        .catch((error) => {
+          setErrorMessage(toActionErrorMessage(error));
+        });
+    }, 2500);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [pipeline]);
+
   async function runAction(action: "start" | "pause" | "resume" | "stop") {
     if (!pipeline) return;
     const fn =
       action === "start"
         ? startPipeline
         : action === "pause"
-          ? pausePipeline
-          : action === "resume"
-            ? resumePipeline
-            : stopPipeline;
-    setPipeline(await fn(pipeline.id));
-    setLastAction(`已执行 ${action.toUpperCase()} 操作`);
+        ? pausePipeline
+        : action === "resume"
+          ? resumePipeline
+          : stopPipeline;
+    try {
+      setPipeline(await fn(pipeline.id));
+      setLastAction(`已执行 ${action.toUpperCase()} 操作`);
+      setErrorMessage(null);
+    } catch (error) {
+      setErrorMessage(toActionErrorMessage(error));
+    }
   }
 
   async function handleProviderChange(event: ChangeEvent<HTMLSelectElement>) {
     if (!pipeline) return;
     const provider = event.target.value;
-    setPipeline(await updateProvider(pipeline.id, provider));
-    setLastAction(`Provider 已切换为 ${provider}`);
+    try {
+      setPipeline(await updateProvider(pipeline.id, provider));
+      setLastAction(`Provider 已切换为 ${provider}`);
+      setErrorMessage(null);
+    } catch (error) {
+      setErrorMessage(toActionErrorMessage(error));
+    }
   }
 
   async function handleCheckpoint(action: "approve" | "reject", checkpoint: CheckpointName) {
     if (!pipeline) return;
-    const next =
-      action === "approve"
-        ? await approveCheckpoint(pipeline.id, checkpoint)
-        : await rejectCheckpoint(pipeline.id, checkpoint, "mock reject from console");
-    setPipeline(next);
-    setLastAction(
-      action === "approve"
-        ? `已批准 ${checkpoint} checkpoint`
-        : `已驳回 ${checkpoint} checkpoint`,
-    );
+    try {
+      const next =
+        action === "approve"
+          ? await approveCheckpoint(pipeline.id, checkpoint)
+          : await rejectCheckpoint(pipeline.id, checkpoint, "reject from console");
+      setPipeline(next);
+      setLastAction(
+        action === "approve"
+          ? `已批准 ${checkpoint} checkpoint`
+          : `已驳回 ${checkpoint} checkpoint`,
+      );
+      setErrorMessage(null);
+    } catch (error) {
+      setErrorMessage(toActionErrorMessage(error));
+    }
   }
 
   const stageRows = useMemo(() => Object.values(pipeline?.stages ?? {}).filter(Boolean), [pipeline]);
@@ -86,7 +149,7 @@ export function PipelineDetailPage() {
       <section className="page">
         <div className="panel">
           <h2>Pipeline 未找到</h2>
-          <p className="muted">当前 detail 页依赖 MSW mock；请确认 URL 中的 pipeline id 存在于 fixtures。</p>
+          <p className="muted">{errorMessage ?? "请确认 URL 中的 pipeline id 存在且后端服务可访问。"}</p>
         </div>
       </section>
     );
@@ -140,6 +203,7 @@ export function PipelineDetailPage() {
         </button>
       </div>
       {lastAction ? <p className="flash-note">{lastAction}</p> : null}
+      {errorMessage ? <p className="flash-note flash-note--error">{errorMessage}</p> : null}
 
       <div className="details-grid">
         <div className="panel">
@@ -249,7 +313,7 @@ export function PipelineDetailPage() {
           <p className="eyebrow">Artifact Preview</p>
           <h3>{selectedStage} 阶段预览</h3>
           <p className="muted">
-            当前预览内容来自 <code>GET /pipelines/:id/stages/:stage/artifact</code> 的 MSW mock。
+            当前预览内容来自 <code>GET /pipelines/:id/stages/:stage/artifact</code>。
           </p>
           <pre className="artifact-preview">
             {artifact?.content ?? "当前阶段暂无 artifact 内容，或尚未产生产物。"}

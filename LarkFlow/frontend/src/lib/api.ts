@@ -7,8 +7,41 @@ import type {
   CheckpointName,
 } from "../types/api";
 
+export class ApiError extends Error {
+  status: number;
+  detail: unknown;
+
+  constructor(message: string, status: number, detail: unknown) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
+export function shouldUseMsw() {
+  const explicitFlag = (import.meta.env.VITE_USE_MSW as string | undefined)?.trim();
+  const baseUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim();
+
+  if (explicitFlag === "1") {
+    return true;
+  }
+  if (explicitFlag === "0") {
+    return false;
+  }
+  return Boolean(import.meta.env.DEV && !baseUrl);
+}
+
+function buildUrl(path: string) {
+  const baseUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim();
+  if (!baseUrl) {
+    return path;
+  }
+  return `${baseUrl.replace(/\/+$/, "")}${path}`;
+}
+
 async function jsonRequest<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, {
+  const response = await fetch(buildUrl(path), {
     headers: {
       "Content-Type": "application/json",
       ...(init?.headers ?? {}),
@@ -17,10 +50,38 @@ async function jsonRequest<T>(path: string, init?: RequestInit): Promise<T> {
   });
 
   if (!response.ok) {
-    throw new Error(`Request failed: ${response.status}`);
+    let detail: unknown = null;
+    try {
+      detail = await response.json();
+    } catch {
+      detail = await response.text().catch(() => null);
+    }
+    const message =
+      typeof detail === "object" && detail !== null && "detail" in detail
+        ? String((detail as { detail: unknown }).detail)
+        : `Request failed: ${response.status}`;
+    throw new ApiError(message, response.status, detail);
   }
 
-  return (await response.json()) as T;
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!contentType.includes("application/json")) {
+    const body = await response.text().catch(() => "");
+    const looksLikeHtml = body.trim().startsWith("<!doctype") || body.trim().startsWith("<html");
+    const message = looksLikeHtml
+      ? "API 返回了 HTML，不是 JSON。开发态请使用 MSW mock，或设置 VITE_API_BASE_URL 指向后端。"
+      : `Expected JSON response but received ${contentType || "unknown content type"}`;
+    throw new ApiError(message, response.status, body);
+  }
+
+  try {
+    return (await response.json()) as T;
+  } catch (error) {
+    throw new ApiError(
+      error instanceof Error ? error.message : "Invalid JSON response",
+      response.status,
+      null,
+    );
+  }
 }
 
 export function createPipeline(requirement: string, template = "default") {

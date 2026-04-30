@@ -1,25 +1,34 @@
 # Frontend Scaffold
 
-这是基于 `Vite + React + TypeScript + MSW` 的前端脚手架，当前目标是：
+这是基于 `Vite + React + TypeScript + MSW` 的前端控制台。
 
-- 按 `pipeline/contracts.py` / `pipeline/api/routes.py` 的冻结契约建控制台外壳
-- 在真实 API 联调前，全部通过 `MSW` mock 跑通列表页、详情页、首页、仪表盘
-- 后续只替换数据源，不重做页面结构
+当前已支持两种运行模式：
+
+- live API：真实请求后端 REST API
+- MSW mock：本地 mock 数据源，用于脱离后端演示和页面开发
+
+D5 已完成的真实 API 接线范围：
+
+- 列表页：先读 `GET /metrics/pipelines`，再补 `GET /pipelines/{id}`
+- 仪表盘：复用同一套真实聚合数据源
+- 详情页：读取 `GET /pipelines/{id}` 和 `GET /pipelines/{id}/stages/{stage}/artifact`
 
 当前已经落地：
 
 - 首页：能力说明与后续联调顺序
-- Pipeline 列表页：创建 mock pipeline、搜索、状态筛选、Provider 筛选
+- Pipeline 列表页：创建 pipeline、搜索、状态筛选、Provider 筛选
 - Pipeline 详情页：`start/pause/resume/stop`、Provider 切换、checkpoint approve/reject、artifact 预览
 - 仪表盘：Pipeline 总数、耗时、token、状态分布、Provider 分布
-- 共享 mock store：详情页状态变化会同步反映到列表页与仪表盘
+- 保留 `MSW` mock 作为开发态回退
 - 构建验收：`npm run build` 已通过
 
-后端 D4 已具备真实联调能力：
+后端 D4-D5 已具备真实联调能力：
 
 - `PUT /pipelines/:id/provider` 已可在 `start` 前切换 provider，并真实影响后续 pipeline 启动 provider
 - `GET /metrics/pipelines` 已返回真实 token / duration 聚合
-- 当前前端默认仍走 `MSW mock`，真实 API 接线放在 D5
+- D5 已完成真实 API 接线
+- 当前开发态若未配置 `VITE_API_BASE_URL`，默认走 `MSW`
+- 显式设置 `VITE_USE_MSW=0` 且提供 `VITE_API_BASE_URL` 时，走真实后端
 
 ## 目录约定
 
@@ -69,9 +78,29 @@ npm run build
 npm run preview
 ```
 
-## 当前 mock 范围
+## 启动方式
 
-MSW 已覆盖以下契约：
+mock 模式：
+
+```bash
+cd /Users/tao/PyCharmProject/LarkFlow/LarkFlow/frontend
+VITE_USE_MSW=1 npm run dev
+```
+
+live API 模式：
+
+```bash
+cd /Users/tao/PyCharmProject/LarkFlow/LarkFlow/frontend
+VITE_USE_MSW=0 VITE_API_BASE_URL=http://localhost:8000 npm run dev
+```
+
+如果不显式传环境变量：
+
+- 开发态未配置 `VITE_API_BASE_URL` 时，默认启用 `MSW`
+
+## 当前 API / mock 覆盖范围
+
+真实 API 与 MSW 当前共同覆盖以下契约：
 
 - `POST /pipelines`
 - `POST /pipelines/:id/start`
@@ -93,11 +122,12 @@ MSW 已覆盖以下契约：
 1. `npm run dev`
 2. 打开 `http://localhost:4173`
 3. 手动验证列表页、详情页、仪表盘联动
-4. `npm run build`
+4. 视需要切换 `MSW` 或 live API 模式
+5. `npm run build`
 
 重点关注：
 
 - 详情页状态切换后，列表页和仪表盘是否同步更新
 - Provider 切换后，Provider 分布是否变化
 - checkpoint approve/reject 后，状态分布是否变化
-- `updated_at` 是否跟随 mock 写操作刷新
+- live API 模式下 `/metrics/pipelines` 与 `GET /pipelines/:id` 是否返回 JSON

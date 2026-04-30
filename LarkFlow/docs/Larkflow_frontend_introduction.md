@@ -2,7 +2,12 @@
 
 ## 1. 简介
 
-代码位于项目中的 `LarkFlow/frontend/` 目录下。当前阶段的前端控制台采用 `MSW mock` 方式运行，主要目标是先稳定页面结构、交互流程和契约消费方式。因此，在默认情况下，即使后端服务未启动，前端页面也可以单独运行和演示。
+代码位于项目中的 `LarkFlow/frontend/` 目录下。当前前端控制台已支持真实 API 与 `MSW mock` 双模式运行。
+
+- 真实 API 模式：用于与后端 REST 控制面联调
+- `MSW mock` 模式：用于在后端未启动时独立演示页面结构与交互
+
+开发态下，如果未配置 `VITE_API_BASE_URL`，前端默认启用 `MSW`；显式设置 `VITE_USE_MSW=0` 且配置 `VITE_API_BASE_URL` 时，前端会请求真实后端。
 
 当前实现基于以下技术栈：
 
@@ -54,6 +59,20 @@ npm run dev
 
 启动成功后，终端中将显示本地访问地址。当前默认地址为：`http://localhost:4173`
 
+### 2.5 切换到真实 API
+
+如果要联调真实后端，请使用：
+
+```bash
+VITE_USE_MSW=0 VITE_API_BASE_URL=http://localhost:8000 npm run dev
+```
+
+如果只使用 mock：
+
+```bash
+VITE_USE_MSW=1 npm run dev
+```
+
 ## 3. 日常启动
 
 如果已经完成过依赖安装和 `MSW` 初始化，后续日常开发只需要执行：
@@ -73,7 +92,7 @@ npm run dev
   ![frontend](assets/larkflow-frontend/img1.png)
 
 - `http://localhost:4173/pipelines`
-  Pipeline 列表页，支持 mock 创建、搜索、状态筛选、Provider 筛选
+  Pipeline 列表页，支持创建 Pipeline、搜索、状态筛选、Provider 筛选
   
   ![frontend](assets/larkflow-frontend/img2.png)
 
@@ -83,6 +102,6 @@ npm run dev
   ![frontend](assets/larkflow-frontend/img3.png)
 
 - `http://localhost:4173/dashboard`
-  仪表盘页，展示 mock 指标汇总、状态分布、Provider 分布和耗时排名
+  仪表盘页，展示指标汇总、状态分布、Provider 分布和耗时排名
   
   ![frontend](assets/larkflow-frontend/img4.png)

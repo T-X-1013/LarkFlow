@@ -363,6 +363,33 @@ def _read_metric(metrics: Mapping[str, Any], *names: str) -> int:
     return 0
 
 
+def _sum_stage_metric(
+    state: PipelineState,
+    *,
+    field: str,
+    token_side: Optional[str] = None,
+) -> int:
+    """
+    从阶段快照中回退聚合指标，补足 session["metrics"] 缺失的场景。
+
+    @params:
+        state: 已反序列化好的 PipelineState
+        field: 目标字段名，支持 `duration_ms` 或 `tokens`
+        token_side: 当 field=`tokens` 时指定 `input` 或 `output`
+
+    @return:
+        返回阶段级累计值；解析失败时自动按 0 处理
+    """
+    total = 0
+    for stage_result in state.stages.values():
+        if field == "duration_ms":
+            total += _coerce_int(stage_result.duration_ms)
+            continue
+        if field == "tokens" and token_side:
+            total += _coerce_int(getattr(stage_result.tokens, token_side, 0))
+    return total
+
+
 def build_metrics_item(
     pipeline_id: str,
     state: PipelineState,
@@ -380,13 +407,28 @@ def build_metrics_item(
         返回填充好 tokens / duration / stages 的 MetricsItem
     """
     metrics = (session or {}).get("metrics") or {}
+    duration_ms = _read_metric(metrics, "duration_ms", "latency_ms")
+    token_input = _read_metric(metrics, "tokens_input", "tokens_in")
+    token_output = _read_metric(metrics, "tokens_output", "tokens_out")
+
+    stage_duration_ms = _sum_stage_metric(state, field="duration_ms")
+    stage_token_input = _sum_stage_metric(state, field="tokens", token_side="input")
+    stage_token_output = _sum_stage_metric(state, field="tokens", token_side="output")
+
+    if duration_ms <= 0 and stage_duration_ms > 0:
+        duration_ms = stage_duration_ms
+    if token_input <= 0 and stage_token_input > 0:
+        token_input = stage_token_input
+    if token_output <= 0 and stage_token_output > 0:
+        token_output = stage_token_output
+
     return MetricsItem(
         pipeline_id=pipeline_id,
         status=state.status,
-        duration_ms=_read_metric(metrics, "duration_ms", "latency_ms"),
+        duration_ms=duration_ms,
         tokens=TokenUsage(
-            input=_read_metric(metrics, "tokens_input", "tokens_in"),
-            output=_read_metric(metrics, "tokens_output", "tokens_out"),
+            input=token_input,
+            output=token_output,
         ),
         stages=state.stages,
     )

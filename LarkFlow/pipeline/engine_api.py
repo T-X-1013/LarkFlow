@@ -267,12 +267,23 @@ def list_metrics() -> list[MetricsItem]:
     @return:
         返回 MetricsItem 列表
     """
-    items: list[MetricsItem] = []
+    states_with_session: list[tuple[PipelineState, Optional[Dict]]] = []
     for ctl in engine_control.list_all():
         session = _session(ctl.demand_id)
         state = engine_control.build_state(ctl, session)
-        items.append(build_metrics_item(ctl.demand_id, state, session))
-    return items
+        states_with_session.append((state, session))
+
+    # 指标列表默认按最近更新时间倒序返回，保证前端首屏优先看到最近活跃、
+    # 最值得关注的 Pipeline；created_at 和 id 作为稳定兜底，避免同时间戳下顺序抖动。
+    states_with_session.sort(
+        key=lambda item: (item[0].updated_at, item[0].created_at, item[0].id),
+        reverse=True,
+    )
+
+    return [
+        build_metrics_item(state.id, state, session)
+        for state, session in states_with_session
+    ]
 
 
 def list_states() -> Dict[str, PipelineState]:

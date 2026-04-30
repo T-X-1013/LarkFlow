@@ -61,13 +61,15 @@ docker compose -f docker-compose.yml up -d --build
 
 #### 2. 启动 LarkFlow
 
-按这种方式启动后，日志不会再输出到终端，而是输出到 Grafana 中。
+按这种方式启动后，日志会按当前主干入口统一输出。
 
 ```bash
 cd /Users/tao/PyCharmProject/LarkFlow/LarkFlow
 source venv/bin/activate
-PYTHONPATH=. PYTHONUNBUFFERED=1 python -m pipeline.lark_interaction >> logs/lark_listener.log 2>&1
+python -m pipeline.app
 ```
+
+该入口会同时启动飞书 WebSocket 长连与 FastAPI HTTP 控制面，更符合当前主干运行方式。
 
 #### 3. 打开 Grafana
 

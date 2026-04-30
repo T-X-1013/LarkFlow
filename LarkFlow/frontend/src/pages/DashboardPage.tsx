@@ -1,19 +1,42 @@
 import { useEffect, useMemo, useState } from "react";
 
-import { buildMetricsResponse } from "../mocks/metrics";
-import { getPipelineSnapshot, subscribePipelines } from "../mocks/store";
+import { getDataModeLabel, loadPipelineCatalog } from "../lib/pipelineCatalog";
+import type { PipelineCatalogItem } from "../lib/pipelineCatalog";
 
 export function DashboardPage() {
-  const [pipelines, setPipelines] = useState(() => getPipelineSnapshot());
+  const [catalog, setCatalog] = useState<PipelineCatalogItem[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
-    return subscribePipelines(setPipelines);
+    let active = true;
+
+    async function refreshCatalog() {
+      setIsLoading(true);
+      setLoadError(null);
+      try {
+        const next = await loadPipelineCatalog();
+        if (!active) return;
+        setCatalog(next);
+      } catch (error) {
+        if (!active) return;
+        setLoadError(error instanceof Error ? error.message : "加载仪表盘指标失败");
+        setCatalog([]);
+      } finally {
+        if (active) {
+          setIsLoading(false);
+        }
+      }
+    }
+
+    void refreshCatalog();
+    return () => {
+      active = false;
+    };
   }, []);
 
-  const metrics = useMemo(() => buildMetricsResponse(pipelines), [pipelines]);
-
   const summary = useMemo(() => {
-    const metricPipelines = metrics.pipelines;
+    const metricPipelines = catalog.map((item) => item.metric);
     const total = metricPipelines.length;
     const totalDuration = metricPipelines.reduce((sum, item) => sum + item.duration_ms, 0);
     const totalTokens = metricPipelines.reduce(
@@ -26,28 +49,28 @@ export function DashboardPage() {
       totalTokens,
       successful: metricPipelines.filter((item) => item.status === "succeeded").length,
     };
-  }, [metrics]);
+  }, [catalog]);
 
-  const bars = metrics.pipelines.map((item) => ({
-    label: item.pipeline_id,
-    value: item.duration_ms,
+  const bars = catalog.map((item) => ({
+    label: item.metric.pipeline_id,
+    value: item.metric.duration_ms,
   }));
   const maxBar = Math.max(...bars.map((item) => item.value), 1);
   const providerBreakdown = useMemo(() => {
     const counts = new Map<string, number>();
-    for (const pipeline of pipelines) {
-      const provider = pipeline.provider ?? "unknown";
+    for (const item of catalog) {
+      const provider = item.state?.provider ?? "unknown";
       counts.set(provider, (counts.get(provider) ?? 0) + 1);
     }
     return Array.from(counts.entries()).map(([provider, count]) => ({ provider, count }));
-  }, [pipelines]);
+  }, [catalog]);
   const statusBreakdown = useMemo(() => {
     const counts = new Map<string, number>();
-    for (const pipeline of metrics.pipelines) {
-      counts.set(pipeline.status, (counts.get(pipeline.status) ?? 0) + 1);
+    for (const item of catalog) {
+      counts.set(item.metric.status, (counts.get(item.metric.status) ?? 0) + 1);
     }
     return Array.from(counts.entries()).map(([status, count]) => ({ status, count }));
-  }, [metrics]);
+  }, [catalog]);
 
   return (
     <section className="page">
@@ -56,8 +79,10 @@ export function DashboardPage() {
           <p className="eyebrow">Observability View</p>
           <h2>仪表盘</h2>
         </div>
-        <span className="badge badge--running">mock metrics</span>
+        <span className="badge badge--running">{getDataModeLabel()}</span>
       </div>
+
+      {loadError ? <p className="flash-note flash-note--error">{loadError}</p> : null}
 
       <div className="metric-grid">
         <div className="stat-card">
@@ -84,22 +109,26 @@ export function DashboardPage() {
             <p className="eyebrow">Duration Ranking</p>
             <h3>按耗时排序</h3>
           </div>
-          <div className="bar-list">
-            {bars.map((bar) => (
-              <div key={bar.label} className="bar">
-                <div className="row">
-                  <span>{bar.label}</span>
-                  <span>{bar.value}ms</span>
+          {isLoading ? (
+            <p className="muted">正在读取 `/metrics/pipelines` 与 Pipeline 明细。</p>
+          ) : (
+            <div className="bar-list">
+              {bars.map((bar) => (
+                <div key={bar.label} className="bar">
+                  <div className="row">
+                    <span>{bar.label}</span>
+                    <span>{bar.value}ms</span>
+                  </div>
+                  <div className="bar__track">
+                    <div
+                      className="bar__fill"
+                      style={{ width: `${Math.max(12, (bar.value / maxBar) * 100)}%` }}
+                    />
+                  </div>
                 </div>
-                <div className="bar__track">
-                  <div
-                    className="bar__fill"
-                    style={{ width: `${Math.max(12, (bar.value / maxBar) * 100)}%` }}
-                  />
-                </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </div>
 
         <div className="panel">
@@ -109,11 +138,11 @@ export function DashboardPage() {
             <tbody>
               <tr>
                 <th>现阶段</th>
-                <td>消费 `/metrics/pipelines` mock 返回</td>
+                <td>真实消费 `/metrics/pipelines`，并按 pipeline id 补全详情</td>
               </tr>
               <tr>
                 <th>后续接线</th>
-                <td>替换成后端真实聚合，不改页面结构</td>
+                <td>保留当前结构，后续只增强指标粒度</td>
               </tr>
               <tr>
                 <th>重点字段</th>

@@ -240,6 +240,35 @@ class ObservabilityA4TestCase(unittest.TestCase):
         self.assertEqual(item.tokens.output, 0)
         self.assertEqual(item.duration_ms, 0)
 
+    def test_build_metrics_item_falls_back_to_stage_totals(self):
+        """当 session 聚合字段缺失时，应回退到阶段快照累计值"""
+        state = PipelineState(
+            id="P3",
+            requirement="req",
+            status=PipelineStatus.RUNNING,
+            current_stage=Stage.REVIEW,
+            stages={
+                Stage.DESIGN: StageResult(
+                    stage=Stage.DESIGN,
+                    status=StageStatus.SUCCESS,
+                    duration_ms=1200,
+                    tokens={"input": 10, "output": 5},
+                ),
+                Stage.CODING: StageResult(
+                    stage=Stage.CODING,
+                    status=StageStatus.SUCCESS,
+                    duration_ms=3400,
+                    tokens={"input": 25, "output": 12},
+                ),
+            },
+        )
+
+        item = observability.build_metrics_item("P3", state, {"metrics": {}})
+
+        self.assertEqual(item.duration_ms, 4600)
+        self.assertEqual(item.tokens.input, 35)
+        self.assertEqual(item.tokens.output, 17)
+
 
 if __name__ == "__main__":
     unittest.main()

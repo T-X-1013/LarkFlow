@@ -118,6 +118,56 @@ class EngineApiD4TestCase(unittest.TestCase):
         self.assertEqual(items[0].duration_ms, 4567)
         self.assertIn("design", {stage.value for stage in items[0].stages})
 
+    def test_list_metrics_falls_back_to_stage_totals_when_aggregate_missing(self):
+        """聚合字段缺失时，应从 stage_results 回退出 tokens 和 duration"""
+        state = engine_api.create_pipeline("demo")
+        engine.STORE.save(
+            state.id,
+            {
+                "demand_id": state.id,
+                "phase": "reviewing",
+                "stage_results": {
+                    "design": {
+                        "stage": "design",
+                        "status": "success",
+                        "artifact_path": None,
+                        "tokens": {"input": 11, "output": 7},
+                        "duration_ms": 800,
+                        "errors": [],
+                    },
+                    "coding": {
+                        "stage": "coding",
+                        "status": "success",
+                        "artifact_path": None,
+                        "tokens": {"input": 19, "output": 13},
+                        "duration_ms": 1200,
+                        "errors": [],
+                    },
+                },
+                "metrics": {},
+            },
+        )
+
+        items = engine_api.list_metrics()
+
+        self.assertEqual(items[0].tokens.input, 30)
+        self.assertEqual(items[0].tokens.output, 20)
+        self.assertEqual(items[0].duration_ms, 2000)
+
+    def test_list_metrics_sorts_by_updated_at_desc(self):
+        """metrics 列表应稳定按最新更新时间降序返回，方便前端首屏展示"""
+        older = engine_api.create_pipeline("older")
+        newer = engine_api.create_pipeline("newer")
+
+        older_ctl = engine_control.require(older.id)
+        newer_ctl = engine_control.require(newer.id)
+        older_ctl.updated_at = 100
+        newer_ctl.updated_at = 200
+
+        items = engine_api.list_metrics()
+
+        self.assertEqual([item.pipeline_id for item in items], [newer.id, older.id])
+
     def test_provider_route_maps_validation_errors_to_http_status(self):
         """HTTP 路由层应把 provider 校验错误映射成稳定的状态码"""
         app = create_app()

@@ -130,15 +130,29 @@ http://localhost:4173
 
 ## 6. 前后端联调建议
 
-当前前端默认先走 `MSW mock`，用于稳定页面结构与交互。
+当前前端支持 `MSW mock` 与真实 API 双模式。
 
 建议联调顺序：
 
-1. 保持前端页面与 mock 正常工作
-2. 启动后端 `python -m pipeline.app`
-3. 先验证 `GET /healthz`
-4. 再验证 `GET /pipelines/{id}` 与 `GET /metrics/pipelines`
-5. 最后切换详情页中的 Provider 更新、checkpoint 操作、artifact 预览等动作到真实 API
+1. 启动后端 `python -m pipeline.app`
+2. 先验证 `GET /healthz`
+3. 再验证 `GET /metrics/pipelines`
+4. 再验证 `GET /pipelines/{id}`
+5. 最后联调详情页中的 Provider 更新、checkpoint 操作、artifact 预览等动作
+
+mock 模式启动：
+
+```bash
+cd /Users/tao/PyCharmProject/LarkFlow/LarkFlow/frontend
+VITE_USE_MSW=1 npm run dev
+```
+
+真实后端联调模式启动：
+
+```bash
+cd /Users/tao/PyCharmProject/LarkFlow/LarkFlow/frontend
+VITE_USE_MSW=0 VITE_API_BASE_URL=http://localhost:8000 npm run dev
+```
 
 ## 7. 常见问题
 
@@ -152,8 +166,11 @@ http://localhost:4173
 先确认：
 
 - `npm run dev` 是否正常启动
-- 浏览器控制台是否有 MSW 相关报错
-- `src/mocks/handlers.ts` 是否已拦截请求
+- 后端 `python -m pipeline.app` 是否已启动
+- `GET /healthz` 是否返回 200
+- 前端是否以 live API 模式启动
+- `VITE_API_BASE_URL` 是否指向正确的后端地址
+- 浏览器 Network 中 `/metrics/pipelines` 是否返回 JSON，而不是 HTML 或 404
 
 ### 7.3 飞书需求文档读取失败
 
@@ -175,5 +192,4 @@ http://localhost:4173
 后续可继续补充：
 
 - docker-compose 启动方式
-- 真实 API 切换步骤
 - CI 状态与构建产物说明
