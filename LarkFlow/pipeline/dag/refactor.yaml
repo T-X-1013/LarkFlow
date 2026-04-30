@@ -1,0 +1,33 @@
+
+name: refactor
+description: 重构链路：保留四阶段但跳过部署 HITL（重构产物一般不直接部署），Review 回归严格
+
+entry: design
+
+nodes:
+  design:
+    prompt_file: phase1_design.md
+    depends_on: []
+    checkpoint: design
+    retry:
+      max_attempts: 1
+  coding:
+    prompt_file: phase2_coding.md
+    depends_on: [design]
+    retry:
+      max_attempts: 1
+  test:
+    prompt_file: phase3_test.md
+    depends_on: [coding]
+    retry:
+      max_attempts: 2          # 重构最看重测试覆盖，允许再跑一轮
+  review:
+    prompt_file: phase4_review.md
+    depends_on: [test]
+    # 不挂 deploy checkpoint：重构由评审者自行决定是否打包部署
+    retry:
+      max_attempts: 1
+    on_failure:
+      action: regress
+      to: coding
+      max_attempts: 2          # 重构应小步快跑；超过 2 次回归就说明设计要重议

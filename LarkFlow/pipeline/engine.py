@@ -37,7 +37,7 @@ from pipeline.engine_control import (
     get as get_pipeline_control,
     phase_to_stage,
 )
-from pipeline.contracts import Stage, StageResult, StageStatus, TokenUsage
+from pipeline.contracts import CheckpointName, Stage, StageResult, StageStatus, TokenUsage
 from telemetry.hooks import (
     trace_approval_resume,
     trace_demand_start,
@@ -715,14 +715,24 @@ def _parse_review_verdict(
 def _try_regress(demand_id: str, findings: str, logger) -> bool:
     """Review 结论为 REGRESS 时尝试回退到 on_failure.to 指定的阶段。
 
-    - 从 DAG (default_dag for now, D6 会按 session.template 切换) 读 review.on_failure 策略
+    - D6：按 ctl.template 加载对应 DAG（default/feature/bugfix/refactor 等模板的 on_failure 各异）
     - 累计 regression.attempts，达 max_attempts 返回 False（上游置 failed）
     - 否则：递增计数、history 追加、以 user 消息形式注入 findings 作为下轮 Coding 的 kickoff
     - 返回 True 表示已调度回归，上游应把 current 切换到 policy.to
     """
-    from pipeline.dag.schema import default_dag
+    from pipeline import engine_control
+    from pipeline.dag.schema import default_dag, load_template
 
-    dag = default_dag()
+    ctl = engine_control.get(demand_id)
+    # 缺 ctl 时走 default_dag()，与旧测试的 monkey-patch 兼容；
+    # 有 ctl 但模板名未知时同样回退，避免 Review 阶段因配置错误硬失败。
+    if ctl is None:
+        dag = default_dag()
+    else:
+        try:
+            dag = load_template(ctl.template)
+        except ValueError:
+            dag = default_dag()
     review_node = dag.nodes.get(Stage.REVIEW)
     if review_node is None:
         return False
@@ -931,8 +941,13 @@ def resume_from_phase(demand_id: str, phase: str) -> None:
             current = _NEXT_PHASE[current]
 
         # 第 2 HITL：Review 通过后挂起等部署审批，真正部署由
-        # engine_api.approve_checkpoint(DEPLOY) → trigger_deploy 触发
-        _request_deploy_approval(demand_id, logger)
+        # engine_api.approve_checkpoint(DEPLOY) → trigger_deploy 触发。
+        # D6：模板的 review 节点若未挂 deploy checkpoint（例如 refactor 模板），
+        # 则跳过部署审批，直接把 session.phase 置为 done。
+        if _template_has_deploy_checkpoint(demand_id):
+            _request_deploy_approval(demand_id, logger)
+        else:
+            _mark_done_without_deploy(demand_id, logger)
 
 
 def resume_after_approval(demand_id: str, approved: bool, feedback: str):
@@ -999,6 +1014,41 @@ def resume_after_approval(demand_id: str, approved: bool, feedback: str):
 # ==========================================
 # 第 2 HITL：部署审批（D3）
 # ==========================================
+def _template_has_deploy_checkpoint(demand_id: str) -> bool:
+    """按当前 pipeline 的 template 判断 Review 节点是否挂了 deploy checkpoint。
+
+    refactor 模板不挂 deploy（重构产物由人自行决定是否部署），其他模板默认挂。
+    拿不到 ctl 时回退到 True，保持向后兼容。
+    """
+    from pipeline import engine_control
+    from pipeline.dag.schema import load_template
+
+    ctl = engine_control.get(demand_id)
+    if ctl is None:
+        return True
+    try:
+        dag = load_template(ctl.template)
+    except ValueError:
+        return True
+    review_node = dag.nodes.get(Stage.REVIEW)
+    if review_node is None:
+        return True
+    return review_node.checkpoint == CheckpointName.DEPLOY
+
+
+def _mark_done_without_deploy(demand_id: str, logger) -> None:
+    """refactor 等无 deploy HITL 的模板：Review 结束后直接把 session.phase 置为 done。"""
+    session = _load_session(demand_id)
+    if session is None:
+        return
+    session["phase"] = "done"
+    _save_session(demand_id, session)
+    logger.info(
+        "pipeline finished without deploy checkpoint",
+        extra={"event": "pipeline_done_no_deploy", "phase": "done"},
+    )
+
+
 def _request_deploy_approval(demand_id: str, logger) -> None:
     """Review 通过后挂起，推送部署审批卡片，等 approve_checkpoint(DEPLOY) 解挂。
 

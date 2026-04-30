@@ -16,6 +16,10 @@ from pipeline.contracts import CheckpointName, Stage
 
 _DEFAULT_YAML = os.path.join(os.path.dirname(__file__), "default.yaml")
 
+# D6: 内置模板名单，需与 pipeline/dag/<name>.yaml 一一对应。
+# 前端 PipelinesPage 下拉硬编码了这 4 个选项，后端 load_template 接到未知名字必须抛错。
+TEMPLATE_NAMES = ("default", "feature", "bugfix", "refactor")
+
 
 class RetryPolicy(BaseModel):
     max_attempts: int = 1
@@ -100,3 +104,11 @@ def load_dag(path: Optional[str] = None) -> DAG:
 
 def default_dag() -> DAG:
     return load_dag()
+
+
+def load_template(name: str) -> DAG:
+    """按模板名加载 DAG YAML（pipeline/dag/<name>.yaml）。未知名字抛 ValueError。"""
+    if name not in TEMPLATE_NAMES:
+        raise ValueError(f"unknown pipeline template: {name!r}; expected one of {TEMPLATE_NAMES}")
+    path = os.path.join(os.path.dirname(__file__), f"{name}.yaml")
+    return load_dag(path)

@@ -1,0 +1,32 @@
+name: feature
+description: 新增功能的标准链路：Design -> Coding -> Test -> Review，双 HITL，回归 3 次
+
+entry: design
+
+nodes:
+  design:
+    prompt_file: phase1_design.md
+    depends_on: []
+    checkpoint: design
+    retry:
+      max_attempts: 1
+  coding:
+    prompt_file: phase2_coding.md
+    depends_on: [design]
+    retry:
+      max_attempts: 1
+  test:
+    prompt_file: phase3_test.md
+    depends_on: [coding]
+    retry:
+      max_attempts: 1
+  review:
+    prompt_file: phase4_review.md
+    depends_on: [test]
+    checkpoint: deploy
+    retry:
+      max_attempts: 1
+    on_failure:
+      action: regress
+      to: coding
+      max_attempts: 3

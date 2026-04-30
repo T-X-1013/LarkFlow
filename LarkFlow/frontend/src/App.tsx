@@ -5,6 +5,7 @@ import { DashboardPage } from "./pages/DashboardPage";
 import { HomePage } from "./pages/HomePage";
 import { PipelineDetailPage } from "./pages/PipelineDetailPage";
 import { PipelinesPage } from "./pages/PipelinesPage";
+import { PickerPanel } from "./picker/PickerPanel";
 
 function LayoutOutlet({ children }: { children: ReactNode }) {
   return (
@@ -28,6 +29,7 @@ function LayoutOutlet({ children }: { children: ReactNode }) {
             仪表盘
           </NavLink>
         </nav>
+        <PickerPanel />
       </aside>
       <main className="content">{children}</main>
     </div>
