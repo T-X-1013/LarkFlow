@@ -51,7 +51,7 @@ class PrepareTechDocTestCase(unittest.TestCase):
         self.assertEqual((token, url), ("tok_new", "https://x/docx/tok_new"))
         mock_create.assert_called_once()
         mock_grant.assert_called_once_with(
-            "tok_new", "ou_approver", member_type="openid", perm="view"
+            "tok_new", "ou_approver", member_type="openid", perm="full_access"
         )
 
     def test_create_success_with_grant_chat_id(self):
@@ -65,7 +65,7 @@ class PrepareTechDocTestCase(unittest.TestCase):
             engine._prepare_tech_doc("D2b", "body", self.logger)
 
         mock_grant.assert_called_once_with(
-            "tok_c", "oc_chat", member_type="openchat", perm="view"
+            "tok_c", "oc_chat", member_type="openchat", perm="full_access"
         )
 
     def test_create_failure_degrades(self):
