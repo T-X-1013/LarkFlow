@@ -6,7 +6,7 @@ D1 只落结构和加载器；D2 engine 改造成 DAG-driven。
 from __future__ import annotations
 
 import os
-from typing import Dict, List, Optional
+from typing import Dict, List, Literal, Optional
 
 import yaml
 from pydantic import BaseModel, Field
@@ -22,6 +22,18 @@ class RetryPolicy(BaseModel):
     backoff_seconds: float = 0.0
 
 
+class OnFailurePolicy(BaseModel):
+    """阶段结论为不通过时的处理策略。
+
+    目前只用于 Phase 4 Review：当 Agent 输出 `<review-verdict>REGRESS</review-verdict>`
+    时，engine 按本策略回退到 `to` 指定阶段并重跑，累计次数达 `max_attempts` 后置 failed。
+    """
+
+    action: Literal["fail", "regress"] = "fail"
+    to: Optional[Stage] = None
+    max_attempts: int = 3
+
+
 class DAGNode(BaseModel):
     """DAG 节点：一个 phase 的配置。"""
 
@@ -30,6 +42,7 @@ class DAGNode(BaseModel):
     depends_on: List[Stage] = Field(default_factory=list)
     checkpoint: Optional[CheckpointName] = None  # 阶段完成后触发的 HITL
     retry: RetryPolicy = Field(default_factory=RetryPolicy)
+    on_failure: Optional[OnFailurePolicy] = None
 
 
 class DAG(BaseModel):

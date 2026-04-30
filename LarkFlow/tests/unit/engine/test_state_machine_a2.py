@@ -46,7 +46,7 @@ class StateMachineA2TestCase(unittest.TestCase):
     # --- 链式推进：happy path --------------------------------------------
 
     def test_resume_from_coding_chains_through_done(self):
-        """coding 全链路成功 → testing → reviewing → deploying → done"""
+        """coding → testing → reviewing 链路成功后挂起等部署审批；trigger_deploy → done"""
         call_order = []
 
         def fake_run_phase(demand_id, phase):
@@ -58,8 +58,16 @@ class StateMachineA2TestCase(unittest.TestCase):
             return True
 
         with patch.object(engine, "_run_phase", side_effect=fake_run_phase), \
-             patch.object(engine, "deploy_app", side_effect=fake_deploy):
+             patch.object(engine, "deploy_app", side_effect=fake_deploy), \
+             patch.object(engine, "_request_deploy_approval"):
             engine.resume_from_phase(self.demand_id, engine.PHASE_CODING)
+            # Review 通过后 resume_from_phase 只会跑到 deploy_pending，不会自动部署
+            self.assertEqual(
+                call_order,
+                [engine.PHASE_CODING, engine.PHASE_TESTING, engine.PHASE_REVIEWING],
+            )
+            # 模拟部署审批通过：engine_api.approve_checkpoint(DEPLOY) → trigger_deploy
+            engine.trigger_deploy(self.demand_id)
 
         self.assertEqual(
             call_order,
@@ -88,7 +96,7 @@ class StateMachineA2TestCase(unittest.TestCase):
     # --- 断点续跑：从中途阶段恢复 ---------------------------------------
 
     def test_resume_from_reviewing_skips_earlier_phases(self):
-        """从 reviewing 恢复 → 跳过 coding / testing"""
+        """从 reviewing 恢复 → 跳过 coding / testing；Review 通过后走 HITL → trigger_deploy"""
         call_order = []
 
         def fake_run_phase(demand_id, phase):
@@ -100,8 +108,11 @@ class StateMachineA2TestCase(unittest.TestCase):
             return True
 
         with patch.object(engine, "_run_phase", side_effect=fake_run_phase), \
-             patch.object(engine, "deploy_app", side_effect=fake_deploy):
+             patch.object(engine, "deploy_app", side_effect=fake_deploy), \
+             patch.object(engine, "_request_deploy_approval"):
             engine.resume_from_phase(self.demand_id, engine.PHASE_REVIEWING)
+            self.assertEqual(call_order, [engine.PHASE_REVIEWING])
+            engine.trigger_deploy(self.demand_id)
 
         self.assertEqual(call_order, [engine.PHASE_REVIEWING, "deploy"])
 
@@ -112,8 +123,10 @@ class StateMachineA2TestCase(unittest.TestCase):
             return True
 
         with patch.object(engine, "_run_phase", side_effect=fake_run_phase), \
-             patch.object(engine, "deploy_app", return_value=False):
+             patch.object(engine, "deploy_app", return_value=False), \
+             patch.object(engine, "_request_deploy_approval"):
             engine.resume_from_phase(self.demand_id, engine.PHASE_REVIEWING)
+            engine.trigger_deploy(self.demand_id)
 
         final = engine.STORE.get(self.demand_id)
         self.assertEqual(final["phase"], engine.PHASE_FAILED)

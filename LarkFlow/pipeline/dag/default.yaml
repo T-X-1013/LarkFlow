@@ -26,3 +26,7 @@ nodes:
     checkpoint: deploy          # 第 2 HITL：Review 通过后是否部署
     retry:
       max_attempts: 1
+    on_failure:                 # D5：Review 结论 REGRESS 时自动回退到 Coding 修复
+      action: regress
+      to: coding
+      max_attempts: 3

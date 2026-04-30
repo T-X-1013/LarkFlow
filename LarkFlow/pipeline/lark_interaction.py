@@ -229,16 +229,22 @@ def handle_start_request(payload: dict[str, Any]) -> dict[str, Any]:
             f"[LarkListener] 收到启动请求，开始处理新需求: {demand_id}, 文档: {doc_url}, record={record_id}"
         )
 
-    def run_start() -> None:
-        from pipeline.engine import start_new_demand
+    # 走新入口：注册到 engine_control 注册表，后续可被 pause/resume/stop
+    from pipeline import engine_control
+    from pipeline.engine import start_new_demand
 
-        start_new_demand(
-            demand_id,
-            _resolve_requirement_text(doc_url),
-            record_id=record_id,
-        )
+    ctl = engine_control.get(demand_id) or engine_control.register(
+        requirement=doc_url,
+        demand_id=demand_id,
+    )
 
-    _launch_background_task(run_start)
+    def run_start(demand_id: str, doc_url: str, record_id: Optional[str]) -> None:
+        requirement_text = _resolve_requirement_text(doc_url)
+        ctl.requirement = requirement_text
+        ctl.touch()
+        start_new_demand(demand_id, requirement_text, record_id=record_id)
+
+    engine_control.launch(ctl, run_start, demand_id, doc_url, record_id)
     return {"code": 0, "msg": "success"}
 
 
