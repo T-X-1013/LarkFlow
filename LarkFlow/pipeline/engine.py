@@ -38,6 +38,14 @@ from pipeline.engine_control import (
     phase_to_stage,
 )
 from pipeline.contracts import CheckpointName, Stage, StageResult, StageStatus, TokenUsage
+from pipeline.subsession import (
+    finalize_subsession,
+    init_subsession,
+    load_subsession,
+    merge_subsession_metrics,
+    save_subsession,
+    subsession_key,
+)
 from telemetry.hooks import (
     trace_approval_resume,
     trace_demand_start,
@@ -54,14 +62,23 @@ STORE: SessionStore = default_store()
 
 
 def _load_session(demand_id: str) -> Optional[Dict[str, Any]]:
-    """从 STORE 读取 session 并重建 transient 字段 (client / logger)。"""
+    """从 STORE 读取 session 并重建 transient 字段 (client / logger)。
+
+    D7：子 session 带 `role` / `parent_demand_id`，重建 logger 时把两者作为
+    默认 extra 带入，使 reviewer 的每条日志都自动带 role 维度。
+    """
     session = STORE.get(demand_id)
     if session is None:
         return None
     # transient 字段在持久化时被剥离，此处按需重建
     if "client" not in session and session.get("provider"):
         session["client"] = build_client(session["provider"])
-    session["logger"] = get_logger(demand_id, session.get("phase"))
+    session["logger"] = get_logger(
+        demand_id,
+        session.get("phase"),
+        role=session.get("role"),
+        parent_demand_id=session.get("parent_demand_id"),
+    )
     return session
 
 
@@ -310,6 +327,12 @@ def run_agent_loop(demand_id: str, system_prompt: str) -> bool:
         return False
     logger = session["logger"]
     phase = session.get("phase")
+    # D7：子 session 的 pause/stop 信号要跟着父 pipeline 走；
+    # 非子 session（parent_demand_id 为空）直接用自身 demand_id
+    lifecycle_id = session.get("parent_demand_id") or demand_id
+    # D7：子 session 带 hitl_disabled 标记，拦截 ask_human_approval 防止 role reviewer
+    # 误触发第 1/2 HITL 卡片（主 session 不受影响）
+    hitl_disabled = bool(session.get("hitl_disabled"))
 
     max_turns = _env_int("AGENT_MAX_TURNS", 30)
     max_empty_streak = _env_int("AGENT_MAX_EMPTY_STREAK", 3)
@@ -323,7 +346,7 @@ def run_agent_loop(demand_id: str, system_prompt: str) -> bool:
             )
         turn_count += 1
         # 每个 agent turn 前检查 pause/stop；长耗时 LLM 调用期间允许中断
-        check_lifecycle(demand_id)
+        check_lifecycle(lifecycle_id)
         logger.info(
             "agent thinking",
             extra={"event": "agent_thinking", "phase": phase},
@@ -334,7 +357,14 @@ def run_agent_loop(demand_id: str, system_prompt: str) -> bool:
         # B6 的 usage 埋点：单轮指标 + 累计到 session['metrics']
         turn_usage = getattr(turn, "usage", {}) or {}
         tool_name_for_metric = turn.tool_calls[0].name if turn.tool_calls else None
-        log_turn_metrics(logger, phase, turn_usage, tool_name_for_metric)
+        # D7：子 reviewer 的 log_turn_metrics 带 role 维度，供 Grafana 拆图
+        log_turn_metrics(
+            logger,
+            phase,
+            turn_usage,
+            tool_name_for_metric,
+            role=session.get("role"),
+        )
         accumulate_metrics(session, turn_usage)
 
         # 空响应检测：既没有工具调用、也没有 finished 标志、也没有文本内容
@@ -360,6 +390,24 @@ def run_agent_loop(demand_id: str, system_prompt: str) -> bool:
 
                 # 特殊处理：如果调用了 ask_human_approval，则发送飞书卡片并挂起
                 if tool_name == "ask_human_approval":
+                    # D7：子 reviewer 不得触发 HITL —— 返回工具错误结果让 agent 自行纠正，
+                    # 不挂起、不发卡片、保持并行 loop 继续运行
+                    if hitl_disabled:
+                        logger.warning(
+                            "ask_human_approval blocked in sub reviewer",
+                            extra={
+                                "event": "hitl_blocked_subreviewer",
+                                "phase": phase,
+                                "role": session.get("role"),
+                            },
+                        )
+                        append_tool_result(
+                            session,
+                            tool_call,
+                            "ERROR: ask_human_approval is disabled in sub-reviewer context. "
+                            "Emit <review-verdict> directly and finish your turn.",
+                        )
+                        continue
                     logger.info(
                         "approval requested",
                         extra={"event": "approval_requested", "phase": phase},
@@ -788,13 +836,336 @@ def _try_regress(demand_id: str, findings: str, logger) -> bool:
     return True
 
 
+# ==========================================
+# D7：Phase 4 Review 多视角并行 + 仲裁
+# ==========================================
+def _resolve_review_node_for_demand(demand_id: str):
+    """按需求的 pipeline 模板解析 review 节点；无 ctl / 未知模板时返回 None
+    （调用方会退化为单 agent 路径）。"""
+    from pipeline import engine_control
+    from pipeline.dag.schema import default_dag, load_template
+
+    ctl = engine_control.get(demand_id)
+    try:
+        if ctl is not None and getattr(ctl, "template", None):
+            dag = load_template(ctl.template)
+        else:
+            dag = default_dag()
+    except Exception:  # noqa: BLE001
+        return None
+    return dag.nodes.get(Stage.REVIEW)
+
+
+def _extract_worker_final_text(session: Dict[str, Any]) -> str:
+    """取 worker agent 的最终文本输出，优先用 messages 协议，缺失时回退到 history。"""
+    text = _extract_last_assistant_text(session)
+    if text.strip():
+        return text
+    for msg in reversed(session.get("history") or []):
+        if msg.get("role") != "assistant":
+            continue
+        content = msg.get("content")
+        if isinstance(content, str) and content.strip():
+            return content
+    return ""
+
+
+def _write_role_artifact(demand_id: str, role: str, text: str) -> str:
+    """落盘 role reviewer 的评语 markdown，返回绝对路径。"""
+    base = os.path.join("tmp", str(demand_id), "review_multi")
+    os.makedirs(base, exist_ok=True)
+    path = os.path.join(base, f"review_{role}.md")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text or "")
+    return path
+
+
+def _build_role_kickoff(role: str, target_dir: Optional[str]) -> str:
+    """构造 role worker 的首条 user 消息。
+
+    目前 kickoff 非常薄：告知 role 名、目标目录、输出契约；
+    具体审查视角由 prompt 文件承载（phase4_review_<role>.md）。
+    """
+    target_hint = target_dir or "../demo-app"
+    return (
+        f"你是 `{role}` 视角的 Reviewer。请对 `{target_hint}` 下本阶段修改过的代码做审查。\n"
+        f"必须在最终回复里使用以下标签输出结论（供仲裁 Agent 解析）：\n"
+        f"  <review-verdict>PASS|REGRESS</review-verdict>\n"
+        f"  <review-findings>\n"
+        f"  - severity: critical|high|medium|low\n"
+        f"  - [file:line] 问题描述\n"
+        f"  </review-findings>\n"
+        f"禁止调用 `ask_human_approval`（会被运行时拒绝）；禁止 write/replace 文件。"
+    )
+
+
+def _reviewer_worker(
+    parent_demand_id: str,
+    role: str,
+    prompt_file: str,
+) -> Dict[str, Any]:
+    """单个 role reviewer 的线程 worker。
+
+    独立 sub session / 独立 LLM client / 独立 logger。任何异常都转成
+    `{status: "failed", error: ...}` 返回，不向 ThreadPoolExecutor 抛出
+    （避免一路炸掉另外两路）。
+    """
+    start_ts = time.time()
+    subkey = subsession_key(parent_demand_id, role)
+    base_result: Dict[str, Any] = {
+        "role": role,
+        "status": "failed",
+        "artifact_path": None,
+        "tokens_input": 0,
+        "tokens_output": 0,
+        "duration_ms": 0,
+        "error": None,
+    }
+    try:
+        sub = load_subsession(STORE, parent_demand_id, role)
+        if sub is None:
+            base_result["error"] = "subsession not initialized"
+            base_result["duration_ms"] = int((time.time() - start_ts) * 1000)
+            return base_result
+
+        # 为子 session 初始化 provider 会话（history 为空 → 首次写入）
+        client = build_client(sub["provider"])
+        fresh = initialize_session(sub["provider"], _build_role_kickoff(role, sub.get("target_dir")), client)
+        # 把 initialize_session 产生的 history / provider_state 并入 sub，其他字段不动
+        sub["history"] = fresh.get("history", [])
+        sub["provider_state"] = fresh.get("provider_state", {})
+        sub["session_mode"] = fresh.get("session_mode")
+        save_subsession(STORE, parent_demand_id, role, sub)
+
+        # 跑 agent loop；run_agent_loop 内部按 subkey 反序化 session，
+        # 重建 client/logger，并依据 session.parent_demand_id 把 lifecycle 锚定到父 pipeline
+        system_prompt = load_prompt(prompt_file)
+        # D7：给每路 reviewer 开独立 phase.reviewing span，attr 带 role，便于 Tempo 分色
+        with trace_phase_execution(parent_demand_id, PHASE_REVIEWING, prompt_file, role=role) as span:
+            completed = run_agent_loop(subkey, system_prompt)
+            span.set_attribute("phase.completed", completed)
+            span.set_attribute("phase.mode", "multi.worker")
+
+        sub_final = load_subsession(STORE, parent_demand_id, role) or sub
+        final_text = _extract_worker_final_text(sub_final)
+        artifact_path = _write_role_artifact(parent_demand_id, role, final_text)
+
+        duration_ms = int((time.time() - start_ts) * 1000)
+        sub_metrics = sub_final.get("metrics") or {}
+        status = "done" if completed and final_text.strip() else "failed"
+
+        # 把子 session 标记终态，避免 list_active 把它当成孤儿 pipeline
+        finalize_subsession(STORE, parent_demand_id, role, sub_final)
+
+        return {
+            "role": role,
+            "status": status,
+            "artifact_path": artifact_path,
+            "tokens_input": int(sub_metrics.get("tokens_input", 0) or 0),
+            "tokens_output": int(sub_metrics.get("tokens_output", 0) or 0),
+            "duration_ms": duration_ms,
+            "error": None if status == "done" else "empty final text or loop not completed",
+        }
+    except PipelineCancelled:
+        base_result["status"] = "cancelled"
+        base_result["error"] = "pipeline cancelled"
+        base_result["duration_ms"] = int((time.time() - start_ts) * 1000)
+        return base_result
+    except Exception as exc:  # noqa: BLE001
+        base_result["status"] = "failed"
+        base_result["error"] = f"{type(exc).__name__}: {exc}"
+        base_result["duration_ms"] = int((time.time() - start_ts) * 1000)
+        return base_result
+
+
+def _build_aggregator_kickoff(
+    parent_demand_id: str,
+    worker_results: list,
+) -> str:
+    """给仲裁 Agent 的首条 user 消息：列三路评语路径 + 成败状态。"""
+    lines = [
+        f"三位 Reviewer 已完成对需求 {parent_demand_id} 的并行评审。",
+        "请读取每份评语并合并出最终 verdict。",
+        "",
+        "硬性规则：",
+        "  1. 任一 role 判定 REGRESS ⇒ 全局 REGRESS。",
+        "  2. 任一 role status=failed/cancelled ⇒ 默认 REGRESS（视角缺失不得放行）。",
+        "  3. PASS 需三路同时 PASS 且评语无阻塞项。",
+        "",
+        "子评语清单：",
+    ]
+    for r in worker_results:
+        role = r.get("role", "?")
+        status = r.get("status", "?")
+        path = r.get("artifact_path") or "(none)"
+        err = r.get("error")
+        suffix = f"  error: {err}" if err else ""
+        lines.append(f"  - [{role}] status={status}, artifact={path}{suffix}")
+    lines.append("")
+    lines.append("请调用 file_editor.read 逐份阅读，然后产出：")
+    lines.append("  <review-verdict>PASS|REGRESS</review-verdict>")
+    lines.append("  <review-findings>（合并后的发现列表，去重、按 severity 排序）</review-findings>")
+    return "\n".join(lines)
+
+
+def _run_phase_multi(demand_id: str, node) -> bool:
+    """Phase 4 Review 的并行执行器：N 个 role reviewer 并发 → 仲裁 Agent 合并。
+
+    流程：
+      1. parent session 入场记 stage_start
+      2. 按 node.prompt_files 初始化 N 个 sub session（全部持久化）
+      3. ThreadPoolExecutor(max_workers=node.parallel_workers) 跑 _reviewer_worker
+      4. as_completed 收集结果；任意 worker 异常仅记录，不传播
+      5. 合并 tokens / duration 回 parent session（含 by_role 维度）
+      6. lifecycle 二次检查；被 pause/stop 则不跑 aggregator，返回 False
+      7. parent session 跑 aggregator agent（单 agent loop，kickoff = 三路产物摘要）
+      8. 继续走原 `_parse_review_verdict` → PASS/REGRESS 通路（在上游 resume_from_phase 里）
+    """
+    phase = PHASE_REVIEWING
+    logger = get_logger(demand_id, phase)
+    banner = _PHASE_BANNER[phase]
+    print(
+        f"\n========== [需求 {demand_id}] Phase {banner[0]}: {banner[1]} (多视角并行) 开始 ==========\n",
+        flush=True,
+    )
+    logger.info(
+        "phase multi review start",
+        extra={
+            "event": "phase_multi_start",
+            "phase": phase,
+            "roles": list(node.prompt_files.keys()),
+            "parallel_workers": node.parallel_workers,
+        },
+    )
+
+    # 入场快照
+    parent = _load_session(demand_id)
+    if parent is None:
+        logger.error("parent session missing at multi review start")
+        return False
+    _record_stage_start(parent, phase)
+    parent["phase"] = phase
+    _save_session(demand_id, parent)
+
+    try:
+        check_lifecycle(demand_id)
+
+        # 初始化 N 个 sub session（不跑 LLM，只落 key）
+        for role in node.prompt_files.keys():
+            sub = init_subsession(parent, role)
+            save_subsession(STORE, demand_id, role, sub)
+
+        worker_results: list = []
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=max(1, int(node.parallel_workers)),
+            thread_name_prefix="reviewer",
+        ) as ex:
+            futures = {
+                ex.submit(_reviewer_worker, demand_id, role, prompt_file): role
+                for role, prompt_file in node.prompt_files.items()
+            }
+            for fut in concurrent.futures.as_completed(futures):
+                role = futures[fut]
+                try:
+                    result = fut.result()
+                except Exception as exc:  # noqa: BLE001
+                    # _reviewer_worker 内部已 catch，这里兜底
+                    result = {
+                        "role": role,
+                        "status": "failed",
+                        "error": f"worker crashed outside try: {type(exc).__name__}: {exc}",
+                        "tokens_input": 0,
+                        "tokens_output": 0,
+                        "duration_ms": 0,
+                        "artifact_path": None,
+                    }
+                worker_results.append(result)
+                logger.info(
+                    "reviewer finished",
+                    extra={
+                        "event": "reviewer_finished",
+                        "phase": phase,
+                        "role": result.get("role"),
+                        "status": result.get("status"),
+                        "tokens_input": result.get("tokens_input"),
+                        "tokens_output": result.get("tokens_output"),
+                        "duration_ms": result.get("duration_ms"),
+                    },
+                )
+
+        # 合并 metrics
+        parent = _load_session(demand_id) or parent
+        for r in worker_results:
+            role = r["role"]
+            sub_final = load_subsession(STORE, demand_id, role) or {"metrics": {
+                "tokens_input": r.get("tokens_input", 0),
+                "tokens_output": r.get("tokens_output", 0),
+            }}
+            merge_subsession_metrics(
+                parent,
+                sub_final,
+                role,
+                duration_ms=int(r.get("duration_ms", 0) or 0),
+            )
+        # 额外记录 subroles 到 session（非契约，前端/仪表盘可选用）
+        parent.setdefault("review_multi", {})["subroles"] = worker_results
+        _save_session(demand_id, parent)
+
+        # 二次 lifecycle 检查：若被 pause/stop，不跑 aggregator
+        check_lifecycle(demand_id)
+
+        # 跑仲裁 agent（主 session + 单 agent loop）
+        aggregator_prompt_file = node.aggregator_prompt_file
+        if not aggregator_prompt_file:
+            raise RuntimeError("parallel review node missing aggregator_prompt_file")
+        aggregator_system = load_prompt(aggregator_prompt_file)
+
+        # 用 user message 形式把三路评语喂给仲裁 agent
+        parent = _load_session(demand_id) or parent
+        append_user_text(parent, _build_aggregator_kickoff(demand_id, worker_results))
+        _save_session(demand_id, parent)
+
+        with trace_phase_execution(demand_id, phase, aggregator_prompt_file) as span:
+            completed = run_agent_loop(demand_id, aggregator_system)
+            span.set_attribute("phase.completed", completed)
+            span.set_attribute("phase.mode", "multi")
+            if completed:
+                _record_stage_result(demand_id, phase, StageStatus.SUCCESS)
+            return completed
+
+    except PipelineCancelled:
+        logger.info(
+            "multi review cancelled",
+            extra={"event": "phase_cancelled", "phase": phase},
+        )
+        return False
+    except Exception as exc:
+        logger.error(
+            f"multi review crashed: {exc}",
+            extra={"event": "phase_failed", "phase": phase},
+            exc_info=True,
+        )
+        _mark_failed(demand_id, phase, str(exc))
+        return False
+
+
 def _run_phase(demand_id: str, phase: str) -> bool:
     """加载指定 phase 的 prompt 并运行 agent loop；异常时置 failed 态。
 
     D4：入场写 _stage_start 快照；正常完成写 StageResult(success)。
     pending_approval 与 PipelineCancelled 不写快照，保留中断语义；
     崩溃路径由 _mark_failed 内部补记 StageResult(failed)。
+
+    D7：进入 reviewing 阶段时，若 DAG 模板把 review 节点声明为并行
+    (`prompt_files` + `aggregator_prompt_file`)，自动分发到 `_run_phase_multi`。
+    其他阶段保持原有单 agent 行为。
     """
+    # D7 dispatch: Phase 4 并行模式
+    if phase == PHASE_REVIEWING:
+        node = _resolve_review_node_for_demand(demand_id)
+        if node is not None and node.is_parallel:
+            return _run_phase_multi(demand_id, node)
+
     prompt_file = _PHASE_CONFIG[phase]["prompt"]
     logger = get_logger(demand_id, phase)
 

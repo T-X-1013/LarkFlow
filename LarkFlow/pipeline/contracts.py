@@ -71,6 +71,28 @@ class Checkpoint(BaseModel):
     reason: Optional[str] = None
 
 
+class ReviewSubRoleResult(BaseModel):
+    """D7：Phase 4 多视角并行 Review 单个 role 的快照。
+
+    非主契约（stages[review] 仍为单条 StageResult），此字段仅在模板
+    声明了 parallel review 时才非空，供前端仪表盘按 role 拆 token / duration。
+    """
+
+    role: str
+    status: str = "pending"  # done | failed | cancelled | pending
+    artifact_path: Optional[str] = None
+    tokens_input: int = 0
+    tokens_output: int = 0
+    duration_ms: int = 0
+    error: Optional[str] = None
+
+
+class ReviewMultiSnapshot(BaseModel):
+    """Phase 4 并行 Review 的 subroles 汇总。"""
+
+    subroles: List[ReviewSubRoleResult] = Field(default_factory=list)
+
+
 class PipelineState(BaseModel):
     """Pipeline 运行态快照，GET /pipelines/{id} 直接返回。"""
 
@@ -84,6 +106,9 @@ class PipelineState(BaseModel):
     provider: Optional[str] = None
     created_at: int = 0
     updated_at: int = 0
+    # D7：多视角并行 Review 的补充信息。仅 feature_multi 等声明 parallel_review
+    # 的模板会写入；前端判 None 不渲染，保证向后兼容。
+    review_multi: Optional[ReviewMultiSnapshot] = None
 
 
 # ==========================================
@@ -109,12 +134,24 @@ class PipelineCreateResponse(BaseModel):
     id: str
 
 
+class RoleMetrics(BaseModel):
+    """D7：按 role 拆分的 tokens / duration，供仪表盘画饼图。"""
+
+    role: str
+    tokens_input: int = 0
+    tokens_output: int = 0
+    duration_ms: int = 0
+
+
 class MetricsItem(BaseModel):
     pipeline_id: str
     status: PipelineStatus
     duration_ms: int = 0
     tokens: TokenUsage = Field(default_factory=TokenUsage)
     stages: Dict[Stage, StageResult] = Field(default_factory=dict)
+    # D7：feature_multi 模板下 Phase 4 每 role 的 tokens / duration；
+    # 非 parallel review 时为空列表，前端判空不渲染。
+    by_role: List[RoleMetrics] = Field(default_factory=list)
 
 
 class MetricsResponse(BaseModel):

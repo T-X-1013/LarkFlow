@@ -1,0 +1,37 @@
+name: feature_multi
+description: Phase 4 Review 三视角并行 + 仲裁（D7 实验性；default 不动）
+
+entry: design
+
+nodes:
+  design:
+    prompt_file: phase1_design.md
+    depends_on: []
+    checkpoint: design
+    retry:
+      max_attempts: 1
+  coding:
+    prompt_file: phase2_coding.md
+    depends_on: [design]
+    retry:
+      max_attempts: 1
+  test:
+    prompt_file: phase3_test.md
+    depends_on: [coding]
+    retry:
+      max_attempts: 1
+  review:
+    depends_on: [test]
+    checkpoint: deploy
+    retry:
+      max_attempts: 1
+    parallel_workers: 3
+    prompt_files:
+      security: phase4_review_security.md
+      testing-coverage: phase4_review_testing.md
+      kratos-layering: phase4_review_kratos.md
+    aggregator_prompt_file: phase4_aggregator.md
+    on_failure:
+      action: regress
+      to: coding
+      max_attempts: 3

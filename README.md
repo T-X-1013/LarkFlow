@@ -2,7 +2,7 @@
 
 LarkFlow 已经从一个依赖本地 IDE 插件的工具，进化为一个**完全无头（Headless）、基于多阶段多 Agent（串行）自动化研发工作流引擎**。
 
-[![Version](https://img.shields.io/badge/version-1.9.1-blue.svg)](https://github.com/your-repo/larkflow)
+[![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)](https://github.com/your-repo/larkflow)
 [![Architecture](https://img.shields.io/badge/architecture-Multi--Agent-orange.svg)](#architecture)
 [![Scaffold](https://img.shields.io/badge/scaffold-Kratos%20v2.7-00ADD8.svg)](#kratos-骨架自动物化)
 
@@ -96,6 +96,10 @@ graph TD
 │   │   ├── phase2_coding.md
 │   │   ├── phase3_test.md
 │   │   ├── phase4_review.md
+│   │   ├── phase4_review_security.md        #  并行视角：安全
+│   │   ├── phase4_review_testing.md         #  并行视角：测试覆盖
+│   │   ├── phase4_review_kratos.md          #  并行视角：Kratos 分层
+│   │   ├── phase4_aggregator.md             #  仲裁：合并三路评语出最终 verdict
 │   │   └── tools_definition.md
 │   ├── pipeline/
 │   │   ├── app.py                    # 双入口：asyncio 并行 WS 长连 + FastAPI
@@ -106,6 +110,10 @@ graph TD
 │   │   ├── git_tool.py               # 分支 / commit / PR 标题 / 语义摘要库层封装
 │   │   ├── dag/                      # YAML 驱动的 DAG（替代硬编码 phase）
 │   │   │   ├── default.yaml
+│   │   │   ├── feature.yaml
+│   │   │   ├── bugfix.yaml
+│   │   │   ├── refactor.yaml
+│   │   │   ├── feature_multi.yaml    # Phase 4 三视角并行 + 仲裁模板
 │   │   │   └── schema.py
 │   │   ├── api/                      # RESTful 控制面
 │   │   │   ├── routes.py             # §八 9 端点 + /healthz + /docs
@@ -119,6 +127,7 @@ graph TD
 │   │   ├── lark_interaction.py
 │   │   ├── lark_bitable_listener.py  # Base 记录事件 → 发启动卡 / 回写状态
 │   │   ├── llm_adapter.py
+│   │   ├── subsession.py              # 子 session 存取 + by_role metrics 合并
 │   │   ├── tools_runtime.py
 │   │   ├── tools_schema.py
 │   │   └── utils/
@@ -191,7 +200,12 @@ graph TD
 - `phase1_design.md`：系统设计与审批前方案输出。
 - `phase2_coding.md`：按 `rules/` 和 `skills/` 实现 Go 代码。
 - `phase3_test.md`：补测试并运行验证。
-- `phase4_review.md`：从规范角度复查并修正问题。
+- `phase4_review.md`：单 Agent 模式下，从规范角度复查并修正问题（default / feature / bugfix / refactor 模板使用）。
+
+**多视角并行 Review**（`feature_multi` 模板启用）：
+
+- `phase4_review_security.md` / `phase4_review_testing.md` / `phase4_review_kratos.md`：三路只读 reviewer，分别聚焦**安全**、**测试覆盖**、**Kratos 分层**，各自跑独立 agent loop、独立子 session、独立 LLM client，并发度默认 3。
+- `phase4_aggregator.md`：仲裁 Agent，读三份子评语合并出最终 `<review-verdict>`。硬规则：任一 role REGRESS 或 failed/cancelled ⇒ 全局 REGRESS；PASS 需三路同时 PASS。仲裁产物仍被既有 `_parse_review_verdict` 解析，回归 Phase 2 Coding 的 `on_failure` 通路零改动。
 
 ### 2. Rules 和 Skills
 
@@ -284,7 +298,16 @@ npm run build
 
 `LarkFlow/pipeline/engine_control.py` 给每个 pipeline 维护一份 `cancel_flag / pause_flag threading.Event`；`engine.py` 在 `_run_phase` 入口和 `run_agent_loop` 的每一轮 turn 前调用 `check_lifecycle(demand_id)`，被 `cancel_flag` 触发时抛 `PipelineCancelled` 干净退出，被 `pause_flag` 触发时原地 `wait` 直到 clear。这就是赛题要求的**生命周期 pause / resume / stop**——协作式而非强杀。
 
-`LarkFlow/pipeline/dag/default.yaml` + `dag/schema.py` 是**可配置 DAG**：四阶段的顺序、依赖、checkpoint、retry 策略都在 YAML 中描述，`engine.py` 在导入期通过 `_build_next_phase_from_dag()` 构造 `_NEXT_PHASE`，替换原硬编码。未来加 bugfix / feature / refactor 模板只改 YAML。
+`LarkFlow/pipeline/dag/default.yaml` + `dag/schema.py` 是**可配置 DAG**：四阶段的顺序、依赖、checkpoint、retry 策略都在 YAML 中描述，`engine.py` 在导入期通过 `_build_next_phase_from_dag()` 构造 `_NEXT_PHASE`，替换原硬编码。目前内置 5 套模板：`default` / `feature` / `bugfix` / `refactor` / `feature_multi`（并行 review），新增模板只改 YAML。
+
+** 多视角并行 Review**（`feature_multi` 模板启用）：`DAGNode` 支持 `prompt_files: {role: prompt}` + `aggregator_prompt_file` + `parallel_workers`，`engine._run_phase` 在 Phase 4 自动分发到 `_run_phase_multi`：
+
+- **子 session 隔离**：`pipeline/subsession.py` 按 `{demand}::review::{role}` 命名空间把三路 reviewer 写进同一张 `sessions.db`，每路 `history / metrics / client / logger` 全部独立；Worker 结束后 `finalize_subsession` 标记 `phase=done`，`list_active` 不再返回。
+- **并发失败隔离**：`ThreadPoolExecutor(max_workers=3)` 跑三路 `_reviewer_worker`，任一路异常 `as_completed` 端被 catch 成 `{status: failed, error}`，另两路照常完成，仲裁 Agent 见到缺失视角按"视角缺失即 REGRESS"规则裁决。
+- **生命周期穿透**：子 session 带 `parent_demand_id`，`run_agent_loop` 取父 id 做 `check_lifecycle`；主 pipeline pause/stop 一触发，三路 reviewer 下一轮 turn 全部干净退出。
+- **HITL 硬拦截**：子 session 带 `hitl_disabled=True`，Reviewer 误调 `ask_human_approval` 时运行时直接返回错误 tool result 让 Agent 自纠，不会误触发飞书审批卡。
+- **契约软兼容**：`PipelineState.review_multi: Optional[ReviewMultiSnapshot]` + `MetricsItem.by_role: List[RoleMetrics]`，非并行模板两字段为 None/空列表，前端判空不渲染；feature_multi 模板下前端可按 role 拆 token / duration 饼图。
+- **结构化日志按 role 分维**：`observability.get_logger(role=...)` 在 JSON 日志里附带 `role` / `parent_demand_id`，Loki/Grafana 可直接按 `role` label 拆色；OTEL `phase.reviewing` span attr 同样带 role，Tempo 三条子 span 时间线并排展开。
 
 `LarkFlow/pipeline/lark_cards.py` 收敛两张审批卡片模板：
 
