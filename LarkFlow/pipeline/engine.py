@@ -891,6 +891,10 @@ def start_new_demand(
             if latest and latest.get("pending_approval"):
                 latest["phase"] = PHASE_DESIGN_PENDING
                 _save_session(demand_id, latest)
+                # D6 bugfix：把 design checkpoint 预埋到 ctl，让前端 GET /pipelines/{id}
+                # 能看到 pending 状态的 checkpoint 条目（之前只在 approve/reject 时才 setdefault，
+                # 导致前端 waiting_approval 期间渲染不出 Reject/Approve 按钮）。
+                _seed_pending_checkpoint(demand_id, CheckpointName.DESIGN)
                 logger.info(
                     "demand suspended awaiting approval",
                     extra={"event": "demand_suspended", "phase": PHASE_DESIGN_PENDING},
@@ -1014,6 +1018,30 @@ def resume_after_approval(demand_id: str, approved: bool, feedback: str):
 # ==========================================
 # 第 2 HITL：部署审批（D3）
 # ==========================================
+def _seed_pending_checkpoint(demand_id: str, name: CheckpointName) -> None:
+    """把 pending 态 checkpoint 提前写进 ctl.checkpoints，让前端 GET 能看到。
+
+    engine_api.approve/reject_checkpoint 仍会用 setdefault 兜底；此处的预埋只是把
+    "等待审批" 这件事对 HTTP 客户端可见，避免前端只能通过飞书卡片得知 HITL 状态。
+    """
+    from pipeline import engine_control
+    from pipeline.contracts import Checkpoint, StageStatus
+
+    ctl = engine_control.get(demand_id)
+    if ctl is None:
+        return
+    existing = ctl.checkpoints.get(name)
+    if existing and existing.status != StageStatus.PENDING:
+        # 已被 approve/reject 过就别覆盖，保留终态
+        return
+    ctl.checkpoints[name] = Checkpoint(
+        name=name,
+        status=StageStatus.PENDING,
+        requested_at=int(time.time()),
+    )
+    ctl.touch()
+
+
 def _template_has_deploy_checkpoint(demand_id: str) -> bool:
     """按当前 pipeline 的 template 判断 Review 节点是否挂了 deploy checkpoint。
 
@@ -1087,6 +1115,8 @@ def _request_deploy_approval(demand_id: str, logger) -> None:
         "target_dir": target_dir,
     }
     _save_session(demand_id, session)
+    # D6 bugfix：同 design，让前端能在 deploy_pending 期间看到 checkpoint 条目
+    _seed_pending_checkpoint(demand_id, CheckpointName.DEPLOY)
 
     lark_target = os.getenv("LARK_CHAT_ID")
     if lark_target:
