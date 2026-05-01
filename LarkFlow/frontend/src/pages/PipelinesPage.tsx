@@ -2,9 +2,10 @@ import type { FormEvent } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
-import { createPipeline } from "../lib/api";
-import { getPipelineSnapshot, subscribePipelines } from "../mocks/store";
+import { createPipeline, listPipelines } from "../lib/api";
 import type { PipelineState, PipelineStatus } from "../types/api";
+
+const POLL_INTERVAL_MS = 3000;
 
 function badgeClass(status: PipelineStatus) {
   if (status === "running" || status === "succeeded") return "badge badge--running";
@@ -15,7 +16,8 @@ function badgeClass(status: PipelineStatus) {
 }
 
 export function PipelinesPage() {
-  const [pipelines, setPipelines] = useState<PipelineState[]>(() => getPipelineSnapshot());
+  const [pipelines, setPipelines] = useState<PipelineState[]>([]);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [requirement, setRequirement] = useState("");
   const [template, setTemplate] = useState("default");
   const [query, setQuery] = useState("");
@@ -24,7 +26,24 @@ export function PipelinesPage() {
   const [createdId, setCreatedId] = useState<string | null>(null);
 
   useEffect(() => {
-    return subscribePipelines(setPipelines);
+    let cancelled = false;
+    async function load() {
+      try {
+        const data = await listPipelines();
+        if (cancelled) return;
+        setPipelines(data);
+        setLoadError(null);
+      } catch (err) {
+        if (cancelled) return;
+        setLoadError((err as Error).message);
+      }
+    }
+    load();
+    const timer = window.setInterval(load, POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
   }, []);
 
   const filteredPipelines = useMemo(() => {
@@ -52,6 +71,11 @@ export function PipelinesPage() {
     const created = await createPipeline(requirement, template);
     setCreatedId(created.id);
     setRequirement("");
+    try {
+      setPipelines(await listPipelines());
+    } catch {
+      // 下次轮询会兜底刷新
+    }
   }
 
   return (
@@ -61,8 +85,14 @@ export function PipelinesPage() {
           <p className="eyebrow">Pipeline Catalog</p>
           <h2>列表页</h2>
         </div>
-        <span className="badge badge--running">mock metrics: {summary.total} 条</span>
+        <span className="badge badge--running">pipelines: {summary.total} 条</span>
       </div>
+
+      {loadError ? (
+        <p className="flash-note" style={{ color: "crimson", borderColor: "crimson" }}>
+          无法加载 Pipeline 列表：{loadError}
+        </p>
+      ) : null}
 
       <div className="metric-grid">
         <div className="stat-card">

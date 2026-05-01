@@ -126,6 +126,19 @@ def create_app() -> FastAPI:
         """
         return _guard(lambda: engine.stop(pipeline_id))
 
+    @app.get("/pipelines", response_model=list[PipelineState])
+    def list_pipelines(engine=Depends(get_engine)):
+        """
+        列出所有已注册 Pipeline 的状态快照，供前端列表页消费。
+
+        @params:
+            engine: 由依赖注入提供的 engine facade
+
+        @return:
+            返回 PipelineState 列表
+        """
+        return engine.list_pipelines()
+
     @app.get("/pipelines/{pipeline_id}", response_model=PipelineState)
     def get(pipeline_id: str, engine=Depends(get_engine)):
         """

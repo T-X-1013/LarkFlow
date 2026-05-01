@@ -18,7 +18,7 @@ import type { ArtifactResponse, CheckpointName, PipelineState, Stage } from "../
 export function PipelineDetailPage() {
   const { pipelineId = "" } = useParams();
   const [pipeline, setPipeline] = useState<PipelineState | null>(null);
-  const [lastAction, setLastAction] = useState<string | null>(null);
+  const [note, setNote] = useState<{ text: string; isError: boolean } | null>(null);
   const [selectedStage, setSelectedStage] = useState<Stage>("design");
   const [artifact, setArtifact] = useState<ArtifactResponse | null>(null);
 
@@ -51,29 +51,55 @@ export function PipelineDetailPage() {
           : action === "resume"
             ? resumePipeline
             : stopPipeline;
-    setPipeline(await fn(pipeline.id));
-    setLastAction(`已执行 ${action.toUpperCase()} 操作`);
+    try {
+      setPipeline(await fn(pipeline.id));
+      setNote({ text: `已执行 ${action.toUpperCase()} 操作`, isError: false });
+    } catch (err) {
+      setNote({ text: `${action.toUpperCase()} 失败：${(err as Error).message}`, isError: true });
+    }
   }
 
   async function handleProviderChange(event: ChangeEvent<HTMLSelectElement>) {
     if (!pipeline) return;
     const provider = event.target.value;
-    setPipeline(await updateProvider(pipeline.id, provider));
-    setLastAction(`Provider 已切换为 ${provider}`);
+    try {
+      setPipeline(await updateProvider(pipeline.id, provider));
+      setNote({ text: `Provider 已切换为 ${provider}`, isError: false });
+    } catch (err) {
+      setNote({
+        text: `Provider 切换失败：${(err as Error).message}（pipeline 启动后不可再切换）`,
+        isError: true,
+      });
+    }
   }
 
   async function handleCheckpoint(action: "approve" | "reject", checkpoint: CheckpointName) {
     if (!pipeline) return;
-    const next =
-      action === "approve"
-        ? await approveCheckpoint(pipeline.id, checkpoint)
-        : await rejectCheckpoint(pipeline.id, checkpoint, "mock reject from console");
-    setPipeline(next);
-    setLastAction(
-      action === "approve"
-        ? `已批准 ${checkpoint} checkpoint`
-        : `已驳回 ${checkpoint} checkpoint`,
-    );
+    let reason: string | null = null;
+    if (action === "reject") {
+      reason = window.prompt(`请输入驳回 ${checkpoint} checkpoint 的理由`, "");
+      if (reason === null) return;
+      if (reason.trim() === "") reason = "no reason provided";
+    }
+    try {
+      const next =
+        action === "approve"
+          ? await approveCheckpoint(pipeline.id, checkpoint)
+          : await rejectCheckpoint(pipeline.id, checkpoint, reason as string);
+      setPipeline(next);
+      setNote({
+        text:
+          action === "approve"
+            ? `已批准 ${checkpoint} checkpoint`
+            : `已驳回 ${checkpoint} checkpoint（理由：${reason}）`,
+        isError: false,
+      });
+    } catch (err) {
+      setNote({
+        text: `${action} ${checkpoint} 失败：${(err as Error).message}`,
+        isError: true,
+      });
+    }
   }
 
   const stageRows = useMemo(() => Object.values(pipeline?.stages ?? {}).filter(Boolean), [pipeline]);
@@ -139,7 +165,11 @@ export function PipelineDetailPage() {
           Stop
         </button>
       </div>
-      {lastAction ? <p className="flash-note">{lastAction}</p> : null}
+      {note ? (
+        <p className="flash-note" style={note.isError ? { color: "crimson", borderColor: "crimson" } : undefined}>
+          {note.text}
+        </p>
+      ) : null}
 
       <div className="details-grid">
         <div className="panel">

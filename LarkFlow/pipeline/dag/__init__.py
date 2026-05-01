@@ -1,3 +1,3 @@
-from .schema import DAG, DAGNode, load_dag, default_dag
+from .schema import DAG, DAGNode, TEMPLATE_NAMES, default_dag, load_dag, load_template
 
-__all__ = ["DAG", "DAGNode", "load_dag", "default_dag"]
+__all__ = ["DAG", "DAGNode", "TEMPLATE_NAMES", "default_dag", "load_dag", "load_template"]
