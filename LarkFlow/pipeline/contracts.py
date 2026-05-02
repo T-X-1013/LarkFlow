@@ -44,6 +44,17 @@ class CheckpointName(str, Enum):
     DEPLOY = "deploy"      # 第 2 HITL：Review 通过后是否部署
 
 
+class VisualEditSessionStatus(str, Enum):
+    DRAFT = "draft"
+    EDITING = "editing"
+    PREVIEW_READY = "preview_ready"
+    CONFIRMING = "confirming"
+    CONFIRMED = "confirmed"
+    CANCELLING = "cancelling"
+    CANCELLED = "cancelled"
+    FAILED = "failed"
+
+
 # ==========================================
 # Stage / Pipeline 状态
 # ==========================================
@@ -125,6 +136,97 @@ class CheckpointRejectRequest(BaseModel):
 
 class ProviderUpdateRequest(BaseModel):
     provider: str  # anthropic | openai | doubao | qwen
+
+
+class ElementRect(BaseModel):
+    """圈选元素在当前视口中的矩形位置。"""
+
+    top: int = 0
+    left: int = 0
+    width: int = 0
+    height: int = 0
+
+
+class VisualEditTarget(BaseModel):
+    """视觉编辑圈选结果，既服务前端回显，也给后端做安全定位。"""
+
+    lark_src: Optional[str] = None
+    css_selector: str
+    tag: str
+    id: str = ""
+    class_name: str = ""
+    text: str = ""
+    rect: Optional[ElementRect] = None
+
+
+class VisualEditPreviewRequest(BaseModel):
+    """创建视觉编辑预览时的请求体。"""
+
+    requirement: str
+    page_url: str
+    page_path: str
+    target: VisualEditTarget
+    intent: str
+
+
+class VisualEditSession(BaseModel):
+    """视觉编辑会话快照，贯穿预览、确认、取消和提交流程。"""
+
+    id: str
+    requirement: str
+    page_url: str
+    page_path: str
+    intent: str
+    target: VisualEditTarget
+    status: VisualEditSessionStatus = VisualEditSessionStatus.DRAFT
+    preview_url: Optional[str] = None
+    changed_files: List[str] = Field(default_factory=list)
+    diff: Optional[str] = None
+    diff_summary: List[str] = Field(default_factory=list)
+    delivery_summary: Optional[str] = None
+    confirmed_files: List[str] = Field(default_factory=list)
+    error: Optional[str] = None
+    created_at: int = 0
+    updated_at: int = 0
+
+
+class VisualEditDeliveryCheck(BaseModel):
+    """视觉编辑确认后的交付检查结果。"""
+
+    session_id: str
+    confirmed_files: List[str] = Field(default_factory=list)
+    deliverable_files: List[str] = Field(default_factory=list)
+    dirty_file_count: int = 0
+    unrelated_dirty_count: int = 0
+    safe_to_commit: bool = False
+
+
+class VisualEditCommitPlan(BaseModel):
+    """自动提交前的计划结果，供前端二次确认。"""
+
+    session_id: str
+    files: List[str] = Field(default_factory=list)
+    commit_message: str = ""
+    summary: str = ""
+    safe_to_commit: bool = False
+    requires_manual_confirmation: bool = True
+    warnings: List[str] = Field(default_factory=list)
+
+
+class VisualEditCommitRequest(BaseModel):
+    """视觉编辑提交请求。"""
+
+    force: bool = False
+
+
+class VisualEditCommitResult(BaseModel):
+    """视觉编辑提交结果。"""
+
+    session_id: str
+    commit_hash: Optional[str] = None
+    commit_message: str = ""
+    committed_files: List[str] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
 
 
 # ==========================================

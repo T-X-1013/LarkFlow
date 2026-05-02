@@ -5,6 +5,11 @@ import type {
   Stage,
   PipelineState,
   CheckpointName,
+  VisualEditCommitPlan,
+  VisualEditCommitResult,
+  VisualEditDeliveryCheck,
+  VisualEditPreviewRequest,
+  VisualEditSession,
 } from "../types/api";
 
 async function jsonRequest<T>(path: string, init?: RequestInit): Promise<T> {
@@ -17,7 +22,14 @@ async function jsonRequest<T>(path: string, init?: RequestInit): Promise<T> {
   });
 
   if (!response.ok) {
-    throw new Error(`Request failed: ${response.status}`);
+    let detail = "";
+    try {
+      const payload = (await response.json()) as { detail?: string };
+      detail = payload.detail ? ` - ${payload.detail}` : "";
+    } catch {
+      detail = "";
+    }
+    throw new Error(`Request failed: ${response.status}${detail}`);
   }
 
   return (await response.json()) as T;
@@ -27,6 +39,50 @@ export function createPipeline(requirement: string, template = "default") {
   return jsonRequest<PipelineCreateResponse>("/pipelines", {
     method: "POST",
     body: JSON.stringify({ requirement, template }),
+  });
+}
+
+export async function createAndStartPipeline(requirement: string, template = "default") {
+  const created = await createPipeline(requirement, template);
+  const state = await startPipeline(created.id);
+  return { created, state };
+}
+
+export function createVisualEditPreview(body: VisualEditPreviewRequest) {
+  return jsonRequest<VisualEditSession>("/visual-edits/preview", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function getVisualEditSession(id: string) {
+  return jsonRequest<VisualEditSession>(`/visual-edits/${id}`);
+}
+
+export function confirmVisualEdit(id: string) {
+  return jsonRequest<VisualEditSession>(`/visual-edits/${id}/confirm`, {
+    method: "POST",
+  });
+}
+
+export function cancelVisualEdit(id: string) {
+  return jsonRequest<VisualEditSession>(`/visual-edits/${id}/cancel`, {
+    method: "POST",
+  });
+}
+
+export function getVisualEditDeliveryCheck(id: string) {
+  return jsonRequest<VisualEditDeliveryCheck>(`/visual-edits/${id}/delivery-check`);
+}
+
+export function prepareVisualEditCommit(id: string) {
+  return jsonRequest<VisualEditCommitPlan>(`/visual-edits/${id}/prepare-commit`);
+}
+
+export function commitVisualEdit(id: string, force = false) {
+  return jsonRequest<VisualEditCommitResult>(`/visual-edits/${id}/commit`, {
+    method: "POST",
+    body: JSON.stringify({ force }),
   });
 }
 
