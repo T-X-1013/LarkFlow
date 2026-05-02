@@ -3,35 +3,49 @@
  * 与 React 解耦，任意页面都能用。
  */
 
-const OVERLAY_ID = "__lark-picker-outline__";
+const HOVER_OUTLINE_ID = "__lark-picker-hover-outline__";
+const SELECTED_OUTLINE_ID = "__lark-picker-selected-outline__";
 const PANEL_SELECTOR = "[data-lark-picker-root]";
 
 let active = false;
 let currentTarget: Element | null = null;
+let selectedTarget: Element | null = null;
 let onPick: ((el: Element) => void) | null = null;
 let onCancel: (() => void) | null = null;
 
-function ensureOutline(): HTMLDivElement {
-  let el = document.getElementById(OVERLAY_ID) as HTMLDivElement | null;
+function ensureOutline(id: string, style: Partial<CSSStyleDeclaration>): HTMLDivElement {
+  let el = document.getElementById(id) as HTMLDivElement | null;
   if (el) return el;
   el = document.createElement("div");
-  el.id = OVERLAY_ID;
+  el.id = id;
   Object.assign(el.style, {
     position: "fixed",
     pointerEvents: "none",
-    border: "2px solid #ff4d4f",
-    background: "rgba(255, 77, 79, 0.08)",
     zIndex: "2147483646",
     transition: "all 60ms linear",
     borderRadius: "4px",
     display: "none",
+    ...style,
   });
   document.body.appendChild(el);
   return el;
 }
 
-function positionOutline(el: Element) {
-  const outline = ensureOutline();
+function ensureHoverOutline(): HTMLDivElement {
+  return ensureOutline(HOVER_OUTLINE_ID, {
+    border: "2px dashed #ff4d4f",
+    background: "rgba(255, 77, 79, 0.06)",
+  });
+}
+
+function ensureSelectedOutline(): HTMLDivElement {
+  return ensureOutline(SELECTED_OUTLINE_ID, {
+    border: "2px solid #ff4d4f",
+    background: "rgba(255, 77, 79, 0.12)",
+  });
+}
+
+function positionOutline(outline: HTMLDivElement, el: Element) {
   const r = el.getBoundingClientRect();
   outline.style.display = "block";
   outline.style.left = `${r.left}px`;
@@ -40,9 +54,17 @@ function positionOutline(el: Element) {
   outline.style.height = `${r.height}px`;
 }
 
-function hideOutline() {
-  const el = document.getElementById(OVERLAY_ID);
+function hideOutline(id: string) {
+  const el = document.getElementById(id);
   if (el) (el as HTMLElement).style.display = "none";
+}
+
+function syncSelectedOutline() {
+  if (!selectedTarget) {
+    hideOutline(SELECTED_OUTLINE_ID);
+    return;
+  }
+  positionOutline(ensureSelectedOutline(), selectedTarget);
 }
 
 function inPickerPanel(el: Element | null): boolean {
@@ -54,12 +76,12 @@ function handleMouseMove(ev: MouseEvent) {
   if (!active) return;
   const t = ev.target as Element;
   if (inPickerPanel(t)) {
-    hideOutline();
+    hideOutline(HOVER_OUTLINE_ID);
     currentTarget = null;
     return;
   }
   currentTarget = t;
-  positionOutline(t);
+  positionOutline(ensureHoverOutline(), t);
 }
 
 function handleClick(ev: MouseEvent) {
@@ -68,7 +90,11 @@ function handleClick(ev: MouseEvent) {
   if (inPickerPanel(t)) return; // 让 panel 自己处理点击
   ev.preventDefault();
   ev.stopPropagation();
-  if (currentTarget && onPick) onPick(currentTarget);
+  if (currentTarget) {
+    selectedTarget = currentTarget;
+    syncSelectedOutline();
+    if (onPick) onPick(currentTarget);
+  }
 }
 
 function handleKey(ev: KeyboardEvent) {
@@ -86,7 +112,8 @@ export function enablePicker(handlers: {
   active = true;
   onPick = handlers.onPick;
   onCancel = handlers.onCancel;
-  ensureOutline();
+  ensureHoverOutline();
+  syncSelectedOutline();
   document.body.style.cursor = "crosshair";
   document.addEventListener("mousemove", handleMouseMove, true);
   document.addEventListener("click", handleClick, true);
@@ -98,8 +125,10 @@ export function disablePicker() {
   onPick = null;
   onCancel = null;
   currentTarget = null;
+  selectedTarget = null;
   document.body.style.cursor = "";
-  hideOutline();
+  hideOutline(HOVER_OUTLINE_ID);
+  hideOutline(SELECTED_OUTLINE_ID);
   document.removeEventListener("mousemove", handleMouseMove, true);
   document.removeEventListener("click", handleClick, true);
   document.removeEventListener("keydown", handleKey, true);

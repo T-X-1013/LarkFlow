@@ -1,6 +1,6 @@
 /**
  * Babel 插件：把 JSX 的源码位置注入为 DOM 属性 data-lark-src="<path>:<line>:<col>"。
- * 只处理 host 元素（lowercase tag），组件不处理。
+ * 对原生标签和会向下透传 data-* 属性的 JSX 组件都注入，方便圈选模式定位到源码。
  * 由 @vitejs/plugin-react 的 babel.plugins 引用，仅在 dev mode 开启以免污染生产 bundle。
  */
 import type { PluginObj, PluginPass } from "@babel/core";
@@ -19,7 +19,6 @@ export default function larkSrcPlugin({ types: t }: { types: typeof BabelTypes }
       JSXOpeningElement(nodePath, state) {
         const name = nodePath.node.name;
         if (name.type !== "JSXIdentifier") return;
-        if (/^[A-Z]/.test(name.name)) return; // skip React components
         const loc = nodePath.node.loc;
         if (!loc) return;
         const already = nodePath.node.attributes.some(

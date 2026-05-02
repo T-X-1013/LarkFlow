@@ -27,8 +27,25 @@ from pipeline.contracts import (
     PipelineState,
     ProviderUpdateRequest,
     Stage,
+    VisualEditCommitPlan,
+    VisualEditCommitRequest,
+    VisualEditCommitResult,
+    VisualEditDeliveryCheck,
+    VisualEditPreviewRequest,
+    VisualEditSession,
 )
 from pipeline.api.deps import get_engine, require_checkpoint, require_stage
+from pipeline.visual_edit import (
+    VisualEditNotFoundError,
+    VisualEditRequestError,
+    cancel_preview,
+    commit_visual_edit,
+    confirm_preview,
+    create_preview,
+    delivery_check,
+    get_session as get_visual_edit_session,
+    prepare_commit,
+)
 
 
 def create_app() -> FastAPI:
@@ -69,6 +86,130 @@ def create_app() -> FastAPI:
         """
         state = engine.create_pipeline(body.requirement, body.template)
         return PipelineCreateResponse(id=state.id)
+
+    # ========== Visual Edit ==========
+    @app.post("/visual-edits/preview", response_model=VisualEditSession)
+    def create_visual_edit_preview(body: VisualEditPreviewRequest):
+        """
+        创建一次视觉编辑预览会话。
+
+        @params:
+            body: 预览请求，包含圈选目标、页面信息和修改意图
+
+        @return:
+            返回最新视觉编辑会话
+        """
+        try:
+            return create_preview(body)
+        except VisualEditRequestError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/visual-edits/{session_id}", response_model=VisualEditSession)
+    def get_visual_edit(session_id: str):
+        """
+        查询指定视觉编辑会话。
+
+        @params:
+            session_id: 视觉编辑会话 ID
+
+        @return:
+            返回会话快照
+        """
+        try:
+            return get_visual_edit_session(session_id)
+        except VisualEditNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=f"visual edit session not found: {session_id}") from exc
+
+    @app.post("/visual-edits/{session_id}/confirm", response_model=VisualEditSession)
+    def confirm_visual_edit(session_id: str):
+        """
+        确认预览结果并保留本次修改。
+
+        @params:
+            session_id: 视觉编辑会话 ID
+
+        @return:
+            返回确认后的会话快照
+        """
+        try:
+            return confirm_preview(session_id)
+        except VisualEditNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=f"visual edit session not found: {session_id}") from exc
+        except VisualEditRequestError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/visual-edits/{session_id}/cancel", response_model=VisualEditSession)
+    def cancel_visual_edit(session_id: str):
+        """
+        取消预览并回滚临时改动。
+
+        @params:
+            session_id: 视觉编辑会话 ID
+
+        @return:
+            返回取消后的会话快照
+        """
+        try:
+            return cancel_preview(session_id)
+        except VisualEditNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=f"visual edit session not found: {session_id}") from exc
+        except VisualEditRequestError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/visual-edits/{session_id}/delivery-check", response_model=VisualEditDeliveryCheck)
+    def check_visual_edit_delivery(session_id: str):
+        """
+        检查当前视觉编辑文件是否适合直接提交。
+
+        @params:
+            session_id: 视觉编辑会话 ID
+
+        @return:
+            返回交付检查结果
+        """
+        try:
+            return delivery_check(session_id)
+        except VisualEditNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=f"visual edit session not found: {session_id}") from exc
+        except VisualEditRequestError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/visual-edits/{session_id}/prepare-commit", response_model=VisualEditCommitPlan)
+    def prepare_visual_edit_commit(session_id: str):
+        """
+        生成视觉编辑的提交计划。
+
+        @params:
+            session_id: 视觉编辑会话 ID
+
+        @return:
+            返回提交计划
+        """
+        try:
+            return prepare_commit(session_id)
+        except VisualEditNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=f"visual edit session not found: {session_id}") from exc
+        except VisualEditRequestError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/visual-edits/{session_id}/commit", response_model=VisualEditCommitResult)
+    def commit_visual_edit_change(session_id: str, body: VisualEditCommitRequest | None = None):
+        """
+        提交当前视觉编辑确认过的文件。
+
+        @params:
+            session_id: 视觉编辑会话 ID
+            body: 可选提交请求；force=True 时允许在存在其他脏文件时继续提交
+
+        @return:
+            返回提交结果
+        """
+        try:
+            return commit_visual_edit(session_id, force=bool(body and body.force))
+        except VisualEditNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=f"visual edit session not found: {session_id}") from exc
+        except VisualEditRequestError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/pipelines/{pipeline_id}/start", response_model=PipelineState)
     def start(pipeline_id: str, engine=Depends(get_engine)):

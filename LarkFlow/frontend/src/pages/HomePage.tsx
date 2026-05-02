@@ -14,7 +14,7 @@ export function HomePage() {
           <div className="stat-card">
             <p className="eyebrow">主任务</p>
             <div className="stat-card__value">Pipelines</div>
-            <p className="muted">列表、详情、审批与运行态操作都从这里展开。</p>
+            <p className="muted">已选中：列表、详情、审批与运行态操作都从这里展开。</p>
           </div>
           <div className="stat-card">
             <p className="eyebrow">运行时</p>
