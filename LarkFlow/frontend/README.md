@@ -3,23 +3,31 @@
 这是基于 `Vite + React + TypeScript + MSW` 的前端脚手架，当前目标是：
 
 - 按 `pipeline/contracts.py` / `pipeline/api/routes.py` 的冻结契约建控制台外壳
-- 在真实 API 联调前，全部通过 `MSW` mock 跑通列表页、详情页、首页、仪表盘
-- 后续只替换数据源，不重做页面结构
+- 在保留 `MSW` 本地演示能力的同时，逐步把列表页、详情页和圈选能力接到真实 API
+- 后续继续以“替换数据源、不重做页面结构”为原则推进联调
 
 当前已经落地：
 
 - 首页：能力说明与后续联调顺序
-- Pipeline 列表页：创建 mock pipeline、搜索、状态筛选、Provider 筛选
+- Pipeline 列表页：创建 pipeline、搜索、状态筛选、Provider 筛选，并轮询真实 `/pipelines`
 - Pipeline 详情页：`start/pause/resume/stop`、Provider 切换、checkpoint approve/reject、artifact 预览
 - 仪表盘：Pipeline 总数、耗时、token、状态分布、Provider 分布
-- 共享 mock store：详情页状态变化会同步反映到列表页与仪表盘
+- 浏览器圈选入口：侧边栏可直接发起页面元素圈选
+- Visual Edit MVP：支持预览、确认、回滚、提交前检查
 - 构建验收：`npm run build` 已通过
 
-后端 D4 已具备真实联调能力：
+当前已接通的真实接口能力：
 
+- `GET /pipelines` 已用于列表页轮询与创建后刷新
+- `GET /pipelines/:id`、`POST /pipelines/:id/start|pause|resume|stop` 已用于详情页控制
 - `PUT /pipelines/:id/provider` 已可在 `start` 前切换 provider，并真实影响后续 pipeline 启动 provider
 - `GET /metrics/pipelines` 已返回真实 token / duration 聚合
-- 当前前端默认仍走 `MSW mock`，真实 API 接线放在 D5
+- `POST /visual-edits/*` 已用于圈选后的预览、确认、回滚和提交前检查
+
+当前仍保留 `MSW` 的部分：
+
+- 仪表盘默认仍可走本地 mock/fixtures 做独立演示
+- 后端未启动时，前端页面仍可单独开发和验证样式结构
 
 ## 目录约定
 
@@ -40,6 +48,10 @@ frontend/
       PipelinesPage.tsx
       PipelineDetailPage.tsx
       DashboardPage.tsx
+    picker/
+      PickerPanel.tsx
+      locator.ts
+      overlay.ts
 ```
 
 ## 启动
@@ -74,6 +86,7 @@ npm run preview
 MSW 已覆盖以下契约：
 
 - `POST /pipelines`
+- `GET /pipelines`
 - `POST /pipelines/:id/start`
 - `POST /pipelines/:id/pause`
 - `POST /pipelines/:id/resume`
@@ -85,6 +98,13 @@ MSW 已覆盖以下契约：
 - `PUT /pipelines/:id/provider`
 - `GET /metrics/pipelines`
 - `GET /healthz`
+- `POST /visual-edits/preview`
+- `GET /visual-edits/:id`
+- `POST /visual-edits/:id/confirm`
+- `POST /visual-edits/:id/cancel`
+- `GET /visual-edits/:id/delivery-check`
+- `GET /visual-edits/:id/prepare-commit`
+- `POST /visual-edits/:id/commit`
 
 ## 验收建议
 
@@ -97,7 +117,7 @@ MSW 已覆盖以下契约：
 
 重点关注：
 
-- 详情页状态切换后，列表页和仪表盘是否同步更新
-- Provider 切换后，Provider 分布是否变化
-- checkpoint approve/reject 后，状态分布是否变化
-- `updated_at` 是否跟随 mock 写操作刷新
+- 列表页是否能稳定轮询真实 `/pipelines`
+- 详情页状态切换、Provider 切换和 checkpoint 操作是否正确回显错误或成功提示
+- 圈选元素后，是否能生成预览、执行确认/回滚，并正确提示提交前检查结果
+- `data-lark-src` 缺失时，圈选能力是否返回可读错误

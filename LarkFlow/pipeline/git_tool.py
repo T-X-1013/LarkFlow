@@ -17,8 +17,13 @@ from pathlib import Path
 from typing import Iterable, Sequence
 
 
+# 把摘要中的连续空白折叠成单空格，避免分支名和提交信息里出现不可控格式。
 _WHITESPACE_RE = re.compile(r"\s+")
+
+# 分支 slug 只保留小写字母、数字和连字符，避免生成 git 不友好的引用名。
 _NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
+
+# 分支 slug 过长会影响可读性，也容易和需求前缀拼接后失控，因此统一截断。
 _MAX_BRANCH_SLUG_LENGTH = 48
 
 
@@ -304,6 +309,32 @@ class GitTool:
         self.ensure_repo()
         self._run(["add", "-A"])
         staged = self._run(["diff", "--cached", "--name-only"], check=False)
+        if not staged.stdout.strip():
+            return GitCommandResult(
+                args=("git", "commit", "-m", message),
+                returncode=0,
+                stdout="No staged changes to commit",
+                stderr="",
+            )
+        return self._run(["commit", "-m", message])
+
+    def commit_files(self, files: Iterable[str], message: str) -> GitCommandResult:
+        """
+        只暂存指定文件并执行提交，避免把工作区里的其他改动带进去。
+
+        @params:
+            files: 需要提交的仓库相对路径列表
+            message: 提交信息
+
+        @return:
+            若存在 staged 变更则返回实际 commit 结果；否则返回 no-op 结果
+        """
+        self.ensure_repo()
+        file_list = [str(path).strip() for path in files if str(path).strip()]
+        if not file_list:
+            raise GitToolError("no files provided for commit")
+        self._run(["add", "--", *file_list])
+        staged = self._run(["diff", "--cached", "--name-only", "--", *file_list], check=False)
         if not staged.stdout.strip():
             return GitCommandResult(
                 args=("git", "commit", "-m", message),

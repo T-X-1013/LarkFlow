@@ -13,6 +13,19 @@ export interface Locator {
   tag: string;
   /** 可见文本（最多 120 字），截断防止需求描述过长。 */
   text: string;
+  /** 当前页面 path，用于帮助 Agent 缩小组件范围。 */
+  pagePath: string;
+  /** 元素 id；有则优先展示。 */
+  id: string;
+  /** 去重后的 className，方便人读和 Agent 反查。 */
+  className: string;
+  /** 选中元素在当前视口中的位置，用于后续选区回显。 */
+  rect: {
+    top: number;
+    left: number;
+    width: number;
+    height: number;
+  };
 }
 
 function nthOfType(el: Element): number {
@@ -40,12 +53,24 @@ function buildSelector(el: Element): string {
 }
 
 export function locate(el: Element): Locator {
-  const src = (el as HTMLElement).dataset?.larkSrc;
+  const node = el as HTMLElement;
+  const src = node.dataset?.larkSrc;
   const text = (el.textContent ?? "").trim().replace(/\s+/g, " ").slice(0, 120);
+  const rect = el.getBoundingClientRect();
+  const classes = Array.from(node.classList).filter(Boolean).join(" ");
   return {
     larkSrc: src,
     cssSelector: buildSelector(el),
     tag: el.tagName.toLowerCase(),
     text,
+    pagePath: `${window.location.pathname}${window.location.search}${window.location.hash}`,
+    id: node.id ?? "",
+    className: classes,
+    rect: {
+      top: Math.round(rect.top),
+      left: Math.round(rect.left),
+      width: Math.round(rect.width),
+      height: Math.round(rect.height),
+    },
   };
 }
