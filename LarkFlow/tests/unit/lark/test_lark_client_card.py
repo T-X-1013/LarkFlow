@@ -1,5 +1,5 @@
 """
-`pipeline.lark_client.build_approval_card` 的渲染分支测试
+`pipeline.lark.client.build_approval_card` 的渲染分支测试
 
 覆盖 Step 2 的两条路径：
 1. 传入 tech_doc_url → 卡片 markdown 含可点击链接，不截断 design_doc
@@ -12,8 +12,8 @@ import json
 import unittest
 from unittest.mock import patch
 
-from pipeline import lark_client
-from pipeline.lark_client import build_approval_card, send_lark_card
+from pipeline.lark import client as lark_client
+from pipeline.lark.client import build_approval_card, send_lark_card
 
 
 def _markdown_content(card: dict) -> str:

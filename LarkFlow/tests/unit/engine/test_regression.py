@@ -10,8 +10,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from pipeline.contracts import Stage
-from pipeline.engine import (
+from pipeline.core.contracts import Stage
+from pipeline.core.engine import (
     PHASE_CODING,
     PHASE_REVIEWING,
     _extract_last_assistant_text,
@@ -172,9 +172,9 @@ def test_try_regress_first_attempt_succeeds():
     store["d1"] = {"demand_id": "d1", "messages": []}
     logger = MagicMock()
 
-    with patch("pipeline.engine._load_session", side_effect=loader), \
-         patch("pipeline.engine._save_session", side_effect=saver), \
-         patch("pipeline.engine.append_user_text", side_effect=_fake_append_user_text):
+    with patch("pipeline.core.engine._load_session", side_effect=loader), \
+         patch("pipeline.core.engine._save_session", side_effect=saver), \
+         patch("pipeline.core.engine.append_user_text", side_effect=_fake_append_user_text):
         ok = _try_regress("d1", "- foo.go:1 — do X", logger)
 
     assert ok is True
@@ -195,9 +195,9 @@ def test_try_regress_counts_up_then_rejects():
     store["d1"] = {"demand_id": "d1", "messages": []}
     logger = MagicMock()
 
-    with patch("pipeline.engine._load_session", side_effect=loader), \
-         patch("pipeline.engine._save_session", side_effect=saver), \
-         patch("pipeline.engine.append_user_text", side_effect=_fake_append_user_text):
+    with patch("pipeline.core.engine._load_session", side_effect=loader), \
+         patch("pipeline.core.engine._save_session", side_effect=saver), \
+         patch("pipeline.core.engine.append_user_text", side_effect=_fake_append_user_text):
         for i in range(3):
             assert _try_regress("d1", f"findings round {i+1}", logger) is True
         assert store["d1"]["regression"]["attempts"] == 3
@@ -220,9 +220,9 @@ def test_try_regress_empty_findings_uses_fallback_hint():
     store["d1"] = {"demand_id": "d1", "messages": []}
     logger = MagicMock()
 
-    with patch("pipeline.engine._load_session", side_effect=loader), \
-         patch("pipeline.engine._save_session", side_effect=saver), \
-         patch("pipeline.engine.append_user_text", side_effect=_fake_append_user_text):
+    with patch("pipeline.core.engine._load_session", side_effect=loader), \
+         patch("pipeline.core.engine._save_session", side_effect=saver), \
+         patch("pipeline.core.engine.append_user_text", side_effect=_fake_append_user_text):
         ok = _try_regress("d1", "", logger)
 
     assert ok is True
@@ -234,9 +234,9 @@ def test_try_regress_missing_session_returns_false():
     store, loader, saver = _make_session_store()
     # store 为空，loader 返回 None
     logger = MagicMock()
-    with patch("pipeline.engine._load_session", side_effect=loader), \
-         patch("pipeline.engine._save_session", side_effect=saver), \
-         patch("pipeline.engine.append_user_text", side_effect=_fake_append_user_text):
+    with patch("pipeline.core.engine._load_session", side_effect=loader), \
+         patch("pipeline.core.engine._save_session", side_effect=saver), \
+         patch("pipeline.core.engine.append_user_text", side_effect=_fake_append_user_text):
         assert _try_regress("ghost", "x", logger) is False
 
 
@@ -246,7 +246,7 @@ def test_end_to_end_regress_then_pass_via_resume_from_phase():
 
     用 patch 替身 _run_phase / _request_deploy_approval / _load_session 等重依赖。
     """
-    from pipeline import engine
+    from pipeline.core import engine
 
     call_order: list[str] = []
     verdict_sequence = iter(["regress", "pass"])
@@ -302,7 +302,7 @@ def test_end_to_end_regress_then_pass_via_resume_from_phase():
 
 def test_end_to_end_regress_exhausted_marks_failed():
     """连续 REGRESS 超过 max_attempts=3 → _mark_failed 被调用，不再推 deploy。"""
-    from pipeline import engine
+    from pipeline.core import engine
 
     call_order: list[str] = []
     store: dict[str, dict] = {
@@ -364,9 +364,9 @@ def test_try_regress_when_policy_disabled_returns_false():
     }
     fake_dag = DAG(name="noop", nodes=fake_nodes, entry=Stage.DESIGN)
 
-    with patch("pipeline.engine._load_session", side_effect=loader), \
-         patch("pipeline.engine._save_session", side_effect=saver), \
-         patch("pipeline.engine.append_user_text", side_effect=_fake_append_user_text), \
+    with patch("pipeline.core.engine._load_session", side_effect=loader), \
+         patch("pipeline.core.engine._save_session", side_effect=saver), \
+         patch("pipeline.core.engine.append_user_text", side_effect=_fake_append_user_text), \
          patch("pipeline.dag.schema.default_dag", return_value=fake_dag):
         ok = _try_regress("d1", "x", logger)
     assert ok is False

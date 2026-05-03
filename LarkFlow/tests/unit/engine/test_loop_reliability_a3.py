@@ -7,9 +7,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from pipeline import engine
-from pipeline.llm_adapter import AgentTurn, ToolCall
-from pipeline.persistence import SqliteSessionStore
+from pipeline.core import engine
+from pipeline.llm.adapter import AgentTurn, ToolCall
+from pipeline.core.persistence import SqliteSessionStore
 
 
 def _make_turn(tool_calls=None, finished=False, text=None):

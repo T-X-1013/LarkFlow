@@ -1,0 +1,44 @@
+# LarkFlow engine 阶段配置
+#
+# 每个 phase 的 system prompt 文件与进入该阶段时追加到 history 的 user kickoff
+# 文本；原 pipeline/core/engine.py 里的 _PHASE_CONFIG + _PHASE_BANNER 从代码搬到
+# 这里。phase 名必须与 engine.py 里的 PHASE_* 常量保持一致。
+#
+# kickoff 约定：
+# - design 的 kickoff 由 start_new_demand 运行时注入
+# - coding 的 kickoff 由 resume_after_approval 注入（携带审批 feedback）
+# - testing/reviewing 的 kickoff 为固定文案
+# - deploying 不走 agent loop，prompt 为 null；保留条目是为了阶段合法性校验
+#
+# banner_index / banner_label 只用于终端可读 banner，不影响结构化日志。
+
+phases:
+  design:
+    prompt: phase1_design.md
+    kickoff: null
+    banner_index: 1
+    banner_label: Design 设计
+
+  coding:
+    prompt: phase2_coding.md
+    kickoff: null
+    banner_index: 2
+    banner_label: Coding 编码
+
+  testing:
+    prompt: phase3_test.md
+    kickoff: "编码已完成，请开始编写测试用例并运行测试。"
+    banner_index: 3
+    banner_label: Testing 测试
+
+  reviewing:
+    prompt: phase4_review.md
+    kickoff: "测试已通过，请作为 Code Reviewer 进行最终的代码审查，并修复任何不符合规范的代码。"
+    banner_index: 4
+    banner_label: Reviewing 代码审查
+
+  deploying:
+    prompt: null
+    kickoff: null
+    banner_index: 5
+    banner_label: Deploying 部署

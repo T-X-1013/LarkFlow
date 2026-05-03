@@ -5,8 +5,8 @@ import subprocess
 
 import pytest
 
-from pipeline import visual_edit
-from pipeline.contracts import ElementRect, VisualEditPreviewRequest, VisualEditTarget
+from pipeline.ops import visual_edit
+from pipeline.core.contracts import ElementRect, VisualEditPreviewRequest, VisualEditTarget
 
 
 def _build_request(

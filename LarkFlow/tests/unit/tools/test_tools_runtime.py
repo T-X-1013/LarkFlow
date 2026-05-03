@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from pipeline.tools_runtime import ToolContext, execute
+from pipeline.llm.tools_runtime import ToolContext, execute
 
 
 class ToolsRuntimeTestCase(unittest.TestCase):

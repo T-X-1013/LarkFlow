@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from pipeline.git_tool import (
+from pipeline.llm.git_tool import (
     GitTool,
     build_branch_name,
     build_commit_message,

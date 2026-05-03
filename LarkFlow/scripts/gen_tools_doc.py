@@ -21,11 +21,11 @@ from typing import Any, Optional
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 TOOLS_DOC_PATH = PROJECT_ROOT / "agents" / "tools_definition.md"
 
-# 直接运行脚本时，显式把仓库根加入 sys.path，确保可以稳定导入 pipeline.tools_schema
+# 直接运行脚本时，显式把仓库根加入 sys.path，确保可以稳定导入 pipeline.llm.tools_schema
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from pipeline.tools_schema import get_tool_specs
+from pipeline.llm.tools_schema import get_tool_specs
 
 
 AUTO_GENERATED_HEADER = "<!-- AUTO-GENERATED, DO NOT EDIT -->"

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-from pipeline.persistence import SessionStore
+from pipeline.core.persistence import SessionStore
 
 # 子 session key 分隔符。`::` 在 sqlite key / 日志 / grep 里都安全，
 # 且不会与 demand_id（业务上是 Base 自增编号或类似字符串）撞车。

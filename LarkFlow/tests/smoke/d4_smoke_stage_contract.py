@@ -24,9 +24,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 # 隔离 session store，避免污染真实数据
 os.environ["LARKFLOW_SESSION_DIR"] = tempfile.mkdtemp(prefix="d4-smoke-")
 
-from pipeline import engine, engine_control  # noqa: E402
-from pipeline.contracts import StageStatus  # noqa: E402
-from pipeline.persistence import default_store  # noqa: E402
+from pipeline.core import engine, engine_control  # noqa: E402
+from pipeline.core.contracts import StageStatus  # noqa: E402
+from pipeline.core.persistence import default_store  # noqa: E402
 
 engine.STORE = default_store()
 

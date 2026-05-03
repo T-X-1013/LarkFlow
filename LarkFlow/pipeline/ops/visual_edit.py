@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from difflib import unified_diff
 from pathlib import Path
 
-from pipeline.contracts import (
+from pipeline.core.contracts import (
     VisualEditCommitPlan,
     VisualEditCommitResult,
     VisualEditDeliveryCheck,
@@ -26,7 +26,7 @@ from pipeline.contracts import (
     VisualEditSessionStatus,
     VisualEditTarget,
 )
-from pipeline.git_tool import GitTool, GitToolError
+from pipeline.llm.git_tool import GitTool, GitToolError
 
 
 class VisualEditNotFoundError(KeyError):
@@ -103,7 +103,7 @@ def _workspace_root() -> Path:
     @return:
         返回当前模块所属仓库的工作区根路径
     """
-    return Path(__file__).resolve().parents[1]
+    return Path(__file__).resolve().parents[2]
 
 
 def _frontend_root() -> Path:

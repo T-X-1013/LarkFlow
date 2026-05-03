@@ -5,15 +5,15 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from pipeline import engine
-from pipeline.deploy_strategy import (
+from pipeline.core import engine
+from pipeline.ops.deploy_strategy import (
     DeployOutcome,
     DeployStrategy,
     DockerfileGoStrategy,
     get_strategy,
     register,
 )
-from pipeline.persistence import SqliteSessionStore
+from pipeline.core.persistence import SqliteSessionStore
 
 
 class ClassifyFailureTestCase(unittest.TestCase):

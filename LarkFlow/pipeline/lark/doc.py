@@ -12,7 +12,7 @@ from typing import Optional
 from lark_oapi.api.docx.v1 import RawContentDocumentRequest
 from lark_oapi.api.wiki.v2 import GetNodeSpaceRequest
 
-from pipeline.utils.lark_sdk import get_lark_client
+from pipeline.lark.sdk import get_lark_client
 
 
 class LarkDocError(RuntimeError):

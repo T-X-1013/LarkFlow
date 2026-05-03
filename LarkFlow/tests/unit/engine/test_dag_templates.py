@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from pipeline.contracts import CheckpointName, Stage
+from pipeline.core.contracts import CheckpointName, Stage
 from pipeline.dag.schema import TEMPLATE_NAMES, load_template
 
 

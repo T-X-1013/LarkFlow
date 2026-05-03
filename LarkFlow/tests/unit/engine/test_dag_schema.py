@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from pipeline.contracts import Stage
+from pipeline.core.contracts import Stage
 from pipeline.dag.schema import (
     DAG,
     DAGNode,

@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from pipeline.contracts import CheckpointName, Stage
+from pipeline.core.contracts import CheckpointName, Stage
 from pipeline.dag.schema import (
     DAGNode,
     TEMPLATE_NAMES,

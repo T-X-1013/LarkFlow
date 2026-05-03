@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from pipeline.engine import _ensure_target_scaffold, _SCAFFOLD_MARKER
+from pipeline.core.engine import _ensure_target_scaffold, _SCAFFOLD_MARKER
 
 
 class EnsureTargetScaffoldTestCase(unittest.TestCase):

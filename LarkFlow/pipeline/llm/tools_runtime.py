@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import unquote, urlparse
+
+from pipeline.config import runtime as runtime_config
 from telemetry.otel import start_span
 
 
@@ -400,7 +402,7 @@ def _get_database_url() -> str:
     @return:
         返回环境变量中的 DATABASE_URL；若未配置则抛出异常
     """
-    database_url = (os.getenv("DATABASE_URL") or "").strip()
+    database_url = runtime_config.database_url()
     if not database_url:
         raise ValueError("DATABASE_URL is not configured")
     return database_url

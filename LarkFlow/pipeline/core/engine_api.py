@@ -12,8 +12,8 @@ from __future__ import annotations
 
 from typing import Dict, Optional
 
-from pipeline import engine, engine_control
-from pipeline.contracts import (
+from pipeline.core import engine, engine_control
+from pipeline.core.contracts import (
     Checkpoint,
     CheckpointName,
     MetricsItem,
@@ -22,9 +22,9 @@ from pipeline.contracts import (
     StageResult,
     StageStatus,
 )
-from pipeline.engine_control import PipelineControl
-from pipeline.llm_adapter import validate_provider_name
-from pipeline.observability import build_metrics_item
+from pipeline.core.engine_control import PipelineControl
+from pipeline.llm.adapter import validate_provider_name
+from pipeline.ops.observability import build_metrics_item
 
 
 def _session(demand_id: str) -> Optional[Dict]:

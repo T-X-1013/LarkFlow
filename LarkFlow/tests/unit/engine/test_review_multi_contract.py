@@ -12,8 +12,8 @@ from __future__ import annotations
 
 import unittest
 
-from pipeline import engine_control
-from pipeline.contracts import (
+from pipeline.core import engine_control
+from pipeline.core.contracts import (
     MetricsItem,
     PipelineState,
     PipelineStatus,
@@ -21,7 +21,7 @@ from pipeline.contracts import (
     ReviewSubRoleResult,
     RoleMetrics,
 )
-from pipeline.observability import build_metrics_item
+from pipeline.ops.observability import build_metrics_item
 
 
 class PipelineStateBackwardCompatTestCase(unittest.TestCase):

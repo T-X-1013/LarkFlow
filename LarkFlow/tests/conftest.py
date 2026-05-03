@@ -11,8 +11,10 @@ from pathlib import Path
 
 import pytest
 
-from pipeline import engine, observability
-from pipeline.persistence import SqliteSessionStore
+from pipeline.core import engine
+
+from pipeline.ops import observability
+from pipeline.core.persistence import SqliteSessionStore
 
 
 @pytest.fixture

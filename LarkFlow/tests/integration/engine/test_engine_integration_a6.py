@@ -6,10 +6,10 @@ from unittest.mock import patch
 
 import pytest
 
-from pipeline import engine
-from pipeline.deploy_strategy import DeployOutcome, DeployStrategy, register
-from pipeline.llm_adapter import AgentTurn, ToolCall
-from pipeline.persistence import SqliteSessionStore
+from pipeline.core import engine
+from pipeline.ops.deploy_strategy import DeployOutcome, DeployStrategy, register
+from pipeline.llm.adapter import AgentTurn, ToolCall
+from pipeline.core.persistence import SqliteSessionStore
 
 
 def _turn(tool_calls=None, finished=False, text=None):

@@ -3,7 +3,7 @@ import unittest
 from unittest.mock import patch
 from uuid import uuid4
 
-from pipeline.tools_runtime import ToolContext, _build_mysql_connection_kwargs, execute
+from pipeline.llm.tools_runtime import ToolContext, _build_mysql_connection_kwargs, execute
 from tests.path_utils import project_root, repo_root
 
 

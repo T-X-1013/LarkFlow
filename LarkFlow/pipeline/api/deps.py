@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from fastapi import HTTPException, Path
 
-from pipeline import engine_api
-from pipeline.contracts import CheckpointName, Stage
+from pipeline.core import engine_api
+from pipeline.core.contracts import CheckpointName, Stage
 
 
 def get_engine():

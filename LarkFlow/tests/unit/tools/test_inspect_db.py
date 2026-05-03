@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from pipeline.tools_runtime import ToolContext, _build_mysql_connection_kwargs, execute
+from pipeline.llm.tools_runtime import ToolContext, _build_mysql_connection_kwargs, execute
 
 
 class InspectDbTestCase(unittest.TestCase):

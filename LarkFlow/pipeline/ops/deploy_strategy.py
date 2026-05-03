@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict
 
+from pipeline.config import runtime as runtime_config
 from scripts.check_kratos_contract import validate_project
 
 
@@ -104,9 +105,9 @@ class DockerfileGoStrategy(DeployStrategy):
             logger.error(preflight_error, extra={"event": "deploy_preflight_failed"})
             return DeployOutcome(success=False, reason=preflight_error)
         build_command = ["docker", "build", "--pull=false", "-t", self.IMAGE_TAG]
-        _append_build_arg(build_command, "GO_IMAGE", os.getenv("LARKFLOW_GO_IMAGE", ""))
-        _append_build_arg(build_command, "ALPINE_MIRROR", os.getenv("LARKFLOW_ALPINE_MIRROR", ""))
-        _append_build_arg(build_command, "GO_PROXY", os.getenv("LARKFLOW_GO_PROXY", ""))
+        _append_build_arg(build_command, "GO_IMAGE", runtime_config.deploy_go_image())
+        _append_build_arg(build_command, "ALPINE_MIRROR", runtime_config.deploy_alpine_mirror())
+        _append_build_arg(build_command, "GO_PROXY", runtime_config.deploy_go_proxy())
         build_command.append(".")
 
         try:
@@ -166,7 +167,7 @@ class DockerfileGoStrategy(DeployStrategy):
                 f.write(content)
 
     def _template_dockerfile_path(self) -> Path:
-        return Path(__file__).resolve().parents[1] / "templates" / "kratos-skeleton" / "Dockerfile"
+        return Path(__file__).resolve().parents[2] / "templates" / "kratos-skeleton" / "Dockerfile"
 
     def _preflight(self, target_dir: str) -> str:
         missing_core_files = [

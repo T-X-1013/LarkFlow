@@ -7,12 +7,13 @@ LarkFlow 飞书 SDK 客户端工厂
 3. 其它模块通过 get_lark_client() 获取共享 client，避免重复 build
 """
 
-import os
 import threading
 from typing import Optional
 
 import lark_oapi as lark
 from lark_oapi.client import Client
+
+from pipeline.config import lark as lark_config
 
 
 class LarkSdkConfigError(RuntimeError):
@@ -33,7 +34,7 @@ def _resolve_log_level() -> "lark.LogLevel":
     @return:
         返回 lark_oapi.LogLevel 枚举；默认 INFO
     """
-    raw = os.getenv("LARK_LOG_LEVEL", "INFO").strip().upper()
+    raw = lark_config.log_level()
     mapping = {
         "DEBUG": lark.LogLevel.DEBUG,
         "INFO": lark.LogLevel.INFO,
@@ -65,8 +66,8 @@ def get_lark_client() -> Client:
 
         # 必须 strip 首尾空白：docker --env-file 不会像 python-dotenv 那样自动 trim，
         # .env 里一旦有尾部空格/CR 就会整串传进 SDK，飞书会回 1000040346 app_id invalid
-        app_id = (os.getenv("LARK_APP_ID") or "").strip().strip('"').strip("'")
-        app_secret = (os.getenv("LARK_APP_SECRET") or "").strip().strip('"').strip("'")
+        app_id = lark_config.app_id()
+        app_secret = lark_config.app_secret()
         if not app_id or not app_secret:
             raise LarkSdkConfigError(
                 "缺少 LARK_APP_ID 或 LARK_APP_SECRET 环境变量，无法构建飞书 SDK 客户端"

@@ -1,5 +1,5 @@
 """
-`pipeline.lark_doc_client` 单元测试
+`pipeline.lark.doc_client` 单元测试
 
 覆盖通过飞书 import_task 把 markdown 转 docx 的主链路：
 1. create_tech_doc: upload_all → import_task.create → import_task.get 轮询
@@ -13,8 +13,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from pipeline import lark_doc_client
-from pipeline.lark_doc_client import (
+from pipeline.lark import doc_client as lark_doc_client
+from pipeline.lark.doc_client import (
     LarkDocWriteError,
     create_tech_doc,
     grant_doc_access,
