@@ -8,6 +8,7 @@ export const metricsFixture: MetricsResponse = {
       duration_ms: 428000,
       tokens: { input: 2134, output: 1493 },
       stages: {},
+      by_role: [],
     },
     {
       pipeline_id: "DEMAND-b5e6f7g8",
@@ -15,6 +16,7 @@ export const metricsFixture: MetricsResponse = {
       duration_ms: 696000,
       tokens: { input: 2873, output: 1659 },
       stages: {},
+      by_role: [],
     },
     {
       pipeline_id: "DEMAND-h9i0j1k2",
@@ -22,6 +24,7 @@ export const metricsFixture: MetricsResponse = {
       duration_ms: 436000,
       tokens: { input: 1920, output: 1182 },
       stages: {},
+      by_role: [],
     },
   ],
 };

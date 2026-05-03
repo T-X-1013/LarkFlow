@@ -87,6 +87,9 @@ graph TD
 ```text
 .
 ├── README.md
+├── doc/                              # 技术方案与阶段计划文档
+│   ├── 2026-05-02-larkflow-feature-multi-technical-plan.md
+│   └── ...
 ├── LarkFlow/
 │   ├── .env.example
 │   ├── requirements.txt
@@ -96,7 +99,11 @@ graph TD
 │   │   ├── phase1_design.md
 │   │   ├── phase2_coding.md
 │   │   ├── phase3_test.md
-│   │   ├── phase4_review.md
+│   │   ├── phase4_review.md                 # 单 Agent Review
+│   │   ├── phase4_review_security.md        # feature_multi: 安全视角 reviewer
+│   │   ├── phase4_review_testing.md         # feature_multi: 测试覆盖 reviewer
+│   │   ├── phase4_review_kratos.md          # feature_multi: Kratos 分层 reviewer
+│   │   ├── phase4_aggregator.md             # feature_multi: 三路评审仲裁
 │   │   └── tools_definition.md
 │   ├── pipeline/
 │   │   ├── app.py                    # 双入口：asyncio 并行 WS 长连 + FastAPI
@@ -105,11 +112,17 @@ graph TD
 │   │   ├── engine_api.py             # 对外 9 方法 facade（REST / WS 共用）
 │   │   ├── engine_control.py         # 注册表 + cancel/pause/resume + 状态反射
 │   │   ├── git_tool.py               # 分支 / commit / PR 标题 / 语义摘要库层封装
-│   │   ├── dag/                      # YAML 驱动的 DAG（替代硬编码 phase）
+│   │   ├── visual_edit.py            # 浏览器圈选改页面：预览 / 回滚 / 提交前检查
+│   │   ├── subsession.py             # feature_multi 三路 reviewer 子 session 隔离与 metrics 合并
+│   │   ├── dag/                      # YAML 驱动的 DAG 模板
 │   │   │   ├── default.yaml
+│   │   │   ├── feature.yaml
+│   │   │   ├── bugfix.yaml
+│   │   │   ├── refactor.yaml
+│   │   │   ├── feature_multi.yaml
 │   │   │   └── schema.py
 │   │   ├── api/                      # RESTful 控制面
-│   │   │   ├── routes.py             # §八 9 端点 + /healthz + /docs
+│   │   │   ├── routes.py             # pipeline 端点 + visual-edits 端点 + /healthz + /docs
 │   │   │   └── deps.py               # 依赖注入 engine / checkpoint / stage
 │   │   ├── deploy_strategy.py
 │   │   ├── persistence.py
@@ -128,7 +141,7 @@ graph TD
 │   ├── frontend/
 │   │   ├── src/
 │   │   │   ├── lib/api.ts            # 前端 API 抽象层；包含 visual edit 相关接口
-│   │   │   ├── mocks/                # handlers + fixtures + shared store + metrics builder
+│   │   │   ├── mocks/                # MSW handlers + fixtures + sessionStorage store + metrics builder
 │   │   │   ├── pages/                # Home / Pipelines / Pipeline Detail / Dashboard
 │   │   │   ├── picker/               # 浏览器圈选、元素定位、浮层交互
 │   │   │   │   ├── PickerPanel.tsx
@@ -136,8 +149,14 @@ graph TD
 │   │   │   │   └── overlay.ts
 │   │   │   ├── App.tsx
 │   │   │   └── main.tsx
+│   │   ├── public/mockServiceWorker.js
 │   │   ├── package.json
 │   │   └── README.md
+│   ├── docs/                         # 用户侧说明文档与截图资产
+│   │   ├── Larkflow_frontend_introduction.md
+│   │   ├── Larkflow_Grafana_introduction.md
+│   │   ├── install.md
+│   │   └── assets/
 │   ├── telemetry/
 │   │   ├── otel.py                   # OTLP 初始化 / no-op fallback
 │   │   └── hooks.py                  # 业务埋点 hook 封装
@@ -170,7 +189,7 @@ graph TD
 │   │       └── Dockerfile          # 两阶段 golang:1.22-alpine → alpine:3.19
 │   └── tests/
 │       ├── unit/
-│       │   ├── engine/             # scaffold / state machine / observability / approval tech doc / visual edit
+│       │   ├── engine/             # DAG / multi-review / subsession / observability / visual edit
 │       │   │   └── test_visual_edit.py
 │       │   ├── deploy/
 │       │   ├── tools/

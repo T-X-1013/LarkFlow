@@ -254,6 +254,20 @@ table th {
   transform: translateY(-1px);
 }
 
+.link-button {
+  display: inline;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  text-align: left;
+}
+
+.link-button:hover {
+  text-decoration: underline;
+}
+
 .toolbar {
   display: flex;
   flex-wrap: wrap;
@@ -367,6 +381,127 @@ td {
   height: 100%;
   border-radius: 999px;
   background: linear-gradient(90deg, #cb5123 0%, #ef9d65 100%);
+}
+
+.bar__fill--role {
+  background: linear-gradient(90deg, #2f7d58 0%, #73a77a 100%);
+}
+
+.legend-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  align-items: center;
+  color: var(--muted);
+}
+
+.legend-row span {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.legend-swatch {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+}
+
+.legend-swatch--input {
+  background: #2f7d58;
+}
+
+.legend-swatch--output {
+  background: #d35a2a;
+}
+
+.role-token-groups {
+  display: grid;
+  gap: 18px;
+}
+
+.role-token-group {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid rgba(28, 43, 47, 0.08);
+  border-radius: 16px;
+  background: rgba(240, 234, 223, 0.38);
+}
+
+.role-token-group__header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.role-token-group__header strong {
+  overflow-wrap: anywhere;
+}
+
+.role-token-group__header span {
+  color: var(--muted);
+}
+
+.role-token-chart {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 14px;
+  align-items: end;
+}
+
+.role-token-column {
+  display: grid;
+  gap: 10px;
+}
+
+.role-token-column__plot {
+  display: flex;
+  align-items: end;
+  justify-content: center;
+  height: 220px;
+  padding: 12px;
+  border-radius: 16px;
+  background: rgba(28, 43, 47, 0.06);
+}
+
+.role-token-column__stack {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  overflow: hidden;
+  width: min(72px, 62%);
+  min-height: 16px;
+  border-radius: 10px 10px 4px 4px;
+  background: rgba(28, 43, 47, 0.08);
+}
+
+.role-token-column__segment--input {
+  background: #2f7d58;
+}
+
+.role-token-column__segment--output {
+  background: #d35a2a;
+}
+
+.role-token-column__meta {
+  display: grid;
+  gap: 4px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.role-token-column__meta strong {
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.cell-break {
+  overflow-wrap: anywhere;
 }
 
 @media (max-width: 920px) {

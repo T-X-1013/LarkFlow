@@ -10,6 +10,8 @@ import {
   replacePipeline,
 } from "./store";
 
+const reviewRoles = ["security", "testing-coverage", "kratos-layering"];
+
 function stampUpdatedAt(pipeline: PipelineState) {
   pipeline.updated_at = Math.floor(Date.now() / 1000);
   return pipeline;
@@ -30,9 +32,27 @@ export const handlers = [
       provider: "anthropic",
       created_at: Math.floor(Date.now() / 1000),
       updated_at: Math.floor(Date.now() / 1000),
+      review_multi:
+        body.template === "feature_multi"
+          ? {
+              subroles: reviewRoles.map((role) => ({
+                role,
+                status: "pending",
+                artifact_path: null,
+                tokens_input: 0,
+                tokens_output: 0,
+                duration_ms: 0,
+                error: null,
+              })),
+            }
+          : null,
     };
     prependPipeline(created);
     return HttpResponse.json({ id });
+  }),
+
+  http.get("/pipelines", () => {
+    return HttpResponse.json(getPipelineSnapshot());
   }),
 
   http.post("/pipelines/:pipelineId/start", ({ params }) => {

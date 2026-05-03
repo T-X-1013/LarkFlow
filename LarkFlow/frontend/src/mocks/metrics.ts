@@ -13,6 +13,12 @@ export function buildMetricsResponse(pipelines: PipelineState[]): MetricsRespons
         duration_ms,
         tokens: { input, output },
         stages: pipeline.stages,
+        by_role: (pipeline.review_multi?.subroles ?? []).map((role) => ({
+          role: role.role,
+          tokens_input: role.tokens_input,
+          tokens_output: role.tokens_output,
+          duration_ms: role.duration_ms,
+        })),
       };
     }),
   };

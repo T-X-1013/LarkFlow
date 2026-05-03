@@ -102,10 +102,20 @@ export function PipelineDetailPage() {
     }
   }
 
+  async function copyArtifactPath(path: string) {
+    try {
+      await navigator.clipboard.writeText(path);
+      setNote({ text: `已复制 artifact path：${path}`, isError: false });
+    } catch (err) {
+      setNote({ text: `复制 artifact path 失败：${(err as Error).message}`, isError: true });
+    }
+  }
+
   const stageRows = useMemo(() => Object.values(pipeline?.stages ?? {}).filter(Boolean), [pipeline]);
   const totalInput = stageRows.reduce((sum, stage) => sum + (stage?.tokens.input ?? 0), 0);
   const totalOutput = stageRows.reduce((sum, stage) => sum + (stage?.tokens.output ?? 0), 0);
   const totalDuration = stageRows.reduce((sum, stage) => sum + (stage?.duration_ms ?? 0), 0);
+  const reviewSubroles = pipeline?.review_multi?.subroles ?? [];
 
   if (!pipeline) {
     return (
@@ -286,6 +296,56 @@ export function PipelineDetailPage() {
           </pre>
         </div>
       </div>
+
+      {reviewSubroles.length ? (
+        <div className="panel">
+          <div className="toolbar">
+            <div>
+              <p className="eyebrow">Review Roles</p>
+              <h3>多视角 Review</h3>
+            </div>
+            <span className="badge badge--pending">{reviewSubroles.length} roles</span>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>Role</th>
+                <th>Status</th>
+                <th>Tokens</th>
+                <th>Duration</th>
+                <th>Artifact</th>
+                <th>Error</th>
+              </tr>
+            </thead>
+            <tbody>
+              {reviewSubroles.map((role) => (
+                <tr key={role.role}>
+                  <td>{role.role}</td>
+                  <td>{role.status}</td>
+                  <td>
+                    {role.tokens_input}/{role.tokens_output}
+                  </td>
+                  <td>{role.duration_ms}ms</td>
+                  <td className="cell-break">
+                    {role.artifact_path ? (
+                      <button
+                        className="link-button"
+                        type="button"
+                        onClick={() => copyArtifactPath(role.artifact_path as string)}
+                      >
+                        {role.artifact_path}
+                      </button>
+                    ) : (
+                      "-"
+                    )}
+                  </td>
+                  <td>{role.error ?? "-"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
     </section>
   );
 }

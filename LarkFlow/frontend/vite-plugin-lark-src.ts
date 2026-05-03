@@ -7,11 +7,7 @@ import type { PluginObj, PluginPass } from "@babel/core";
 import type * as BabelTypes from "@babel/types";
 import path from "node:path";
 
-interface State extends PluginPass {
-  filename?: string;
-}
-
-export default function larkSrcPlugin({ types: t }: { types: typeof BabelTypes }): PluginObj<State> {
+export default function larkSrcPlugin({ types: t }: { types: typeof BabelTypes }): PluginObj<PluginPass> {
   const cwd = process.cwd();
   return {
     name: "lark-src",

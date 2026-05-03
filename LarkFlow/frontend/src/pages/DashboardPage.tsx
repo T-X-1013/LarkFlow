@@ -48,6 +48,29 @@ export function DashboardPage() {
     }
     return Array.from(counts.entries()).map(([status, count]) => ({ status, count }));
   }, [metrics]);
+  const roleTokenGroups = useMemo(() => {
+    return metrics.pipelines
+      .map((pipeline) => {
+        const roles = (pipeline.by_role ?? [])
+          .map((role) => ({
+            key: `${pipeline.pipeline_id}:${role.role}`,
+            pipeline_id: pipeline.pipeline_id,
+            role: role.role,
+            input: role.tokens_input,
+            output: role.tokens_output,
+            total: role.tokens_input + role.tokens_output,
+            duration_ms: role.duration_ms,
+          }))
+          .filter((role) => role.total > 0);
+        return { pipeline_id: pipeline.pipeline_id, roles };
+      })
+      .filter((group) => group.roles.length > 0);
+  }, [metrics]);
+  const roleMetricCount = roleTokenGroups.reduce((sum, group) => sum + group.roles.length, 0);
+  const maxRoleTokens = Math.max(
+    ...roleTokenGroups.flatMap((group) => group.roles.map((item) => item.total)),
+    1,
+  );
 
   return (
     <section className="page">
@@ -154,6 +177,60 @@ export function DashboardPage() {
           </div>
         </div>
       </div>
+
+      {roleTokenGroups.length ? (
+        <div className="panel chart">
+          <div className="toolbar">
+            <div>
+              <p className="eyebrow">Review Role Tokens</p>
+              <h3>按 role 拆分 token 堆叠柱</h3>
+            </div>
+            <span className="badge badge--pending">{roleMetricCount} role metrics</span>
+          </div>
+          <div className="legend-row">
+            <span><i className="legend-swatch legend-swatch--input" />input</span>
+            <span><i className="legend-swatch legend-swatch--output" />output</span>
+          </div>
+          <div className="role-token-groups">
+            {roleTokenGroups.map((group) => (
+              <section key={group.pipeline_id} className="role-token-group">
+                <div className="role-token-group__header">
+                  <strong>{group.pipeline_id}</strong>
+                  <span>{group.roles.length} roles</span>
+                </div>
+                <div className="role-token-chart">
+                  {group.roles.map((item) => (
+                    <div key={item.key} className="role-token-column">
+                      <div className="role-token-column__plot">
+                        <div
+                          className="role-token-column__stack"
+                          style={{ height: `${Math.max(16, (item.total / maxRoleTokens) * 100)}%` }}
+                          title={`${item.pipeline_id} / ${item.role}: ${item.total} tokens, input ${item.input}, output ${item.output}`}
+                        >
+                          <div
+                            className="role-token-column__segment role-token-column__segment--output"
+                            style={{ height: `${(item.output / item.total) * 100}%` }}
+                          />
+                          <div
+                            className="role-token-column__segment role-token-column__segment--input"
+                            style={{ height: `${(item.input / item.total) * 100}%` }}
+                          />
+                        </div>
+                      </div>
+                      <div className="role-token-column__meta">
+                        <strong>{item.role}</strong>
+                        <span>{item.total} tokens</span>
+                        <span>{item.input}/{item.output}</span>
+                        <span>{item.duration_ms}ms</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            ))}
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }

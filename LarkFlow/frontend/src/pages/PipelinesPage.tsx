@@ -139,6 +139,7 @@ export function PipelinesPage() {
             <option value="feature">feature</option>
             <option value="bugfix">bugfix</option>
             <option value="refactor">refactor</option>
+            <option value="feature_multi">feature_multi</option>
           </select>
           <button className="button" type="submit">
             创建 mock Pipeline
@@ -158,6 +159,10 @@ export function PipelinesPage() {
               <tr>
                 <th>详情页</th>
                 <td>`stages / checkpoints / artifact_path / tokens / duration_ms`</td>
+              </tr>
+              <tr>
+                <th>多视角 Review</th>
+                <td>`feature_multi` 返回 `review_multi.subroles`，普通模板为空</td>
               </tr>
               <tr>
                 <th>后续联调</th>
