@@ -34,9 +34,15 @@ class DeployFlowTestCase(unittest.TestCase):
 
     def test_full_happy_path(self):
         """build → rm → run → inspect(running) → success"""
+        captured = []
+
         def subprocess_run_side_effect(cmd, *args, **kwargs):
             # docker rm -f 不抛异常即可
             return _completed(stdout="")
+
+        def record_run_checked(cmd, cwd=None):
+            captured.append((cmd, cwd))
+            return run_checked_outputs.pop(0)
 
         # _run_checked 按顺序: build / run / inspect(status=running)
         run_checked_outputs = [
@@ -45,13 +51,17 @@ class DeployFlowTestCase(unittest.TestCase):
             _completed(stdout="running\n"),  # docker inspect
         ]
 
-        with patch.object(deploy_strategy, "_run_checked", side_effect=run_checked_outputs), \
+        with patch.object(deploy_strategy, "_run_checked", side_effect=record_run_checked), \
              patch.object(deploy_strategy.subprocess, "run", side_effect=subprocess_run_side_effect), \
              patch.object(deploy_strategy.time, "sleep", lambda *a: None):
             outcome = self.strat.deploy(self.target_dir, self.logger)
 
         self.assertTrue(outcome.success)
         self.assertEqual(outcome.access_url, "http://localhost:8080")
+        docker_run = captured[1][0]
+        self.assertIn("8080:8000", docker_run)
+        self.assertIn("9000:9000", docker_run)
+        self.assertNotIn("8080:8080", docker_run)
         # Dockerfile 已被注入
         self.assertTrue((Path(self.target_dir) / "Dockerfile").exists())
 

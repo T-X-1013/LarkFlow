@@ -74,7 +74,9 @@ class DockerfileGoStrategy(DeployStrategy):
 
     IMAGE_TAG = "demo-app"
     CONTAINER_NAME = "demo-app-container"
-    PORT = 8080
+    HOST_HTTP_PORT = 8080
+    CONTAINER_HTTP_PORT = 8000
+    GRPC_PORT = 9000
     _IMPORT_PATTERN = re.compile(r'^\s*import\s+"([^"]+)";', re.MULTILINE)
 
     _DEFAULT_DOCKERFILE = (
@@ -94,7 +96,7 @@ class DockerfileGoStrategy(DeployStrategy):
         "RUN CGO_ENABLED=1 GOOS=linux go build -o /out/main .\n\n"
         "WORKDIR /app\n\n"
         "RUN cp /out/main /app/main\n\n"
-        "EXPOSE 8080\n\n"
+        "EXPOSE 8000 9000\n\n"
         'CMD ["/app/main"]\n'
     )
 
@@ -126,7 +128,8 @@ class DockerfileGoStrategy(DeployStrategy):
                 [
                     "docker", "run", "-d",
                     "--name", self.CONTAINER_NAME,
-                    "-p", f"{self.PORT}:{self.PORT}",
+                    "-p", f"{self.HOST_HTTP_PORT}:{self.CONTAINER_HTTP_PORT}",
+                    "-p", f"{self.GRPC_PORT}:{self.GRPC_PORT}",
                     self.IMAGE_TAG,
                 ]
             )
@@ -141,7 +144,7 @@ class DockerfileGoStrategy(DeployStrategy):
             if failure:
                 return DeployOutcome(success=False, reason=failure)
 
-            return DeployOutcome(success=True, access_url=f"http://localhost:{self.PORT}")
+            return DeployOutcome(success=True, access_url=f"http://localhost:{self.HOST_HTTP_PORT}")
 
         except subprocess.CalledProcessError as exc:
             cmd = exc.cmd

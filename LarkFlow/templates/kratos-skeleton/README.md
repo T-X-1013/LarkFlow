@@ -45,10 +45,10 @@ python ../LarkFlow/scripts/check_kratos_contract.py .  # 部署前契约检查
 
 ```bash
 docker build -t demo-app .
-docker run --rm -p 8080:8080 -p 9000:9000 demo-app
+docker run --rm -p 8080:8000 -p 9000:9000 demo-app
 ```
 
-HTTP 端口 `8080`，gRPC 端口 `9000`。
+宿主机 HTTP 端口 `8080` 映射到容器内 `8000`，gRPC 端口 `9000` 映射到容器内 `9000`。
 
 ## 本地可观测性
 
@@ -75,7 +75,7 @@ docker compose -f docker-compose.yml up -d --build
 - 宿主机运行 `LarkFlow` 时，若需要把 `logs/*.jsonl` 和 `logs/*.log` 一并送入 Loki，可设置 `LARKFLOW_LOGS_DIR`
 - Grafana 默认账号密码为 `admin / admin`
 
-模板当前是**空骨架**：默认不注册任何业务路由，因此 `http://localhost:8080/` 以及 `/v1/greeter/tao` 返回 `404` 都是正常的。
+模板根路径 `http://localhost:8080/` 默认不注册业务路由，返回 `404` 是正常的；具体可访问路径以 proto 中注册的 HTTP annotation 为准，例如物化后的 greeter 示例可访问 `/v1/greeter/{name}`。
 
 如果需要验证 trace：
 
