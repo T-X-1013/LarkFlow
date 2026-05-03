@@ -6,7 +6,15 @@ import subprocess
 import pytest
 
 from pipeline.ops import visual_edit
-from pipeline.core.contracts import ElementRect, VisualEditPreviewRequest, VisualEditTarget
+from pipeline.ops import visual_edit_intent
+from pipeline.core.contracts import (
+    ElementRect,
+    ElementStyleSnapshot,
+    VisualEditContextNode,
+    VisualEditPreviewRequest,
+    VisualEditTarget,
+    VisualEditTargetContext,
+)
 
 
 def _build_request(
@@ -16,6 +24,7 @@ def _build_request(
     text: str,
     class_name: str = "",
     tag: str = "p",
+    context: VisualEditTargetContext | None = None,
 ) -> VisualEditPreviewRequest:
     """
     构造测试用的视觉编辑预览请求。
@@ -43,6 +52,7 @@ def _build_request(
             class_name=class_name,
             text=text,
             rect=ElementRect(left=0, top=0, width=10, height=10),
+            context=context,
         ),
     )
 
@@ -162,6 +172,242 @@ def test_color_preview_uses_background_for_button(visual_edit_workspace: Path):
 
     assert session.status.value == "preview_ready"
     assert 'style={{backgroundColor: "#ef4444"}}' in preview_content
+    assert '</a style=' not in preview_content
+
+
+def test_color_preview_on_single_line_jsx_keeps_valid_tag(visual_edit_workspace: Path):
+    request = _build_request(
+        intent="把颜色改成粉色",
+        lark_src="src/pages/HomePage.tsx:5:6",
+        text="进入 Pipeline 列表",
+        class_name="button",
+        tag="a",
+    )
+
+    session = visual_edit.create_preview(request)
+    preview_content = visual_edit_workspace.read_text(encoding="utf-8")
+
+    assert session.status.value == "preview_ready"
+    assert '<a className="button" href="/pipelines" style={{backgroundColor: "#ec4899"}}>' in preview_content
+    assert '</a style=' not in preview_content
+
+
+def test_natural_color_intent_uses_selected_element_context(visual_edit_workspace: Path):
+    request = _build_request(
+        intent="把这里改成蓝色",
+        lark_src="src/pages/HomePage.tsx:5:6",
+        text="进入 Pipeline 列表",
+        class_name="button",
+        tag="a",
+    )
+
+    session = visual_edit.create_preview(request)
+    preview_content = visual_edit_workspace.read_text(encoding="utf-8")
+
+    assert session.status.value == "preview_ready"
+    assert 'style={{backgroundColor: "#3b82f6"}}' in preview_content
+
+
+def test_font_color_intent_prefers_text_color_even_for_button(visual_edit_workspace: Path):
+    request = _build_request(
+        intent="把字体改成蓝色",
+        lark_src="src/pages/HomePage.tsx:5:6",
+        text="进入 Pipeline 列表",
+        class_name="button",
+        tag="a",
+    )
+
+    session = visual_edit.create_preview(request)
+    preview_content = visual_edit_workspace.read_text(encoding="utf-8")
+
+    assert session.status.value == "preview_ready"
+    assert 'style={{color: "#3b82f6"}}' in preview_content
+    assert 'backgroundColor: "#3b82f6"' not in preview_content
+
+
+def test_relative_color_intent_uses_next_context_color(visual_edit_workspace: Path):
+    context = VisualEditTargetContext(
+        next=VisualEditContextNode(
+            relation="next",
+            tag="p",
+            text="已选中：列表、详情、审批与运行态操作都从这里展开。",
+            css_selector="body > div:nth-of-type(2)",
+            class_name="muted",
+            style=ElementStyleSnapshot(color="rgb(107, 114, 128)"),
+        ),
+    )
+    request = _build_request(
+        intent="把前面那段文字的颜色改成与后面那段话的颜色一致",
+        lark_src="src/pages/HomePage.tsx:4:6",
+        text="观测",
+        context=context,
+    )
+
+    session = visual_edit.create_preview(request)
+    preview_content = visual_edit_workspace.read_text(encoding="utf-8")
+
+    assert session.status.value == "preview_ready"
+    assert 'style={{color: "#6b7280"}}' in preview_content
+
+
+def test_named_reference_color_intent_uses_reference_style(visual_edit_workspace: Path):
+    request = _build_request(
+        intent='把这里的文字的颜色改成和“主任务”的颜色一致',
+        lark_src="src/pages/HomePage.tsx:4:6",
+        text="观测",
+    )
+    request.target.reference = VisualEditContextNode(
+        relation="reference",
+        tag="p",
+        text="主任务",
+        css_selector="body > div:nth-of-type(1)",
+        class_name="eyebrow",
+        style=ElementStyleSnapshot(color="rgb(17, 24, 39)"),
+    )
+
+    session = visual_edit.create_preview(request)
+    preview_content = visual_edit_workspace.read_text(encoding="utf-8")
+
+    assert session.status.value == "preview_ready"
+    assert 'style={{color: "#111827"}}' in preview_content
+
+
+def test_natural_text_intent_without_quotes_replaces_text(visual_edit_workspace: Path):
+    request = _build_request(
+        intent="文字改成哈哈哈。",
+        lark_src="src/pages/HomePage.tsx:4:6",
+        text="观测",
+    )
+
+    session = visual_edit.create_preview(request)
+    preview_content = visual_edit_workspace.read_text(encoding="utf-8")
+
+    assert session.status.value == "preview_ready"
+    assert "哈哈哈" in preview_content
+    assert "观测" not in preview_content
+
+
+def test_short_text_intent_replaces_selected_text(visual_edit_workspace: Path):
+    request = _build_request(
+        intent="改成哈哈哈。",
+        lark_src="src/pages/HomePage.tsx:4:6",
+        text="观测",
+    )
+
+    session = visual_edit.create_preview(request)
+    preview_content = visual_edit_workspace.read_text(encoding="utf-8")
+
+    assert session.status.value == "preview_ready"
+    assert "哈哈哈" in preview_content
+    assert "观测" not in preview_content
+
+
+def test_intent_resolution_prefers_llm_then_falls_back_to_rules(monkeypatch):
+    target = VisualEditTarget(
+        lark_src="src/pages/HomePage.tsx:4:6",
+        css_selector="body > div:nth-of-type(1)",
+        tag="p",
+        id="",
+        class_name="",
+        text="观测",
+        rect=ElementRect(left=0, top=0, width=10, height=10),
+    )
+    calls: list[str] = []
+
+    def fake_llm(intent: str, target: VisualEditTarget):
+        calls.append("llm")
+        raise visual_edit_intent.VisualEditIntentError("llm unavailable")
+
+    def fake_rules(intent: str, target: VisualEditTarget):
+        calls.append("rule")
+        return visual_edit_intent.VisualEditAction(kind="replace_text", value="哈哈哈", source="rule")
+
+    monkeypatch.setattr(visual_edit_intent, "_resolve_by_llm", fake_llm)
+    monkeypatch.setattr(visual_edit_intent, "_resolve_by_rules", fake_rules)
+
+    action = visual_edit_intent.resolve_visual_edit_action(intent="改成哈哈哈。", target=target)
+
+    assert calls == ["llm", "rule"]
+    assert action.kind == "replace_text"
+    assert action.value == "哈哈哈"
+
+
+def test_llm_style_action_applies_border_width(visual_edit_workspace: Path, monkeypatch):
+    monkeypatch.setattr(
+        visual_edit_intent,
+        "_resolve_by_llm",
+        lambda intent, target: visual_edit_intent.VisualEditAction(
+            kind="set_style",
+            property_name="borderWidth",
+            value="3px",
+            source="llm",
+        ),
+    )
+
+    request = _build_request(
+        intent="把边框加粗一点",
+        lark_src="src/pages/HomePage.tsx:5:6",
+        text="进入 Pipeline 列表",
+        class_name="button",
+        tag="a",
+    )
+
+    session = visual_edit.create_preview(request)
+    preview_content = visual_edit_workspace.read_text(encoding="utf-8")
+
+    assert session.status.value == "preview_ready"
+    assert 'borderWidth: "3px"' in preview_content
+
+
+def test_llm_style_action_applies_font_size(visual_edit_workspace: Path, monkeypatch):
+    monkeypatch.setattr(
+        visual_edit_intent,
+        "_resolve_by_llm",
+        lambda intent, target: visual_edit_intent.VisualEditAction(
+            kind="set_style",
+            property_name="fontSize",
+            value="18px",
+            source="llm",
+        ),
+    )
+
+    request = _build_request(
+        intent="把字大一点",
+        lark_src="src/pages/HomePage.tsx:4:6",
+        text="观测",
+    )
+
+    session = visual_edit.create_preview(request)
+    preview_content = visual_edit_workspace.read_text(encoding="utf-8")
+
+    assert session.status.value == "preview_ready"
+    assert 'fontSize: "18px"' in preview_content
+
+
+def test_validate_llm_style_value_handles_border_radius():
+    target = VisualEditTarget(
+        lark_src="src/pages/HomePage.tsx:4:6",
+        css_selector="body > div:nth-of-type(1)",
+        tag="p",
+        id="",
+        class_name="",
+        text="观测",
+        rect=ElementRect(left=0, top=0, width=10, height=10),
+    )
+
+    action = visual_edit_intent._validate_llm_action(
+        {
+            "kind": "set_style",
+            "property_name": "borderRadius",
+            "value": "16px",
+            "confidence": 0.9,
+        },
+        target,
+    )
+
+    assert action.kind == "set_style"
+    assert action.property_name == "borderRadius"
+    assert action.value == "16px"
 
 
 def test_missing_lark_src_raises_clear_error(visual_edit_workspace: Path):

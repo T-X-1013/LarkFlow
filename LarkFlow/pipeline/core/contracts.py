@@ -147,6 +147,35 @@ class ElementRect(BaseModel):
     height: int = 0
 
 
+class ElementStyleSnapshot(BaseModel):
+    """运行时样式快照，用于参照式视觉编辑。"""
+
+    color: str = ""
+    backgroundColor: str = ""
+    fontSize: str = ""
+    fontWeight: str = ""
+
+
+class VisualEditContextNode(BaseModel):
+    """圈选元素附近的参照节点。"""
+
+    relation: str
+    tag: str
+    text: str = ""
+    css_selector: str
+    id: str = ""
+    class_name: str = ""
+    style: ElementStyleSnapshot = Field(default_factory=ElementStyleSnapshot)
+
+
+class VisualEditTargetContext(BaseModel):
+    """前后文节点集合，辅助理解相对描述。"""
+
+    previous: Optional[VisualEditContextNode] = None
+    next: Optional[VisualEditContextNode] = None
+    parent: Optional[VisualEditContextNode] = None
+
+
 class VisualEditTarget(BaseModel):
     """视觉编辑圈选结果，既服务前端回显，也给后端做安全定位。"""
 
@@ -157,6 +186,8 @@ class VisualEditTarget(BaseModel):
     class_name: str = ""
     text: str = ""
     rect: Optional[ElementRect] = None
+    context: Optional[VisualEditTargetContext] = None
+    reference: Optional[VisualEditContextNode] = None
 
 
 class VisualEditPreviewRequest(BaseModel):

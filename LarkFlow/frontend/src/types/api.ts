@@ -107,6 +107,23 @@ export interface ElementRect {
   height: number;
 }
 
+export interface ElementStyleSnapshot {
+  color: string;
+  backgroundColor: string;
+  fontSize: string;
+  fontWeight: string;
+}
+
+export interface VisualEditContextNode {
+  relation: "previous" | "next" | "parent" | "reference";
+  tag: string;
+  text: string;
+  css_selector: string;
+  id: string;
+  class_name: string;
+  style: ElementStyleSnapshot;
+}
+
 export interface VisualEditTarget {
   lark_src?: string | null;
   css_selector: string;
@@ -115,6 +132,12 @@ export interface VisualEditTarget {
   class_name: string;
   text: string;
   rect?: ElementRect | null;
+  context?: {
+    previous?: VisualEditContextNode | null;
+    next?: VisualEditContextNode | null;
+    parent?: VisualEditContextNode | null;
+  } | null;
+  reference?: VisualEditContextNode | null;
 }
 
 export interface VisualEditPreviewRequest {

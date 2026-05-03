@@ -27,6 +27,11 @@ from pipeline.core.contracts import (
     VisualEditTarget,
 )
 from pipeline.llm.git_tool import GitTool, GitToolError
+from pipeline.ops.visual_edit_intent import (
+    VisualEditAction,
+    VisualEditIntentError,
+    resolve_visual_edit_action,
+)
 
 
 class VisualEditNotFoundError(KeyError):
@@ -45,41 +50,6 @@ class _StoredVisualEditSession:
 
 _SESSIONS: dict[str, _StoredVisualEditSession] = {}
 _LOCK = threading.Lock()
-_TEXT_PATTERNS = (
-    re.compile(r'改成[“"](.+?)[”"]'),
-    re.compile(r'改为[“"](.+?)[”"]'),
-    re.compile(r'换成[“"](.+?)[”"]'),
-    re.compile(r'替换成[“"](.+?)[”"]'),
-    re.compile(r'显示为[“"](.+?)[”"]'),
-    re.compile(r'标题叫[“"](.+?)[”"]'),
-    re.compile(r'按钮文案改成[“"](.+?)[”"]'),
-    re.compile(r'文案改成[“"](.+?)[”"]'),
-    re.compile(r'文字改成[“"](.+?)[”"]'),
-    re.compile(r'改成\s*([^。]+)$'),
-    re.compile(r'改为\s*([^。]+)$'),
-    re.compile(r'换成\s*([^。]+)$'),
-    re.compile(r'替换成\s*([^。]+)$'),
-    re.compile(r'显示为\s*([^。]+)$'),
-    re.compile(r'标题叫\s*([^。]+)$'),
-    re.compile(r'按钮文案改成\s*([^。]+)$'),
-    re.compile(r'改成\s+(.+)$'),
-)
-_COLOR_ALIASES = {
-    "蓝色": "#3b82f6",
-    "浅蓝色": "#60a5fa",
-    "深蓝色": "#1d4ed8",
-    "红色": "#ef4444",
-    "橙色": "#f97316",
-    "绿色": "#22c55e",
-    "黄色": "#eab308",
-    "紫色": "#8b5cf6",
-    "黑色": "#111827",
-    "白色": "#ffffff",
-    "灰色": "#6b7280",
-}
-_HEX_COLOR_RE = re.compile(r"#[0-9a-fA-F]{3,8}")
-
-
 def _now() -> int:
     """
     返回当前 Unix 时间戳。
@@ -187,63 +157,6 @@ def _resolve_target_file(lark_src: str | None) -> tuple[Path, int | None]:
     return target_file, line_no
 
 
-def _extract_desired_text(intent: str) -> str:
-    """
-    从自然语言意图中提取目标文案。
-
-    @params:
-        intent: 用户在圈选面板里输入的修改意图
-
-    @return:
-        返回解析出的目标文本
-    """
-    normalized = (intent or "").strip()
-    for pattern in _TEXT_PATTERNS:
-        match = pattern.search(normalized)
-        if not match:
-            continue
-        value = match.group(1).strip().strip("。").strip('“”"')
-        if value:
-            return value
-    raise VisualEditRequestError("当前预览 MVP 只支持明确的文本替换，例如：把文字改成“测观”。")
-
-
-def _extract_desired_color(intent: str) -> str:
-    """
-    从自然语言意图中提取目标颜色。
-
-    @params:
-        intent: 用户在圈选面板里输入的颜色修改意图
-
-    @return:
-        返回十六进制颜色值
-    """
-    normalized = (intent or "").strip()
-    direct = _HEX_COLOR_RE.search(normalized)
-    if direct:
-        return direct.group(0)
-    for name, value in _COLOR_ALIASES.items():
-        if name in normalized:
-            return value
-    raise VisualEditRequestError("当前预览未识别到颜色值，请使用明确颜色，例如：蓝色、红色或 #3b82f6。")
-
-
-def _looks_like_color_change(intent: str) -> bool:
-    """
-    粗略判断当前意图是否属于颜色修改。
-
-    @params:
-        intent: 用户输入的修改意图
-
-    @return:
-        命中颜色关键词或颜色值时返回 True，否则返回 False
-    """
-    normalized = (intent or "").strip()
-    has_named_color = any(key in normalized for key in _COLOR_ALIASES)
-    has_color_verb = any(verb in normalized for verb in ("改成", "改为", "换成", "变成"))
-    return ("颜色" in normalized) or (has_named_color and has_color_verb) or (_HEX_COLOR_RE.search(normalized) is not None)
-
-
 def _replace_text_near_line(source: str, current_text: str, new_text: str, line_no: int | None) -> str:
     """
     优先在目标行附近执行文本替换，降低同文案多处出现时的误改概率。
@@ -305,43 +218,22 @@ def _find_opening_tag_range(source: str, line_no: int | None) -> tuple[int, int]
     if start < 0:
         raise VisualEditRequestError("没有定位到目标 JSX 标签起始位置。")
 
-    end = start
-    while end < len(lines) and ">" not in lines[end]:
-        end += 1
-    if end >= len(lines):
-        raise VisualEditRequestError("没有定位到目标 JSX 标签结束位置。")
-
     abs_start = sum(len(line) for line in lines[:start])
-    abs_end = sum(len(line) for line in lines[: end + 1])
+    open_tag_end = source.find(">", abs_start)
+    if open_tag_end < 0:
+        raise VisualEditRequestError("没有定位到目标 JSX 标签结束位置。")
+    abs_end = open_tag_end + 1
     return abs_start, abs_end
 
 
-def _choose_color_property(target: VisualEditTarget, intent: str) -> str:
-    """
-    根据目标元素和意图决定写入 `color` 还是 `backgroundColor`。
-
-    @params:
-        target: 圈选得到的目标元素信息
-        intent: 用户输入的颜色修改意图
-
-    @return:
-        返回 JSX style 中要写入的属性名
-    """
-    class_name = (target.class_name or "").lower()
-    normalized = (intent or "").strip()
-    if "背景" in normalized or "按钮" in normalized or "button" in class_name:
-        return "backgroundColor"
-    return "color"
-
-
-def _inject_or_replace_style(opening_tag: str, property_name: str, color_value: str) -> str:
+def _inject_or_replace_style(opening_tag: str, property_name: str, property_value: str) -> str:
     """
     在 JSX 起始标签中注入或更新 style 属性。
 
     @params:
         opening_tag: 目标 JSX 起始标签源码
         property_name: 要写入的样式属性名
-        color_value: 目标颜色值
+        property_value: 目标样式值
 
     @return:
         返回更新后的起始标签源码
@@ -350,7 +242,7 @@ def _inject_or_replace_style(opening_tag: str, property_name: str, color_value: 
     if style_match:
         body = style_match.group(1)
         prop_re = re.compile(rf"{property_name}\s*:\s*[\"']?[^,}}]+[\"']?")
-        replacement = f'{property_name}: "{color_value}"'
+        replacement = f'{property_name}: "{property_value}"'
         if prop_re.search(body):
             new_body = prop_re.sub(replacement, body, count=1)
         else:
@@ -363,29 +255,52 @@ def _inject_or_replace_style(opening_tag: str, property_name: str, color_value: 
     close_idx = opening_tag.rfind(">")
     if close_idx < 0:
         raise VisualEditRequestError("目标 JSX 标签缺少结束符号，无法注入 style。")
-    style_attr = f' style={{{{{property_name}: "{color_value}"}}}}'
+    style_attr = f' style={{{{{property_name}: "{property_value}"}}}}'
     return opening_tag[:close_idx] + style_attr + opening_tag[close_idx:]
 
 
-def _apply_color_change(source: str, target: VisualEditTarget, intent: str, line_no: int | None) -> str:
+def _apply_style_change(source: str, property_name: str, property_value: str, line_no: int | None) -> str:
     """
     把颜色修改意图落到目标 JSX 标签上。
 
     @params:
         source: 原始源码文本
-        target: 圈选得到的目标元素信息
-        intent: 用户输入的颜色修改意图
+        property_name: 要写入的 style 属性名
+        property_value: 目标样式值
         line_no: 圈选定位给出的近似行号
 
     @return:
         返回更新后的源码文本
     """
-    color_value = _extract_desired_color(intent)
-    property_name = _choose_color_property(target, intent)
     start, end = _find_opening_tag_range(source, line_no)
     opening_tag = source[start:end]
-    updated_tag = _inject_or_replace_style(opening_tag, property_name, color_value)
+    updated_tag = _inject_or_replace_style(opening_tag, property_name, property_value)
     return source[:start] + updated_tag + source[end:]
+
+
+def _apply_visual_edit_action(
+    source: str,
+    target: VisualEditTarget,
+    action: VisualEditAction,
+    line_no: int | None,
+) -> str:
+    """
+    把结构化视觉编辑动作应用到源码文本。
+
+    @params:
+        source: 原始源码文本
+        target: 圈选得到的目标元素信息
+        action: 已归一化的视觉编辑动作
+        line_no: 圈选定位给出的近似行号
+
+    @return:
+        返回更新后的源码文本
+    """
+    if action.kind == "set_style":
+        return _apply_style_change(source, action.property_name or "color", action.value, line_no)
+    if action.kind == "replace_text":
+        return _replace_text_near_line(source, target.text, action.value, line_no)
+    raise VisualEditRequestError(f"不支持的视觉编辑动作: {action.kind}")
 
 
 def _build_unified_diff(relative_path: str, before: str, after: str) -> str:
@@ -559,21 +474,16 @@ def create_preview(request: VisualEditPreviewRequest) -> VisualEditSession:
         try:
             target_file, line_no = _resolve_target_file(request.target.lark_src)
             current_source = target_file.read_text(encoding="utf-8")
-            if _looks_like_color_change(request.intent):
-                updated_source = _apply_color_change(
-                    current_source,
-                    request.target,
-                    request.intent,
-                    line_no,
-                )
-            else:
-                desired_text = _extract_desired_text(request.intent)
-                updated_source = _replace_text_near_line(
-                    current_source,
-                    request.target.text,
-                    desired_text,
-                    line_no,
-                )
+            try:
+                action = resolve_visual_edit_action(intent=request.intent, target=request.target)
+            except VisualEditIntentError as exc:
+                raise VisualEditRequestError(str(exc)) from exc
+            updated_source = _apply_visual_edit_action(
+                current_source,
+                request.target,
+                action,
+                line_no,
+            )
             if updated_source == current_source:
                 raise VisualEditRequestError("目标内容已经符合修改意图，无需生成预览。")
             relative_path = str(target_file.resolve().relative_to(_workspace_root().resolve()))
