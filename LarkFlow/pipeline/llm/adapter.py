@@ -1,10 +1,10 @@
 import json
-import os
 import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
+from pipeline.config import llm as llm_config
 from pipeline.ops.observability import (
     log_llm_call_finished,
     log_llm_call_started,
@@ -172,7 +172,7 @@ def get_provider_name(provider: Optional[str] = None) -> str:
     @return:
         返回归一化后的 provider 名称
     """
-    resolved = provider if provider is not None else os.getenv("LLM_PROVIDER", "anthropic")
+    resolved = provider if provider is not None else llm_config.provider_from_env()
     return _get_provider_spec(resolved).name
 
 
@@ -401,8 +401,8 @@ def _build_anthropic_client() -> Any:
     """
     import anthropic
 
-    api_key = os.getenv("ANTHROPIC_AUTH_TOKEN") or os.getenv("ANTHROPIC_API_KEY")
-    base_url = os.getenv("ANTHROPIC_BASE_URL") or None
+    api_key = llm_config.anthropic_api_key()
+    base_url = llm_config.anthropic_base_url()
     return anthropic.Anthropic(api_key=api_key, base_url=base_url)
 
 
@@ -418,8 +418,8 @@ def _build_openai_client() -> Any:
     """
     from openai import OpenAI
 
-    api_key = os.getenv("OPENAI_API_KEY")
-    base_url = os.getenv("OPENAI_BASE_URL") or None
+    api_key = llm_config.openai_api_key()
+    base_url = llm_config.openai_base_url()
     return OpenAI(api_key=api_key, base_url=base_url)
 
 
@@ -435,12 +435,8 @@ def _build_qwen_client() -> Any:
     """
     from openai import OpenAI
 
-    api_key = os.getenv("QWEN_API_KEY") or os.getenv("DASHSCOPE_API_KEY")
-    base_url = (
-        os.getenv("QWEN_BASE_URL")
-        or os.getenv("DASHSCOPE_BASE_URL")
-        or "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    )
+    api_key = llm_config.qwen_api_key()
+    base_url = llm_config.qwen_base_url()
     return OpenAI(api_key=api_key, base_url=base_url)
 
 
@@ -457,14 +453,10 @@ def _build_doubao_client() -> Any:
     from openai import OpenAI
 
     api_key = _require_config(
-        os.getenv("DOUBAO_API_KEY") or os.getenv("ARK_API_KEY"),
+        llm_config.doubao_api_key(),
         "Doubao API key is not configured; set DOUBAO_API_KEY or ARK_API_KEY",
     )
-    base_url = (
-        os.getenv("DOUBAO_BASE_URL")
-        or os.getenv("ARK_BASE_URL")
-        or "https://ark.cn-beijing.volces.com/api/v3"
-    )
+    base_url = llm_config.doubao_base_url()
     return OpenAI(api_key=api_key, base_url=base_url)
 
 
@@ -478,7 +470,7 @@ def _resolve_anthropic_model_name() -> str:
     @return:
         返回环境变量中的模型名；为空时回退默认值
     """
-    return os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+    return llm_config.anthropic_model()
 
 
 def _resolve_openai_model_name() -> str:
@@ -491,7 +483,7 @@ def _resolve_openai_model_name() -> str:
     @return:
         返回环境变量中的模型名；为空时回退默认值
     """
-    return os.getenv("OPENAI_MODEL", "gpt-5-codex")
+    return llm_config.openai_model()
 
 
 def _resolve_qwen_model_name() -> str:
@@ -504,11 +496,7 @@ def _resolve_qwen_model_name() -> str:
     @return:
         按优先级返回 QWEN / DASHSCOPE 模型名
     """
-    return (
-        os.getenv("QWEN_MODEL")
-        or os.getenv("DASHSCOPE_MODEL")
-        or "qwen3.6-plus"
-    )
+    return llm_config.qwen_resolver_model()
 
 
 def _resolve_doubao_model_name() -> str:
@@ -521,12 +509,7 @@ def _resolve_doubao_model_name() -> str:
     @return:
         按优先级返回 DOUBAO / ARK 模型配置
     """
-    return (
-        os.getenv("DOUBAO_MODEL")
-        or os.getenv("ARK_MODEL")
-        or os.getenv("ARK_ENDPOINT_ID")
-        or ""
-    )
+    return llm_config.doubao_model()
 
 
 def _create_anthropic_turn(session: Dict[str, Any], client: Any, system_prompt: str) -> AgentTurn:
@@ -542,7 +525,7 @@ def _create_anthropic_turn(session: Dict[str, Any], client: Any, system_prompt: 
         返回归一后的 AgentTurn
     """
     messages = session["provider_state"].setdefault("messages", [])
-    model_name = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+    model_name = llm_config.anthropic_model()
 
     started_at = time.monotonic()
     response = client.messages.create(
@@ -605,10 +588,10 @@ def _create_openai_turn(session: Dict[str, Any], client: Any, system_prompt: str
         client,
         system_prompt,
         provider_label="OpenAI",
-        model_env_names=["OPENAI_MODEL"],
-        default_model="gpt-5-codex",
-        retry_env_prefix="OPENAI",
-        reasoning_env_name="OPENAI_REASONING_EFFORT",
+        model_env_names=llm_config.openai_model_env_names(),
+        default_model=llm_config.DEFAULT_OPENAI_MODEL,
+        retry_env_prefix=llm_config.openai_retry_env_prefix(),
+        reasoning_env_name=llm_config.openai_reasoning_env_name(),
     )
 
 
@@ -629,9 +612,9 @@ def _create_doubao_turn(session: Dict[str, Any], client: Any, system_prompt: str
         client,
         system_prompt,
         provider_label="Doubao",
-        model_env_names=["DOUBAO_MODEL", "ARK_MODEL", "ARK_ENDPOINT_ID"],
+        model_env_names=llm_config.doubao_model_env_names(),
         default_model="",
-        retry_env_prefix="DOUBAO",
+        retry_env_prefix=llm_config.doubao_retry_env_prefix(),
         reasoning_env_name="",
     )
 
@@ -690,7 +673,7 @@ def _create_responses_turn(
     }
 
     if reasoning_env_name and _model_supports_reasoning(model_name):
-        reasoning_effort = os.getenv(reasoning_env_name, "medium").strip()
+        reasoning_effort = llm_config.reasoning_effort(reasoning_env_name)
         if reasoning_effort:
             request_args["reasoning"] = {"effort": reasoning_effort}
 
@@ -760,11 +743,7 @@ def _first_env_value(names: List[str], default: str = "") -> str:
     @return:
         返回第一个非空值；全部为空时返回 default
     """
-    for name in names:
-        value = os.getenv(name, "").strip()
-        if value:
-            return value
-    return default
+    return llm_config.first_env_value(names, default)
 
 
 def _elapsed_ms(started_at: float) -> int:
@@ -850,7 +829,7 @@ def _create_qwen_turn(session: Dict[str, Any], client: Any, system_prompt: str) 
     """
     state = session["provider_state"]
     messages = state.setdefault("messages", [])
-    model_name = os.getenv("QWEN_MODEL") or os.getenv("DASHSCOPE_MODEL") or "qwen-plus"
+    model_name = llm_config.qwen_turn_model()
 
     started_at = time.monotonic()
     response = client.chat.completions.create(
@@ -976,9 +955,9 @@ def _create_responses_response_with_retry(
     """
     from openai import RateLimitError
 
-    max_retries = int(os.getenv(f"{env_prefix}_MAX_RETRIES", "3"))
-    base_delay = float(os.getenv(f"{env_prefix}_RETRY_BASE_SECONDS", "5"))
-    max_delay = float(os.getenv(f"{env_prefix}_RETRY_MAX_SECONDS", "60"))
+    max_retries = llm_config.retry_max_retries(env_prefix)
+    base_delay = llm_config.retry_base_seconds(env_prefix)
+    max_delay = llm_config.retry_max_seconds(env_prefix)
 
     for attempt in range(max_retries + 1):
         try:

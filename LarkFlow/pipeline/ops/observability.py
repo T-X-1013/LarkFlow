@@ -12,6 +12,7 @@ import os
 import sys
 from typing import Any, Dict, Mapping, Optional
 
+from pipeline.config import runtime as runtime_config
 from pipeline.core.contracts import MetricsItem, PipelineState, RoleMetrics, TokenUsage
 
 _LOGGER_NAME = "larkflow"
@@ -107,7 +108,7 @@ def _configure() -> None:
         return
 
     logger = logging.getLogger(_LOGGER_NAME)
-    logger.setLevel(os.getenv("LARKFLOW_LOG_LEVEL", "INFO").upper())
+    logger.setLevel(runtime_config.log_level())
     logger.propagate = False
 
     formatter = _JsonFormatter()
@@ -116,7 +117,7 @@ def _configure() -> None:
     stream_handler.setFormatter(formatter)
     logger.addHandler(stream_handler)
 
-    log_path = os.getenv("LARKFLOW_LOG_FILE", "logs/larkflow.jsonl")
+    log_path = runtime_config.log_file()
     log_dir = os.path.dirname(os.path.abspath(log_path)) or "."
     os.makedirs(log_dir, exist_ok=True)
     file_handler = logging.FileHandler(log_path, encoding="utf-8")

@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import io
 import json
-import os
 import time
 from typing import Optional
 
@@ -33,6 +32,7 @@ from lark_oapi.api.drive.v1 import (
     UploadAllMediaRequestBody,
 )
 
+from pipeline.config import lark as lark_config
 from pipeline.lark.sdk import get_lark_client
 
 
@@ -55,12 +55,11 @@ _MOUNT_TYPE_FOLDER = 1
 
 
 def _doc_domain() -> str:
-    return (os.getenv("LARK_DOC_DOMAIN") or _DEFAULT_DOC_DOMAIN).rstrip("/")
+    return (lark_config.doc_domain_override() or _DEFAULT_DOC_DOMAIN).rstrip("/")
 
 
 def _folder_token() -> Optional[str]:
-    token = (os.getenv("LARK_TECH_DOC_FOLDER_TOKEN") or "").strip()
-    return token or None
+    return lark_config.tech_doc_folder_token() or None
 
 
 def _upload_markdown(file_name: str, content: str, parent_node: str) -> str:

@@ -8,11 +8,11 @@ LarkFlow 飞书消息发送客户端
 """
 
 import json
-import os
 from typing import Any, Optional
 
 from lark_oapi.api.im.v1 import CreateMessageRequest, CreateMessageRequestBody
 
+from pipeline.config import lark as lark_config
 from pipeline.lark.sdk import get_lark_client
 
 
@@ -111,7 +111,7 @@ def _get_receive_id_type() -> str:
     @return:
         返回发送消息时使用的 receive_id_type；默认值为 open_id
     """
-    return os.getenv("LARK_RECEIVE_ID_TYPE", "open_id")
+    return lark_config.receive_id_type()
 
 
 def _send_message(

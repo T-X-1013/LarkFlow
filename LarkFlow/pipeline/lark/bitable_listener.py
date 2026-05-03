@@ -17,7 +17,6 @@ LarkFlow 多维表格（Base）事件监听
 
 from __future__ import annotations
 
-import os
 import traceback
 from typing import Any, Optional
 
@@ -29,6 +28,7 @@ from lark_oapi.api.bitable.v1 import (
 from lark_oapi.api.drive.v1 import SubscribeFileRequest
 from lark_oapi.api.drive.v1 import P2DriveFileBitableRecordChangedV1
 
+from pipeline.config import lark as lark_config
 from pipeline.lark.client import send_demand_start_card
 from pipeline.lark.sdk import get_lark_client
 
@@ -49,35 +49,35 @@ _ERR_RECORD_NOT_FOUND = 1254043
 
 
 def _demand_base_token() -> str:
-    return (os.getenv("LARK_DEMAND_BASE_TOKEN") or "").strip()
+    return lark_config.demand_base_token()
 
 
 def _demand_table_id() -> str:
-    return (os.getenv("LARK_DEMAND_TABLE_ID") or "").strip()
+    return lark_config.demand_table_id()
 
 
 def _demand_status_field() -> str:
-    return (os.getenv("LARK_DEMAND_STATUS_FIELD") or "状态").strip()
+    return lark_config.demand_status_field()
 
 
 def _demand_id_field() -> str:
-    return (os.getenv("LARK_DEMAND_ID_FIELD") or "需求ID").strip()
+    return lark_config.demand_id_field()
 
 
 def _demand_doc_field() -> str:
-    return (os.getenv("LARK_DEMAND_DOC_FIELD") or "需求文档").strip()
+    return lark_config.demand_doc_field()
 
 
 def _tech_doc_field() -> str:
-    return (os.getenv("LARK_TECH_DOC_FIELD") or "技术方案文档").strip()
+    return lark_config.tech_doc_field()
 
 
 def _approve_target() -> str:
-    return (os.getenv("LARK_DEMAND_APPROVE_TARGET") or "").strip()
+    return lark_config.demand_approve_target()
 
 
 def _approve_receive_id_type() -> str:
-    return (os.getenv("LARK_DEMAND_APPROVE_RECEIVE_ID_TYPE") or "open_id").strip()
+    return lark_config.demand_approve_receive_id_type()
 
 
 def subscribe_demand_base() -> None:

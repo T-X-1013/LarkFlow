@@ -11,18 +11,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import signal
 import threading
 from typing import Optional
 
 import uvicorn
-from dotenv import load_dotenv
 
+from pipeline.config import runtime as runtime_config  # 触发 .env 加载
 from pipeline.api import create_app
 from pipeline.lark.interaction import run_event_loop
-
-load_dotenv()
 
 logger = logging.getLogger("larkflow.app")
 
@@ -35,7 +32,7 @@ async def _run_http(host: str, port: int, stop_event: asyncio.Event) -> None:
         app,
         host=host,
         port=port,
-        log_level=os.getenv("UVICORN_LOG_LEVEL", "info"),
+        log_level=runtime_config.uvicorn_log_level(),
         loop="asyncio",
         lifespan="on",
     )
@@ -87,8 +84,8 @@ async def _run_ws() -> None:
 
 
 async def main(host: Optional[str] = None, port: Optional[int] = None) -> None:
-    resolved_host = host or os.getenv("PIPELINE_HTTP_HOST", "0.0.0.0")
-    resolved_port = int(port or os.getenv("PIPELINE_HTTP_PORT", "8000"))
+    resolved_host = host or runtime_config.http_host()
+    resolved_port = int(port) if port else runtime_config.http_port()
 
     loop = asyncio.get_running_loop()
     stop_event = asyncio.Event()

@@ -19,13 +19,13 @@ from typing import Any, Callable, Optional
 
 import lark_oapi as lark
 import certifi
-from dotenv import load_dotenv
 from lark_oapi.event.callback.model.p2_card_action_trigger import (
     P2CardActionTrigger,
     P2CardActionTriggerResponse,
 )
 from lark_oapi.api.drive.v1 import P2DriveFileBitableRecordChangedV1
 
+from pipeline.config import lark as lark_config
 from pipeline.lark.bitable_listener import (
     STATUS_FAILED,
     STATUS_PROCESSING,
@@ -43,7 +43,8 @@ from telemetry.hooks import (
     trace_lark_start_request,
 )
 
-load_dotenv()
+# .env 的加载由 `pipeline.config` 统一触发（本文件 `from pipeline.config import
+# lark as lark_config` 已保证 load_dotenv 先跑一次）。
 os.environ.setdefault("SSL_CERT_FILE", certifi.where())
 
 
@@ -74,7 +75,7 @@ def _event_store_path() -> Path:
     @return:
         返回用于保存 event_id 的 SQLite 文件路径
     """
-    configured_path = (os.getenv("LARK_EVENT_STORE_PATH") or "").strip()
+    configured_path = lark_config.event_store_path()
     if configured_path:
         return Path(configured_path).expanduser().resolve()
     return _project_root() / "tmp" / "lark_event_store.db"
@@ -477,8 +478,9 @@ def run_event_loop(app_id: Optional[str] = None, app_secret: Optional[str] = Non
         无返回值；函数会阻塞直到连接终止
     """
     # 同样必须 strip，docker --env-file 不会自动 trim 尾部空白
-    resolved_app_id = (app_id or os.getenv("LARK_APP_ID") or "").strip().strip('"').strip("'")
-    resolved_app_secret = (app_secret or os.getenv("LARK_APP_SECRET") or "").strip().strip('"').strip("'")
+    # 同名工具：当显式传入 app_id/app_secret 时优先用显式值，否则回退到 env
+    resolved_app_id = lark_config._strip_quoted(app_id) or lark_config.app_id()
+    resolved_app_secret = lark_config._strip_quoted(app_secret) or lark_config.app_secret()
     if not resolved_app_id or not resolved_app_secret:
         raise RuntimeError(
             "缺少 LARK_APP_ID 或 LARK_APP_SECRET 环境变量，无法启动飞书事件监听"

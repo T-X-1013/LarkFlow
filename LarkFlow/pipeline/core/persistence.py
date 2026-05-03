@@ -14,6 +14,8 @@ import threading
 import time
 from typing import Any, Dict, Iterable, List, Optional
 
+from pipeline.config import runtime as runtime_config
+
 # 序列化时需剥离的非 JSON 字段
 # client: LLM SDK 对象，恢复时由 build_client(provider) 重建
 # logger: A4 将注入的结构化 logger，恢复时由 get_logger(demand_id) 重建
@@ -123,5 +125,4 @@ class SqliteSessionStore(SessionStore):
 
 def default_store() -> SessionStore:
     """根据环境变量 LARKFLOW_SESSION_DB 构造默认 store。"""
-    db_path = os.getenv("LARKFLOW_SESSION_DB", ".larkflow/sessions.db")
-    return SqliteSessionStore(db_path)
+    return SqliteSessionStore(runtime_config.session_db_path())
