@@ -3,10 +3,31 @@ import { pipelineFixtures } from "./fixtures/pipelines";
 
 type PipelineListener = (pipelines: PipelineState[]) => void;
 
-let pipelines = structuredClone(pipelineFixtures) as PipelineState[];
+const STORAGE_KEY = "larkflow:mock-pipelines";
+
+function loadPipelines() {
+  try {
+    const raw = window.sessionStorage.getItem(STORAGE_KEY);
+    if (raw) return JSON.parse(raw) as PipelineState[];
+  } catch {
+    // sessionStorage 不可用时退回静态 fixtures
+  }
+  return structuredClone(pipelineFixtures) as PipelineState[];
+}
+
+function persistPipelines() {
+  try {
+    window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(pipelines));
+  } catch {
+    // 持久化失败不影响 mock 的内存态演示
+  }
+}
+
+let pipelines = loadPipelines();
 const listeners = new Set<PipelineListener>();
 
 function emit() {
+  persistPipelines();
   const snapshot = getPipelineSnapshot();
   for (const listener of listeners) {
     listener(snapshot);

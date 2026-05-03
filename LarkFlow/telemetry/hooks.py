@@ -80,16 +80,21 @@ def trace_phase_execution(
     demand_id: str,
     phase: str,
     prompt_file: Optional[str],
+    role: Optional[str] = None,
 ) -> Iterator[Any]:
-    """单个 phase 执行 span。"""
-    with start_span(
-        f"phase.{phase}",
-        {
-            "demand_id": demand_id,
-            "phase": phase,
-            "prompt_file": prompt_file,
-        },
-    ) as span:
+    """单个 phase 执行 span。
+
+    D7：role 非空时写入 span attribute，用于在 Tempo / Grafana 中按
+    role 分色（security / testing-coverage / kratos-layering）。
+    """
+    attrs: dict = {
+        "demand_id": demand_id,
+        "phase": phase,
+        "prompt_file": prompt_file,
+    }
+    if role is not None:
+        attrs["role"] = role
+    with start_span(f"phase.{phase}", attrs) as span:
         yield span
 
 

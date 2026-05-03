@@ -42,6 +42,20 @@ export interface Checkpoint {
   reason: string | null;
 }
 
+export interface ReviewSubRoleResult {
+  role: string;
+  status: string;
+  artifact_path: string | null;
+  tokens_input: number;
+  tokens_output: number;
+  duration_ms: number;
+  error: string | null;
+}
+
+export interface ReviewMultiSnapshot {
+  subroles: ReviewSubRoleResult[];
+}
+
 export interface PipelineState {
   id: string;
   requirement: string;
@@ -53,10 +67,18 @@ export interface PipelineState {
   provider: string | null;
   created_at: number;
   updated_at: number;
+  review_multi?: ReviewMultiSnapshot | null;
 }
 
 export interface PipelineCreateResponse {
   id: string;
+}
+
+export interface RoleMetrics {
+  role: string;
+  tokens_input: number;
+  tokens_output: number;
+  duration_ms: number;
 }
 
 export interface MetricsItem {
@@ -65,6 +87,7 @@ export interface MetricsItem {
   duration_ms: number;
   tokens: TokenUsage;
   stages: Partial<Record<Stage, StageResult>>;
+  by_role: RoleMetrics[];
 }
 
 export interface MetricsResponse {

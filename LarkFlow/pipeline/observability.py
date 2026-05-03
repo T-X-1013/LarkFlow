@@ -12,7 +12,7 @@ import os
 import sys
 from typing import Any, Dict, Mapping, Optional
 
-from pipeline.contracts import MetricsItem, PipelineState, TokenUsage
+from pipeline.contracts import MetricsItem, PipelineState, RoleMetrics, TokenUsage
 
 _LOGGER_NAME = "larkflow"
 
@@ -38,6 +38,9 @@ _STD_EXTRA_KEYS = (
     "tokens_out",
     "total_tokens",
     "latency_ms",
+    # D7：Phase 4 多视角并行新增字段，用于按 role 区分三路 reviewer
+    "role",
+    "parent_demand_id",
 )
 _configured = False
 
@@ -123,21 +126,34 @@ def _configure() -> None:
     _configured = True
 
 
-def get_logger(demand_id: str, phase: Optional[str] = None) -> _DemandLoggerAdapter:
+def get_logger(
+    demand_id: str,
+    phase: Optional[str] = None,
+    role: Optional[str] = None,
+    parent_demand_id: Optional[str] = None,
+) -> _DemandLoggerAdapter:
     """
     为指定需求返回带上下文字段的结构化 logger。
 
     @params:
-        demand_id: 当前需求 ID
+        demand_id: 当前需求 ID（子 session 传子 key）
         phase: 可选阶段名；传入后会作为默认 phase 写入每条日志
+        role: D7 多视角并行 Review 的 role 名（security / testing-coverage /
+            kratos-layering）；非子 reviewer 时留空
+        parent_demand_id: D7 子 session 的父 demand_id；用于 Grafana/Loki 按父
+            pipeline 聚合 metrics
 
     @return:
-        返回 LoggerAdapter，自动附带 demand_id 与可选 phase
+        返回 LoggerAdapter，自动附带 demand_id 与可选 phase/role/parent
     """
     _configure()
     extra: Dict[str, Any] = {"demand_id": demand_id}
     if phase is not None:
         extra["phase"] = phase
+    if role is not None:
+        extra["role"] = role
+    if parent_demand_id is not None:
+        extra["parent_demand_id"] = parent_demand_id
     return _DemandLoggerAdapter(logging.getLogger(_LOGGER_NAME), extra)
 
 
@@ -146,6 +162,8 @@ def log_turn_metrics(
     phase: Optional[str],
     usage: Mapping[str, Any],
     tool_name: Optional[str] = None,
+    *,
+    role: Optional[str] = None,
 ) -> None:
     """
     把一轮 Agent 交互的 usage 指标打成结构化事件。
@@ -155,25 +173,27 @@ def log_turn_metrics(
         phase: 当前阶段名
         usage: 归一后的 usage 字段
         tool_name: 可选工具名；当本轮由工具调用触发时用于补充上下文
+        role: D7 子 reviewer 的 role 名；非空时写入 extra.role 供 Grafana
+            按 role 维度拆图
 
     @return:
         无返回值；直接输出结构化日志
     """
-    logger.info(
-        "agent_turn",
-        extra={
-            "event": "agent_turn",
-            "phase": phase,
-            "tool_name": tool_name,
-            "tokens_input": int(usage.get("prompt_tokens") or 0),
-            "tokens_output": int(usage.get("completion_tokens") or 0),
-            "duration_ms": int(usage.get("latency_ms") or 0),
-            "tokens_in": int(usage.get("prompt_tokens") or 0),
-            "tokens_out": int(usage.get("completion_tokens") or 0),
-            "total_tokens": int(usage.get("total_tokens") or 0),
-            "latency_ms": int(usage.get("latency_ms") or 0),
-        },
-    )
+    extra: Dict[str, Any] = {
+        "event": "agent_turn",
+        "phase": phase,
+        "tool_name": tool_name,
+        "tokens_input": int(usage.get("prompt_tokens") or 0),
+        "tokens_output": int(usage.get("completion_tokens") or 0),
+        "duration_ms": int(usage.get("latency_ms") or 0),
+        "tokens_in": int(usage.get("prompt_tokens") or 0),
+        "tokens_out": int(usage.get("completion_tokens") or 0),
+        "total_tokens": int(usage.get("total_tokens") or 0),
+        "latency_ms": int(usage.get("latency_ms") or 0),
+    }
+    if role is not None:
+        extra["role"] = role
+    logger.info("agent_turn", extra=extra)
 
 
 def log_llm_call_started(
@@ -380,6 +400,24 @@ def build_metrics_item(
         返回填充好 tokens / duration / stages 的 MetricsItem
     """
     metrics = (session or {}).get("metrics") or {}
+    # D7：feature_multi 模板把 session["metrics"]["by_role"] 聚合为 dict
+    # {role: {tokens_input, tokens_output, duration_ms}}，这里把它摊平成
+    # List[RoleMetrics] 让前端按数组渲染。非并行模板该字段为空列表。
+    raw_by_role = metrics.get("by_role") or {}
+    by_role: list = []
+    if isinstance(raw_by_role, dict):
+        for role_name, entry in raw_by_role.items():
+            if not isinstance(entry, dict):
+                continue
+            try:
+                by_role.append(RoleMetrics(
+                    role=str(role_name),
+                    tokens_input=_coerce_int(entry.get("tokens_input")),
+                    tokens_output=_coerce_int(entry.get("tokens_output")),
+                    duration_ms=_coerce_int(entry.get("duration_ms")),
+                ))
+            except Exception:  # noqa: BLE001 — 损坏条目不阻塞 metrics API
+                continue
     return MetricsItem(
         pipeline_id=pipeline_id,
         status=state.status,
@@ -389,4 +427,5 @@ def build_metrics_item(
             output=_read_metric(metrics, "tokens_output", "tokens_out"),
         ),
         stages=state.stages,
+        by_role=by_role,
     )

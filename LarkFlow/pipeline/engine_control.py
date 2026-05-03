@@ -214,6 +214,33 @@ def build_state(ctl: PipelineControl, session: Optional[Dict]) -> PipelineState:
         except Exception:  # noqa: BLE001 — 数据损坏不应拖垮 API
             continue
 
+    # D7：feature_multi 等 parallel review 模板把三路 reviewer 的结果落在
+    # session["review_multi"]["subroles"]，反序列化为 ReviewMultiSnapshot；
+    # 单 agent 模板无此字段，review_multi 保持 None（前端判空不渲染）。
+    review_multi = None
+    raw_review_multi = (session or {}).get("review_multi") or {}
+    raw_subroles = raw_review_multi.get("subroles") or []
+    if raw_subroles:
+        from pipeline.contracts import ReviewMultiSnapshot, ReviewSubRoleResult
+        parsed: list = []
+        for entry in raw_subroles:
+            if not isinstance(entry, dict):
+                continue
+            try:
+                parsed.append(ReviewSubRoleResult(
+                    role=str(entry.get("role", "")),
+                    status=str(entry.get("status", "pending")),
+                    artifact_path=entry.get("artifact_path"),
+                    tokens_input=int(entry.get("tokens_input", 0) or 0),
+                    tokens_output=int(entry.get("tokens_output", 0) or 0),
+                    duration_ms=int(entry.get("duration_ms", 0) or 0),
+                    error=entry.get("error"),
+                ))
+            except Exception:  # noqa: BLE001 — 损坏条目不阻塞状态查询
+                continue
+        if parsed:
+            review_multi = ReviewMultiSnapshot(subroles=parsed)
+
     return PipelineState(
         id=ctl.demand_id,
         requirement=ctl.requirement,
@@ -225,4 +252,5 @@ def build_state(ctl: PipelineControl, session: Optional[Dict]) -> PipelineState:
         provider=ctl.provider,
         created_at=ctl.created_at,
         updated_at=ctl.updated_at,
+        review_multi=review_multi,
     )
