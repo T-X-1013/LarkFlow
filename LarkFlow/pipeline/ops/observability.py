@@ -12,7 +12,7 @@ import os
 import sys
 from typing import Any, Dict, Mapping, Optional
 
-from pipeline.contracts import MetricsItem, PipelineState, RoleMetrics, TokenUsage
+from pipeline.core.contracts import MetricsItem, PipelineState, RoleMetrics, TokenUsage
 
 _LOGGER_NAME = "larkflow"
 

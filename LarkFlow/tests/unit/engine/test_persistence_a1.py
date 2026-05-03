@@ -5,7 +5,7 @@ import threading
 import unittest
 from pathlib import Path
 
-from pipeline.persistence import SqliteSessionStore, default_store
+from pipeline.core.persistence import SqliteSessionStore, default_store
 
 
 class SqliteSessionStoreTestCase(unittest.TestCase):

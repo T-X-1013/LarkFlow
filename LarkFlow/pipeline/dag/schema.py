@@ -11,7 +11,7 @@ from typing import Dict, List, Literal, Optional
 import yaml
 from pydantic import BaseModel, Field, model_validator
 
-from pipeline.contracts import CheckpointName, Stage
+from pipeline.core.contracts import CheckpointName, Stage
 
 
 _DEFAULT_YAML = os.path.join(os.path.dirname(__file__), "default.yaml")

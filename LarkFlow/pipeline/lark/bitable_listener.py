@@ -29,8 +29,8 @@ from lark_oapi.api.bitable.v1 import (
 from lark_oapi.api.drive.v1 import SubscribeFileRequest
 from lark_oapi.api.drive.v1 import P2DriveFileBitableRecordChangedV1
 
-from pipeline.lark_client import send_demand_start_card
-from pipeline.utils.lark_sdk import get_lark_client
+from pipeline.lark.client import send_demand_start_card
+from pipeline.lark.sdk import get_lark_client
 
 
 STATUS_EMPTY = ""

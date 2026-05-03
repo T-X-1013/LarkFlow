@@ -1,6 +1,6 @@
 import unittest
 
-from pipeline.tools_schema import get_tool_specs
+from pipeline.llm.tools_schema import get_tool_specs
 from scripts.gen_tools_doc import (
     AUTO_GENERATED_HEADER,
     check_tools_definition,

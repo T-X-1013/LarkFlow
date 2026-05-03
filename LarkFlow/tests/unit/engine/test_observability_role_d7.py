@@ -16,7 +16,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from pipeline import observability
+from pipeline.ops import observability
 
 
 class ObservabilityRoleTestCase(unittest.TestCase):

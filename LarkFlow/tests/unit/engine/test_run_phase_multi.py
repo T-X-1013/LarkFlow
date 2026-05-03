@@ -19,11 +19,11 @@ from pathlib import Path
 from typing import Any, Dict
 from unittest.mock import patch, MagicMock
 
-from pipeline import engine
-from pipeline.contracts import Stage
+from pipeline.core import engine
+from pipeline.core.contracts import Stage
 from pipeline.dag.schema import DAGNode
-from pipeline.persistence import SqliteSessionStore
-from pipeline.subsession import load_subsession, subsession_key
+from pipeline.core.persistence import SqliteSessionStore
+from pipeline.core.subsession import load_subsession, subsession_key
 
 
 def _make_parent_session(demand_id: str) -> Dict[str, Any]:

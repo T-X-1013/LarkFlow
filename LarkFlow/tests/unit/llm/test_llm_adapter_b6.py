@@ -3,7 +3,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from pipeline.llm_adapter import (
+from pipeline.llm.adapter import (
     _create_openai_response_with_retry,
     append_tool_result,
     create_turn,
@@ -236,8 +236,8 @@ class LlmAdapterB6TestCase(unittest.TestCase):
         # 用任意非空对象占位即可；这里测试的是 create_turn 是否走了结构化日志分支，而不是 logger 实现本身。
         session["logger"] = object()
 
-        with patch("pipeline.llm_adapter.log_llm_call_started") as start_mock, \
-             patch("pipeline.llm_adapter.log_llm_call_finished") as finish_mock, \
+        with patch("pipeline.llm.adapter.log_llm_call_started") as start_mock, \
+             patch("pipeline.llm.adapter.log_llm_call_finished") as finish_mock, \
              patch.dict(os.environ, {"ANTHROPIC_MODEL": "claude-test"}, clear=False):
             turn = create_turn(session, "system prompt")
 
@@ -479,7 +479,7 @@ class LlmAdapterB6TestCase(unittest.TestCase):
                 "OPENAI_RETRY_MAX_SECONDS": "0",
             },
             clear=False,
-        ), patch("pipeline.llm_adapter.time.sleep") as sleep_mock:
+        ), patch("pipeline.llm.adapter.time.sleep") as sleep_mock:
             result = _create_openai_response_with_retry(
                 client,
                 {"model": "gpt-test"},

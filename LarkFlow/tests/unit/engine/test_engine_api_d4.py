@@ -8,9 +8,9 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from pipeline import engine, engine_api, engine_control
+from pipeline.core import engine, engine_api, engine_control
 from pipeline.api.routes import create_app
-from pipeline.persistence import SqliteSessionStore
+from pipeline.core.persistence import SqliteSessionStore
 
 
 class EngineApiD4TestCase(unittest.TestCase):

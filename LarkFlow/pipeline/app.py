@@ -20,7 +20,7 @@ import uvicorn
 from dotenv import load_dotenv
 
 from pipeline.api import create_app
-from pipeline.lark_interaction import run_event_loop
+from pipeline.lark.interaction import run_event_loop
 
 load_dotenv()
 

@@ -5,12 +5,12 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
-from pipeline.observability import (
+from pipeline.ops.observability import (
     log_llm_call_finished,
     log_llm_call_started,
     log_llm_retry,
 )
-from pipeline.tools_schema import get_anthropic_tools, get_chat_completion_tools, get_openai_tools
+from pipeline.llm.tools_schema import get_anthropic_tools, get_chat_completion_tools, get_openai_tools
 from telemetry.otel import start_span
 
 

@@ -15,7 +15,7 @@ from unittest.mock import patch
 
 from lark_oapi.event.callback.model.p2_card_action_trigger import P2CardActionTrigger
 
-from pipeline.lark_interaction import (
+from pipeline.lark.interaction import (
     _on_card_action,
     process_card_action,
 )
@@ -46,13 +46,13 @@ class LarkInteractionTestCase(unittest.TestCase):
             resume_calls.append((demand_id, approved, feedback))
 
         with patch(
-            "pipeline.lark_interaction._launch_background_task",
+            "pipeline.lark.interaction._launch_background_task",
             side_effect=immediate_runner,
         ), patch(
-            "pipeline.lark_interaction.time.sleep",
+            "pipeline.lark.interaction.time.sleep",
             return_value=None,
         ), patch(
-            "pipeline.engine.resume_after_approval",
+            "pipeline.core.engine.resume_after_approval",
             side_effect=fake_resume,
         ):
             card = process_card_action(
@@ -75,13 +75,13 @@ class LarkInteractionTestCase(unittest.TestCase):
             resume_calls.append((demand_id, approved, feedback))
 
         with patch(
-            "pipeline.lark_interaction._launch_background_task",
+            "pipeline.lark.interaction._launch_background_task",
             side_effect=immediate_runner,
         ), patch(
-            "pipeline.lark_interaction.time.sleep",
+            "pipeline.lark.interaction.time.sleep",
             return_value=None,
         ), patch(
-            "pipeline.engine.resume_after_approval",
+            "pipeline.core.engine.resume_after_approval",
             side_effect=fake_resume,
         ):
             card = process_card_action(
@@ -103,13 +103,13 @@ class LarkInteractionTestCase(unittest.TestCase):
             resume_calls.append((demand_id, approved, feedback))
 
         with patch(
-            "pipeline.lark_interaction._launch_background_task",
+            "pipeline.lark.interaction._launch_background_task",
             side_effect=immediate_runner,
         ), patch(
-            "pipeline.lark_interaction.time.sleep",
+            "pipeline.lark.interaction.time.sleep",
             return_value=None,
         ), patch(
-            "pipeline.engine.resume_after_approval",
+            "pipeline.core.engine.resume_after_approval",
             side_effect=fake_resume,
         ):
             payload = {"action": "approve", "demand_id": "DEMAND-B5"}
@@ -157,13 +157,13 @@ class LarkInteractionTestCase(unittest.TestCase):
             resume_calls.append((demand_id, approved, feedback))
 
         with patch(
-            "pipeline.lark_interaction._launch_background_task",
+            "pipeline.lark.interaction._launch_background_task",
             side_effect=immediate_runner,
         ), patch(
-            "pipeline.lark_interaction.time.sleep",
+            "pipeline.lark.interaction.time.sleep",
             return_value=None,
         ), patch(
-            "pipeline.engine.resume_after_approval",
+            "pipeline.core.engine.resume_after_approval",
             side_effect=fake_resume,
         ):
             response = _on_card_action(sdk_event)

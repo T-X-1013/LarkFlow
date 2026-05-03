@@ -70,7 +70,7 @@ def run_pipeline(fixture: Fixture, mock: bool) -> PipelineTrace:
 
     In `mock=True` mode, the LLM is stubbed to a deterministic script; used in
     CI so we can assert routing behaviour without burning tokens. The real
-    implementation wires into pipeline.engine's hooks — left as a TODO here
+    implementation wires into pipeline.core.engine's hooks — left as a TODO here
     because the hook points depend on A's observability work (A4).
     """
     if mock:

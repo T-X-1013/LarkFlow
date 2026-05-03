@@ -15,8 +15,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from pipeline.persistence import SqliteSessionStore
-from pipeline.subsession import (
+from pipeline.core.persistence import SqliteSessionStore
+from pipeline.core.subsession import (
     SUBSESSION_ROLE_SEP,
     finalize_subsession,
     init_subsession,

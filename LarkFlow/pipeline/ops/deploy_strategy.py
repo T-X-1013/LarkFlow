@@ -166,7 +166,7 @@ class DockerfileGoStrategy(DeployStrategy):
                 f.write(content)
 
     def _template_dockerfile_path(self) -> Path:
-        return Path(__file__).resolve().parents[1] / "templates" / "kratos-skeleton" / "Dockerfile"
+        return Path(__file__).resolve().parents[2] / "templates" / "kratos-skeleton" / "Dockerfile"
 
     def _preflight(self, target_dir: str) -> str:
         missing_core_files = [

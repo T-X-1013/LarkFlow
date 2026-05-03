@@ -7,8 +7,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from pipeline import observability
-from pipeline.contracts import PipelineState, PipelineStatus, Stage, StageResult, StageStatus
+from pipeline.ops import observability
+from pipeline.core.contracts import PipelineState, PipelineStatus, Stage, StageResult, StageStatus
 
 
 class ObservabilityA4TestCase(unittest.TestCase):

@@ -7,8 +7,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from pipeline import deploy_strategy
-from pipeline.deploy_strategy import DockerfileGoStrategy
+from pipeline.ops import deploy_strategy
+from pipeline.ops.deploy_strategy import DockerfileGoStrategy
 
 
 def _completed(stdout="", stderr="", returncode=0):

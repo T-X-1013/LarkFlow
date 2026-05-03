@@ -9,16 +9,16 @@ from datetime import datetime, timezone
 from typing import Dict, Any, Literal, Optional, Tuple
 
 # 将项目根目录加入 sys.path，解决直接运行脚本时的模块导入问题
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
 # 导入我们之前写的模块
-from pipeline.lark_client import send_lark_card, send_lark_text
-from pipeline.lark_doc_client import (
+from pipeline.lark.client import send_lark_card, send_lark_text
+from pipeline.lark.doc_client import (
     LarkDocWriteError,
     create_tech_doc,
     grant_doc_access,
 )
-from pipeline.llm_adapter import (
+from pipeline.llm.adapter import (
     ToolCall,
     append_tool_result,
     append_user_text,
@@ -27,18 +27,18 @@ from pipeline.llm_adapter import (
     get_provider_name,
     initialize_session,
 )
-from pipeline.tools_runtime import ToolContext, execute as execute_local_tool
-from pipeline.persistence import SessionStore, default_store
-from pipeline.observability import accumulate_metrics, get_logger, log_turn_metrics
-from pipeline.deploy_strategy import get_strategy
-from pipeline.engine_control import (
+from pipeline.llm.tools_runtime import ToolContext, execute as execute_local_tool
+from pipeline.core.persistence import SessionStore, default_store
+from pipeline.ops.observability import accumulate_metrics, get_logger, log_turn_metrics
+from pipeline.ops.deploy_strategy import get_strategy
+from pipeline.core.engine_control import (
     PipelineCancelled,
     check_lifecycle,
     get as get_pipeline_control,
     phase_to_stage,
 )
-from pipeline.contracts import CheckpointName, Stage, StageResult, StageStatus, TokenUsage
-from pipeline.subsession import (
+from pipeline.core.contracts import CheckpointName, Stage, StageResult, StageStatus, TokenUsage
+from pipeline.core.subsession import (
     finalize_subsession,
     init_subsession,
     load_subsession,
@@ -100,7 +100,7 @@ def _save_session(demand_id: str, session: Dict[str, Any]) -> None:
 # ==========================================
 def load_prompt(phase_filename: str) -> str:
     """从 agents 目录加载 System Prompt"""
-    path = os.path.join(os.path.dirname(__file__), "..", "agents", phase_filename)
+    path = os.path.join(os.path.dirname(__file__), "..", "..", "agents", phase_filename)
     with open(path, "r", encoding="utf-8") as f:
         return f.read()
 
@@ -160,7 +160,7 @@ def _resolve_workspace_and_target(session_target: str = None) -> tuple:
     @return:
         (workspace_root 绝对路径, target_dir 绝对路径)
     """
-    workspace_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    workspace_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
     target_dir = session_target or os.path.abspath(os.path.join(workspace_root, "..", "demo-app"))
     return workspace_root, target_dir
 
@@ -299,7 +299,7 @@ def _prepare_tech_doc(
     # 成功拿到 url 后回写 Base 技术方案文档列，失败仅告警不阻塞审批链路
     if record_id:
         try:
-            from pipeline.lark_bitable_listener import update_demand_tech_doc_url
+            from pipeline.lark.bitable_listener import update_demand_tech_doc_url
 
             if not update_demand_tech_doc_url(record_id, url):
                 logger.warning(
@@ -523,7 +523,7 @@ def _build_next_phase_from_dag() -> Dict[str, str]:
         返回 `{当前 phase: 下一 phase}` 的映射字典
     """
     from pipeline.dag import default_dag
-    from pipeline.engine_control import stage_to_phase
+    from pipeline.core.engine_control import stage_to_phase
 
     dag = default_dag()
     order = [stage_to_phase(s) for s in dag.topo_order()]
@@ -768,7 +768,7 @@ def _try_regress(demand_id: str, findings: str, logger) -> bool:
     - 否则：递增计数、history 追加、以 user 消息形式注入 findings 作为下轮 Coding 的 kickoff
     - 返回 True 表示已调度回归，上游应把 current 切换到 policy.to
     """
-    from pipeline import engine_control
+    from pipeline.core import engine_control
     from pipeline.dag.schema import default_dag, load_template
 
     ctl = engine_control.get(demand_id)
@@ -842,7 +842,7 @@ def _try_regress(demand_id: str, findings: str, logger) -> bool:
 def _resolve_review_node_for_demand(demand_id: str):
     """按需求的 pipeline 模板解析 review 节点；无 ctl / 未知模板时返回 None
     （调用方会退化为单 agent 路径）。"""
-    from pipeline import engine_control
+    from pipeline.core import engine_control
     from pipeline.dag.schema import default_dag, load_template
 
     ctl = engine_control.get(demand_id)
@@ -1395,8 +1395,8 @@ def _seed_pending_checkpoint(demand_id: str, name: CheckpointName) -> None:
     engine_api.approve/reject_checkpoint 仍会用 setdefault 兜底；此处的预埋只是把
     "等待审批" 这件事对 HTTP 客户端可见，避免前端只能通过飞书卡片得知 HITL 状态。
     """
-    from pipeline import engine_control
-    from pipeline.contracts import Checkpoint, StageStatus
+    from pipeline.core import engine_control
+    from pipeline.core.contracts import Checkpoint, StageStatus
 
     ctl = engine_control.get(demand_id)
     if ctl is None:
@@ -1419,7 +1419,7 @@ def _template_has_deploy_checkpoint(demand_id: str) -> bool:
     refactor 模板不挂 deploy（重构产物由人自行决定是否部署），其他模板默认挂。
     拿不到 ctl 时回退到 True，保持向后兼容。
     """
-    from pipeline import engine_control
+    from pipeline.core import engine_control
     from pipeline.dag.schema import load_template
 
     ctl = engine_control.get(demand_id)
@@ -1453,7 +1453,7 @@ def _request_deploy_approval(demand_id: str, logger) -> None:
 
     不触发真正部署；仅把 session.phase 置为 deploy_pending 并落盘。
     """
-    from pipeline.lark_cards import build_deploy_approval_card
+    from pipeline.lark.cards import build_deploy_approval_card
 
     session = _load_session(demand_id)
     if session is None:
@@ -1491,7 +1491,7 @@ def _request_deploy_approval(demand_id: str, logger) -> None:
 
     lark_target = os.getenv("LARK_CHAT_ID")
     if lark_target:
-        from pipeline.lark_client import send_lark_card_raw
+        from pipeline.lark.client import send_lark_card_raw
         card = build_deploy_approval_card(
             demand_id=demand_id,
             review_summary=review_summary[:800],

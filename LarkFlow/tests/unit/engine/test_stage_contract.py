@@ -13,8 +13,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from pipeline import engine, engine_control
-from pipeline.contracts import Stage, StageStatus
+from pipeline.core import engine, engine_control
+from pipeline.core.contracts import Stage, StageStatus
 
 
 # ==========================================

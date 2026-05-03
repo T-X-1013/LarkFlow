@@ -13,7 +13,7 @@ from typing import Any, Optional
 
 from lark_oapi.api.im.v1 import CreateMessageRequest, CreateMessageRequestBody
 
-from pipeline.utils.lark_sdk import get_lark_client
+from pipeline.lark.sdk import get_lark_client
 
 
 def build_approval_card(

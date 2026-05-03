@@ -1,6 +1,6 @@
 import unittest
 
-from pipeline.tools_schema import (
+from pipeline.llm.tools_schema import (
     get_anthropic_tools,
     get_chat_completion_tools,
     get_openai_tools,

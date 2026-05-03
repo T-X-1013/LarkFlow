@@ -14,7 +14,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
-from pipeline.contracts import (
+from pipeline.core.contracts import (
     Checkpoint,
     CheckpointName,
     PipelineState,
@@ -221,7 +221,7 @@ def build_state(ctl: PipelineControl, session: Optional[Dict]) -> PipelineState:
     raw_review_multi = (session or {}).get("review_multi") or {}
     raw_subroles = raw_review_multi.get("subroles") or []
     if raw_subroles:
-        from pipeline.contracts import ReviewMultiSnapshot, ReviewSubRoleResult
+        from pipeline.core.contracts import ReviewMultiSnapshot, ReviewSubRoleResult
         parsed: list = []
         for entry in raw_subroles:
             if not isinstance(entry, dict):

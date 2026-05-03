@@ -16,7 +16,7 @@ from __future__ import annotations
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-from pipeline.contracts import (
+from pipeline.core.contracts import (
     Ack,
     ArtifactResponse,
     CheckpointName,
@@ -35,7 +35,7 @@ from pipeline.contracts import (
     VisualEditSession,
 )
 from pipeline.api.deps import get_engine, require_checkpoint, require_stage
-from pipeline.visual_edit import (
+from pipeline.ops.visual_edit import (
     VisualEditNotFoundError,
     VisualEditRequestError,
     cancel_preview,

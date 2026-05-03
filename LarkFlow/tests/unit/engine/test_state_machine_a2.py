@@ -4,8 +4,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from pipeline import engine
-from pipeline.persistence import SqliteSessionStore
+from pipeline.core import engine
+from pipeline.core.persistence import SqliteSessionStore
 
 
 class StateMachineA2TestCase(unittest.TestCase):

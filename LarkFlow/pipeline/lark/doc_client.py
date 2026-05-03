@@ -33,7 +33,7 @@ from lark_oapi.api.drive.v1 import (
     UploadAllMediaRequestBody,
 )
 
-from pipeline.utils.lark_sdk import get_lark_client
+from pipeline.lark.sdk import get_lark_client
 
 
 class LarkDocWriteError(RuntimeError):

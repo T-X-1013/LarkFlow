@@ -26,7 +26,7 @@ from lark_oapi.event.callback.model.p2_card_action_trigger import (
 )
 from lark_oapi.api.drive.v1 import P2DriveFileBitableRecordChangedV1
 
-from pipeline.lark_bitable_listener import (
+from pipeline.lark.bitable_listener import (
     STATUS_FAILED,
     STATUS_PROCESSING,
     STATUS_REJECTED,
@@ -34,8 +34,8 @@ from pipeline.lark_bitable_listener import (
     subscribe_demand_base,
     update_demand_status,
 )
-from pipeline.utils.lark_doc import LarkDocError, fetch_lark_doc_content
-from pipeline.utils.lark_sdk import get_lark_client
+from pipeline.lark.doc import LarkDocError, fetch_lark_doc_content
+from pipeline.lark.sdk import get_lark_client
 from telemetry.hooks import (
     setup_runtime_otel,
     trace_bitable_record_changed,
@@ -61,7 +61,7 @@ def _project_root() -> Path:
     @return:
         返回当前文件所在的 LarkFlow 项目根目录路径
     """
-    return Path(__file__).resolve().parents[1]
+    return Path(__file__).resolve().parents[2]
 
 
 def _event_store_path() -> Path:
@@ -230,8 +230,8 @@ def handle_start_request(payload: dict[str, Any]) -> dict[str, Any]:
         )
 
     # 走新入口：注册到 engine_control 注册表，后续可被 pause/resume/stop
-    from pipeline import engine_control
-    from pipeline.engine import start_new_demand
+    from pipeline.core import engine_control
+    from pipeline.core.engine import start_new_demand
 
     ctl = engine_control.get(demand_id) or engine_control.register(
         requirement=doc_url,
@@ -317,8 +317,8 @@ def process_card_action(
 
         # D3：部署审批分发到 engine_api.approve_checkpoint(DEPLOY)
         if checkpoint == "deploy":
-            from pipeline import engine_api
-            from pipeline.contracts import CheckpointName
+            from pipeline.core import engine_api
+            from pipeline.core.contracts import CheckpointName
 
             if action_type == "approve":
                 print(f"[LarkListener] 需求 {demand_id} 部署审批通过，启动部署...")
@@ -342,7 +342,7 @@ def process_card_action(
 
             def run_resume() -> None:
                 time.sleep(1)
-                from pipeline.engine import resume_after_approval
+                from pipeline.core.engine import resume_after_approval
 
                 resume_after_approval(
                     demand_id,
@@ -358,7 +358,7 @@ def process_card_action(
 
             def run_reject() -> None:
                 time.sleep(1)
-                from pipeline.engine import resume_after_approval
+                from pipeline.core.engine import resume_after_approval
 
                 resume_after_approval(
                     demand_id,

@@ -14,9 +14,9 @@ from __future__ import annotations
 import re
 import unittest
 
-from pipeline.contracts import Stage
+from pipeline.core.contracts import Stage
 from pipeline.dag.schema import load_template
-from pipeline.engine import load_prompt
+from pipeline.core.engine import load_prompt
 
 
 class MultiReviewPromptsTestCase(unittest.TestCase):

@@ -21,8 +21,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from pipeline.lark_client import send_lark_text  # noqa: E402
-from pipeline.utils.lark_sdk import get_lark_client  # noqa: E402
+from pipeline.lark.client import send_lark_text  # noqa: E402
+from pipeline.lark.sdk import get_lark_client  # noqa: E402
 
 
 def level_auth() -> int:

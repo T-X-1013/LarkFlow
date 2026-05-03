@@ -3,7 +3,7 @@ import unittest
 
 from dotenv import load_dotenv
 
-from pipeline.llm_adapter import append_tool_result, build_client, create_turn, initialize_session
+from pipeline.llm.adapter import append_tool_result, build_client, create_turn, initialize_session
 from tests.path_utils import project_root
 
 

@@ -14,8 +14,8 @@ import os
 import unittest
 from unittest.mock import MagicMock, patch
 
-from pipeline import engine
-from pipeline.lark_doc_client import LarkDocWriteError
+from pipeline.core import engine
+from pipeline.lark.doc_client import LarkDocWriteError
 
 
 class PrepareTechDocTestCase(unittest.TestCase):
@@ -95,7 +95,7 @@ class PrepareTechDocTestCase(unittest.TestCase):
         with patch.object(
             engine, "create_tech_doc", return_value=("tok_wb", "https://x/docx/tok_wb")
         ), patch.object(engine, "grant_doc_access"), \
-             patch("pipeline.lark_bitable_listener.update_demand_tech_doc_url") as mock_writeback, \
+             patch("pipeline.lark.bitable_listener.update_demand_tech_doc_url") as mock_writeback, \
              patch.dict(os.environ, {"LARK_DEMAND_APPROVE_TARGET": "ou_x"}):
             mock_writeback.return_value = True
             token, url = engine._prepare_tech_doc(
@@ -109,7 +109,7 @@ class PrepareTechDocTestCase(unittest.TestCase):
         with patch.object(
             engine, "create_tech_doc", return_value=("tok_nw", "https://x/docx/tok_nw")
         ), patch.object(engine, "grant_doc_access"), \
-             patch("pipeline.lark_bitable_listener.update_demand_tech_doc_url") as mock_writeback, \
+             patch("pipeline.lark.bitable_listener.update_demand_tech_doc_url") as mock_writeback, \
              patch.dict(os.environ, {"LARK_DEMAND_APPROVE_TARGET": "ou_x"}):
             engine._prepare_tech_doc("D7", "body", self.logger, record_id=None)
 
@@ -120,7 +120,7 @@ class PrepareTechDocTestCase(unittest.TestCase):
             engine, "create_tech_doc", return_value=("tok_f", "https://x/docx/tok_f")
         ), patch.object(engine, "grant_doc_access"), \
              patch(
-                 "pipeline.lark_bitable_listener.update_demand_tech_doc_url",
+                 "pipeline.lark.bitable_listener.update_demand_tech_doc_url",
                  return_value=False,
              ), patch.dict(os.environ, {"LARK_DEMAND_APPROVE_TARGET": "ou_x"}):
             token, url = engine._prepare_tech_doc(
