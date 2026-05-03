@@ -1577,7 +1577,7 @@ def deploy_app(demand_id: str) -> bool:
             if lark_target:
                 send_lark_text(
                     lark_target,
-                    f"🎉 需求 {demand_id} 部署成功！\n测试环境已就绪，体验地址：{outcome.access_url}",
+                    f"🎉 需求 {demand_id} 部署成功！\n测试环境已就绪，服务地址：{outcome.access_url}",
                 )
             return True
 

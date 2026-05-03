@@ -39,6 +39,6 @@ RUN make api && make wire && make build
 WORKDIR /app
 RUN cp /src/bin/server /app/server && cp -r /src/configs /app/configs
 
-EXPOSE 8080 9000
+EXPOSE 8000 9000
 
 CMD ["/app/server", "-conf", "/app/configs"]

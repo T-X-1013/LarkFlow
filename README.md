@@ -181,7 +181,7 @@ graph TD
 │   │   └── kratos-skeleton/        # Kratos v2.7 精简骨架，每次需求启动时 copytree 到 demo-app/
 │   │       ├── api/                # 业务 proto 入口（空骨架默认 .gitkeep）
 │   │       ├── cmd/server/         # main.go / otel.go / wire.go
-│   │       ├── configs/            # HTTP 8080 + gRPC 9000
+│   │       ├── configs/            # 容器内 HTTP 8000 + gRPC 9000
 │   │       ├── internal/{biz,conf,data,server,service}/
 │   │       ├── otel/               # 本地 Tempo/Loki/Grafana/Prometheus/promtail 编排
 │   │       ├── third_party/validate/
@@ -328,7 +328,7 @@ npm run build
 - **并发失败隔离**：`ThreadPoolExecutor(max_workers=3)` 跑三路 `_reviewer_worker`，任一路异常 `as_completed` 端被 catch 成 `{status: failed, error}`，另两路照常完成，仲裁 Agent 见到缺失视角按"视角缺失即 REGRESS"规则裁决。
 - **生命周期穿透**：子 session 带 `parent_demand_id`，`run_agent_loop` 取父 id 做 `check_lifecycle`；主 pipeline pause/stop 一触发，三路 reviewer 下一轮 turn 全部干净退出。
 - **HITL 硬拦截**：子 session 带 `hitl_disabled=True`，Reviewer 误调 `ask_human_approval` 时运行时直接返回错误 tool result 让 Agent 自纠，不会误触发飞书审批卡。
-- **契约软兼容**：`PipelineState.review_multi: Optional[ReviewMultiSnapshot]` + `MetricsItem.by_role: List[RoleMetrics]`，非并行模板两字段为 None/空列表，前端判空不渲染；feature_multi 模板下前端可按 role 拆 token / duration 饼图。
+- **契约软兼容**：`PipelineState.review_multi: Optional[ReviewMultiSnapshot]` + `MetricsItem.by_role: List[RoleMetrics]`，非并行模板两字段为 None/空列表，前端判空不渲染；feature_multi 模板下前端可按 role 拆 token input/output 堆叠柱与 duration。
 - **结构化日志按 role 分维**：`observability.get_logger(role=...)` 在 JSON 日志里附带 `role` / `parent_demand_id`，Loki/Grafana 可直接按 `role` label 拆色；OTEL `phase.reviewing` span attr 同样带 role，Tempo 三条子 span 时间线并排展开。
 
 `LarkFlow/pipeline/lark_cards.py` 收敛两张审批卡片模板：
@@ -703,7 +703,7 @@ python tests/prompts/eval.py --only grpc_order_service
 
 ```bash
 docker build LarkFlow/templates/kratos-skeleton/          # 21 步构建全通过
-docker run --rm -p 8080:8080 -p 9000:9000 <image-id>     # HTTP 8080 + gRPC 9000
+docker run --rm -p 8080:8000 -p 9000:9000 <image-id>     # 宿主机 HTTP 8080 -> 容器 8000；gRPC 9000
 ```
 
 ---
