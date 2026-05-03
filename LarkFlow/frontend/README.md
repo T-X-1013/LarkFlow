@@ -12,8 +12,8 @@
 - Pipeline 列表页：创建 pipeline、搜索、状态筛选、Provider 筛选，并轮询真实 `/pipelines`
 - Pipeline 详情页：`start/pause/resume/stop`、Provider 切换、checkpoint approve/reject、artifact 预览
 - 仪表盘：Pipeline 总数、耗时、token、状态分布、Provider 分布
-- 浏览器圈选入口：侧边栏可直接发起页面元素圈选
-- Visual Edit MVP：支持预览、确认、回滚、提交前检查
+- 浏览器圈选入口：左下角悬浮小球可直接发起页面元素圈选
+- Visual Edit MVP：支持持续圈选、自然语言意图、预览、确认、回滚、交付摘要、提交前检查、准备提交与安全 commit
 - 构建验收：`npm run build` 已通过
 
 当前已接通的真实接口能力：
@@ -22,7 +22,7 @@
 - `GET /pipelines/:id`、`POST /pipelines/:id/start|pause|resume|stop` 已用于详情页控制
 - `PUT /pipelines/:id/provider` 已可在 `start` 前切换 provider，并真实影响后续 pipeline 启动 provider
 - `GET /metrics/pipelines` 已返回真实 token / duration 聚合
-- `POST /visual-edits/*` 已用于圈选后的预览、确认、回滚和提交前检查
+- `POST /visual-edits/*` 已用于圈选后的预览、确认、回滚、交付检查和安全 commit
 
 当前仍保留 `MSW` 的部分：
 
@@ -119,5 +119,5 @@ MSW 已覆盖以下契约：
 
 - 列表页是否能稳定轮询真实 `/pipelines`
 - 详情页状态切换、Provider 切换和 checkpoint 操作是否正确回显错误或成功提示
-- 圈选元素后，是否能生成预览、执行确认/回滚，并正确提示提交前检查结果
+- 圈选元素后，是否能持续切换目标、生成预览、执行确认/回滚，并正确展示交付摘要与提交前检查结果
 - `data-lark-src` 缺失时，圈选能力是否返回可读错误

@@ -17,7 +17,7 @@ import type {
   VisualEditSession,
 } from "../types/api";
 import { disablePicker, enablePicker } from "./overlay";
-import { locate, type Locator } from "./locator";
+import { findReferenceNode, locate, type Locator } from "./locator";
 
 type Phase =
   | "idle"
@@ -51,6 +51,9 @@ function describeLocator(locator: Locator): string {
 
 function buildVisualEditRequest(locator: Locator, intent: string): string {
   const rect = locator.rect ?? { left: 0, top: 0, width: 0, height: 0 };
+  const previous = locator.context.previous;
+  const next = locator.context.next;
+  const reference = locator.reference;
   const lines = [
     "【Visual Edit Request】",
     `page_url: ${window.location.href}`,
@@ -67,6 +70,13 @@ function buildVisualEditRequest(locator: Locator, intent: string): string {
     `    top: ${rect.top}`,
     `    width: ${rect.width}`,
     `    height: ${rect.height}`,
+    "context:",
+    `  previous_text: ${previous?.text ?? ""}`,
+    `  previous_color: ${previous?.style.color ?? ""}`,
+    `  next_text: ${next?.text ?? ""}`,
+    `  next_color: ${next?.style.color ?? ""}`,
+    `  reference_text: ${reference?.text ?? ""}`,
+    `  reference_color: ${reference?.style.color ?? ""}`,
     `intent: ${intent.trim()}`,
     "constraints:",
     "  - only edit files under frontend/src",
@@ -92,6 +102,52 @@ function buildPreviewRequest(locator: Locator, intent: string): VisualEditPrevie
       class_name: locator.className ?? "",
       text: locator.text ?? "",
       rect: locator.rect ?? null,
+      context: {
+        previous: locator.context.previous
+          ? {
+              relation: locator.context.previous.relation,
+              tag: locator.context.previous.tag,
+              text: locator.context.previous.text,
+              css_selector: locator.context.previous.cssSelector,
+              id: locator.context.previous.id,
+              class_name: locator.context.previous.className,
+              style: locator.context.previous.style,
+            }
+          : null,
+        next: locator.context.next
+          ? {
+              relation: locator.context.next.relation,
+              tag: locator.context.next.tag,
+              text: locator.context.next.text,
+              css_selector: locator.context.next.cssSelector,
+              id: locator.context.next.id,
+              class_name: locator.context.next.className,
+              style: locator.context.next.style,
+            }
+          : null,
+        parent: locator.context.parent
+          ? {
+              relation: locator.context.parent.relation,
+              tag: locator.context.parent.tag,
+              text: locator.context.parent.text,
+              css_selector: locator.context.parent.cssSelector,
+              id: locator.context.parent.id,
+              class_name: locator.context.parent.className,
+              style: locator.context.parent.style,
+            }
+          : null,
+      },
+      reference: locator.reference
+        ? {
+            relation: locator.reference.relation,
+            tag: locator.reference.tag,
+            text: locator.reference.text,
+            css_selector: locator.reference.cssSelector,
+            id: locator.reference.id,
+            class_name: locator.reference.className,
+            style: locator.reference.style,
+          }
+        : null,
     },
   };
 }
@@ -108,6 +164,31 @@ export function PickerPanel() {
   const [panelPosition, setPanelPosition] = useState<PanelPosition | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<{ pointerId: number; offsetX: number; offsetY: number } | null>(null);
+  const selectedElementRef = useRef<Element | null>(null);
+  const phaseRef = useRef<Phase>("idle");
+
+  useEffect(() => {
+    phaseRef.current = phase;
+  }, [phase]);
+
+  function applyPickedElement(el: Element) {
+    if (
+      phaseRef.current === "preview_generating" ||
+      phaseRef.current === "preview_ready" ||
+      phaseRef.current === "confirming" ||
+      phaseRef.current === "cancelling"
+    ) {
+      return;
+    }
+    selectedElementRef.current = el;
+    setLocator(locate(el));
+    setSession(null);
+    setDeliveryCheck(null);
+    setCommitPlan(null);
+    setCommitResult(null);
+    setErrMsg(null);
+    setPhase("selected");
+  }
 
   function clampPanelPosition(left: number, top: number): PanelPosition {
     if (typeof window === "undefined") return { left, top };
@@ -134,10 +215,7 @@ export function PickerPanel() {
     setErrMsg(null);
     setPanelPosition(null);
     enablePicker({
-      onPick: (el) => {
-        setLocator(locate(el));
-        setPhase("selected");
-      },
+      onPick: applyPickedElement,
       onCancel: () => {
         disablePicker();
         setPhase("idle");
@@ -156,9 +234,15 @@ export function PickerPanel() {
     setPhase("preview_generating");
     setErrMsg(null);
     try {
-      const nextSession = await createVisualEditPreview(buildPreviewRequest(locator, intent));
+      const enrichedLocator = {
+        ...locator,
+        reference: selectedElementRef.current
+          ? findReferenceNode(intent, selectedElementRef.current)
+          : null,
+      };
+      setLocator(enrichedLocator);
+      const nextSession = await createVisualEditPreview(buildPreviewRequest(enrichedLocator, intent));
       setSession(nextSession);
-      disablePicker();
       setPhase("preview_ready");
     } catch (err) {
       setErrMsg((err as Error).message);
@@ -334,14 +418,14 @@ export function PickerPanel() {
         <textarea
           className="input"
           rows={3}
-          placeholder="例如：把文字改成“测观” / 把标题改成蓝色 / 按钮文案改成立即开始"
+          placeholder="例如：把这里改成蓝色 / 文字改成哈哈哈 / 让这句更像官网文案"
           value={intent}
           onChange={(ev) => setIntent(ev.target.value)}
           style={{ width: "100%", marginTop: 8 }}
           disabled={isBusy || phase === "preview_ready" || phase === "confirmed"}
         />
         <p className="muted" style={{ fontSize: 11, marginTop: 6, marginBottom: 0 }}>
-          当前支持：明确文本替换、标题颜色、按钮颜色、按钮文案替换。
+          可以直接描述你想要的文案或颜色效果，Agent 会先理解意图再生成预览。
         </p>
 
         {phase === "preview_generating" ? (
