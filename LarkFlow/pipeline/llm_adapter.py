@@ -672,6 +672,14 @@ def _create_responses_turn(
             f"{provider_label} model is not configured; set one of: {', '.join(model_env_names)}"
         )
 
+    previous_response_id = state.get("previous_response_id")
+    if session.get("provider") == "doubao" and previous_response_id and not pending_inputs:
+        # Ark Responses rejects empty input on continuation turns, while OpenAI accepts it.
+        pending_inputs = [{
+            "role": "user",
+            "content": "继续执行当前阶段；如果已经完成，请直接给出最终结果。",
+        }]
+
     # Responses API 采用 previous_response_id 续接同一条响应链，工具调用和多轮对话都依赖这个链路。
     request_args = {
         "model": model_name,
@@ -686,8 +694,8 @@ def _create_responses_turn(
         if reasoning_effort:
             request_args["reasoning"] = {"effort": reasoning_effort}
 
-    if state.get("previous_response_id"):
-        request_args["previous_response_id"] = state["previous_response_id"]
+    if previous_response_id:
+        request_args["previous_response_id"] = previous_response_id
 
     started_at = time.monotonic()
     response = _create_responses_response_with_retry(

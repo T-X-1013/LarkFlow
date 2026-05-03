@@ -325,21 +325,21 @@ def accumulate_metrics(session: Dict[str, Any], usage: Mapping[str, Any]) -> Non
     @return:
         无返回值；直接在 session 上原地更新 metrics 聚合结果
     """
-    metrics = session.setdefault(
-        "metrics",
-        {
-            "turns": 0,
-            # 新字段更贴近产品和可观测性面板语义。
-            "tokens_input": 0,
-            "tokens_output": 0,
-            # 旧字段继续保留，避免打断已有统计脚本和历史 session 结构。
-            "tokens_in": 0,
-            "tokens_out": 0,
-            "total_tokens": 0,
-            "duration_ms": 0,
-            "latency_ms": 0,
-        },
-    )
+    metric_defaults = {
+        "turns": 0,
+        # 新字段更贴近产品和可观测性面板语义。
+        "tokens_input": 0,
+        "tokens_output": 0,
+        # 旧字段继续保留，避免打断已有统计脚本和历史 session 结构。
+        "tokens_in": 0,
+        "tokens_out": 0,
+        "total_tokens": 0,
+        "duration_ms": 0,
+        "latency_ms": 0,
+    }
+    metrics = session.setdefault("metrics", {})
+    for key, default in metric_defaults.items():
+        metrics.setdefault(key, default)
     metrics["turns"] += 1
     metrics["tokens_input"] += int(usage.get("prompt_tokens") or 0)
     metrics["tokens_output"] += int(usage.get("completion_tokens") or 0)

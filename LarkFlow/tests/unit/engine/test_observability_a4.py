@@ -182,6 +182,23 @@ class ObservabilityA4TestCase(unittest.TestCase):
         self.assertEqual(session["metrics"]["turns"], 1)
         self.assertEqual(session["metrics"]["total_tokens"], 0)
 
+    def test_accumulate_metrics_backfills_partial_metrics(self):
+        """历史 session 或子 session 的不完整 metrics 应自动补齐字段"""
+        session = {"metrics": {"tokens_input": 2, "tokens_output": 3}}
+        observability.accumulate_metrics(session, {
+            "prompt_tokens": 5,
+            "completion_tokens": 7,
+            "total_tokens": 12,
+            "latency_ms": 90,
+        })
+        self.assertEqual(session["metrics"]["turns"], 1)
+        self.assertEqual(session["metrics"]["tokens_input"], 7)
+        self.assertEqual(session["metrics"]["tokens_output"], 10)
+        self.assertEqual(session["metrics"]["tokens_in"], 5)
+        self.assertEqual(session["metrics"]["tokens_out"], 7)
+        self.assertEqual(session["metrics"]["total_tokens"], 12)
+        self.assertEqual(session["metrics"]["duration_ms"], 90)
+
     def test_build_metrics_item_uses_session_metrics_and_stage_snapshot(self):
         """验证构建指标项时会优先使用 session 聚合数据并保留阶段快照"""
         state = PipelineState(

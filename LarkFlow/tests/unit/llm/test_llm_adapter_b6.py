@@ -397,6 +397,56 @@ class LlmAdapterB6TestCase(unittest.TestCase):
             ],
         )
 
+    def test_doubao_turn_uses_continuation_input_when_pending_inputs_empty(self):
+        """Doubao 续接 Responses 链路时不应发送空 input"""
+        response = SimpleNamespace(
+            id="resp-doubao-continued",
+            output=[
+                SimpleNamespace(
+                    type="message",
+                    content=[
+                        SimpleNamespace(type="output_text", text="continued"),
+                    ],
+                )
+            ],
+            output_text="",
+            usage=SimpleNamespace(
+                input_tokens=7,
+                output_tokens=3,
+                total_tokens=10,
+            ),
+        )
+        client = FakeOpenAIClient(response)
+        session = initialize_session(
+            "doubao",
+            "hello",
+            client,
+        )
+        session["provider_state"]["pending_inputs"] = []
+        session["provider_state"]["previous_response_id"] = "resp-doubao-001"
+
+        with patch.dict(
+            os.environ,
+            {
+                "DOUBAO_MODEL": "ep-20260424-doubao-20-pro",
+                "DOUBAO_MAX_RETRIES": "0",
+            },
+            clear=False,
+        ):
+            turn = create_turn(session, "system prompt")
+
+        self.assertTrue(turn.finished)
+        self.assertEqual(turn.text_blocks, ["continued"])
+        call = client.responses.calls[0]
+        self.assertEqual(call["previous_response_id"], "resp-doubao-001")
+        self.assertEqual(
+            call["input"],
+            [{
+                "role": "user",
+                "content": "继续执行当前阶段；如果已经完成，请直接给出最终结果。",
+            }],
+        )
+
     def test_openai_retry_handles_generic_exception(self):
         """非限流类瞬时失败也应按统一策略重试一次"""
         # 这里不用真实 SDK 异常类型，重点验证非限流的瞬时失败也会按统一策略重试一次。

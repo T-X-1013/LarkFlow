@@ -1,16 +1,36 @@
 import { useEffect, useMemo, useState } from "react";
 
-import { buildMetricsResponse } from "../mocks/metrics";
-import { getPipelineSnapshot, subscribePipelines } from "../mocks/store";
+import { listMetrics, listPipelines } from "../lib/api";
+import type { MetricsResponse, PipelineState } from "../types/api";
 
 export function DashboardPage() {
-  const [pipelines, setPipelines] = useState(() => getPipelineSnapshot());
+  const [pipelines, setPipelines] = useState<PipelineState[]>([]);
+  const [metrics, setMetrics] = useState<MetricsResponse>({ pipelines: [] });
 
   useEffect(() => {
-    return subscribePipelines(setPipelines);
+    let cancelled = false;
+    async function loadDashboardData() {
+      try {
+        const [nextPipelines, nextMetrics] = await Promise.all([
+          listPipelines(),
+          listMetrics(),
+        ]);
+        if (cancelled) return;
+        setPipelines(nextPipelines);
+        setMetrics(nextMetrics);
+      } catch {
+        if (cancelled) return;
+        setPipelines([]);
+        setMetrics({ pipelines: [] });
+      }
+    }
+    loadDashboardData();
+    const timer = window.setInterval(loadDashboardData, 5000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
   }, []);
-
-  const metrics = useMemo(() => buildMetricsResponse(pipelines), [pipelines]);
 
   const summary = useMemo(() => {
     const metricPipelines = metrics.pipelines;
@@ -79,7 +99,7 @@ export function DashboardPage() {
           <p className="eyebrow">Observability View</p>
           <h2>仪表盘</h2>
         </div>
-        <span className="badge badge--running">mock metrics</span>
+        <span className="badge badge--running">live metrics</span>
       </div>
 
       <div className="metric-grid">
@@ -132,11 +152,11 @@ export function DashboardPage() {
             <tbody>
               <tr>
                 <th>现阶段</th>
-                <td>消费 `/metrics/pipelines` mock 返回</td>
+                <td>消费 `/metrics/pipelines` 聚合返回</td>
               </tr>
               <tr>
-                <th>后续接线</th>
-                <td>替换成后端真实聚合，不改页面结构</td>
+                <th>数据来源</th>
+                <td>后端 Pipeline session 与 stage 结果</td>
               </tr>
               <tr>
                 <th>重点字段</th>
