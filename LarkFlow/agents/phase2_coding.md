@@ -14,7 +14,7 @@ Deliver code that (a) implements the approved design exactly, (b) passes every r
 2. **Consult the Rules & Skills (CRITICAL)**
    - Read `rules/flow-rule.md` for pipeline-level constraints.
    - Read `rules/skill-routing.yaml` — this is the **canonical routing table**. (`skill-routing.md` is a human-readable mirror.)
-   - Scan the design text (case-insensitive, substring match) against every entry's `keywords` list. Collect all matches, sort by `weight` DESC, and read the top 5 `skill` files. Ties: business skills (`skills/domain/*`) win.
+   - Scan the design text (case-insensitive, substring match) against every entry's `keywords` list. Collect all matches and read every matched `skill` file. Sort by `weight` DESC so framework-level hard constraints enter your context first; ties: business skills (`skills/domain/*`) win.
    - If **no** entry matches, fall back to the `defaults` list in the YAML (currently `skills/lang/error.md` and `skills/transport/http.md`).
    - Before writing any code, briefly state which skills you matched and why so the reviewer can audit the routing.
 
