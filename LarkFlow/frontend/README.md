@@ -9,7 +9,7 @@
 当前已经落地：
 
 - 首页：能力说明与后续联调顺序
-- Pipeline 列表页：创建 pipeline、搜索、状态筛选、Provider 筛选，并轮询真实 `/pipelines`
+- Pipeline 列表页：创建 pipeline（支持从飞书文档链接创建）、搜索、状态筛选、Provider 筛选，并轮询真实 `/pipelines`
 - Pipeline 详情页：`start/pause/resume/stop`、Provider 切换、checkpoint approve/reject、artifact 预览
 - 仪表盘：Pipeline 总数、耗时、token、状态分布、Provider 分布
 - 浏览器圈选入口：左下角悬浮小球可直接发起页面元素圈选
@@ -19,6 +19,7 @@
 当前已接通的真实接口能力：
 
 - `GET /pipelines` 已用于列表页轮询与创建后刷新
+- `POST /pipelines/from-doc` 已用于从飞书文档链接创建 Pipeline
 - `GET /pipelines/:id`、`POST /pipelines/:id/start|pause|resume|stop` 已用于详情页控制
 - `PUT /pipelines/:id/provider` 已可在 `start` 前切换 provider，并真实影响后续 pipeline 启动 provider
 - `GET /metrics/pipelines` 已返回真实 token / duration 聚合

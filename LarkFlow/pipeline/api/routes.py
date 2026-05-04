@@ -21,6 +21,7 @@ from pipeline.core.contracts import (
     ArtifactResponse,
     CheckpointName,
     CheckpointRejectRequest,
+    CreatePipelineFromDocRequest,
     CreatePipelineRequest,
     DemandListItem,
     MetricsResponse,
@@ -37,7 +38,8 @@ from pipeline.core.contracts import (
     VisualEditSession,
 )
 from pipeline.api.deps import get_engine, require_checkpoint, require_stage
-from pipeline.lark.bitable_listener import list_bitable_records
+from pipeline.lark.bitable_listener import create_bitable_record, list_bitable_records
+from pipeline.lark.doc_reader import LarkDocReadError, extract_document_id, read_feishu_doc
 from pipeline.ops.visual_edit import (
     VisualEditNotFoundError,
     VisualEditRequestError,
@@ -123,6 +125,49 @@ def create_app() -> FastAPI:
             返回仅包含 pipeline id 的创建结果
         """
         state = engine.create_pipeline(body.requirement, body.template)
+        return PipelineCreateResponse(id=state.id)
+
+    # ========== From Feishu Doc ==========
+    @app.post("/pipelines/from-doc", response_model=PipelineCreateResponse)
+    def create_pipeline_from_doc(body: CreatePipelineFromDocRequest, engine=Depends(get_engine)):
+        """
+        从飞书文档创建 Pipeline。
+
+        流程：
+        1. 从 URL 提取 document_id
+        2. 通过飞书 Drive API 读取文档内容
+        3. 在多维表格中创建新记录
+        4. 创建 pipeline（内存态，等待 bitable 事件触发真实流程）
+
+        @params:
+            body: 请求体，包含飞书文档 URL
+            engine: engine facade
+
+        @return:
+            返回 pipeline id
+        """
+        # 1. 从 URL 提取 document_id
+        document_id = extract_document_id(body.doc_url)
+        if not document_id:
+            raise HTTPException(status_code=400, detail="无效的飞书文档链接格式")
+
+        # 2. 读取文档内容
+        try:
+            doc_data = read_feishu_doc(document_id, body.doc_url)
+        except LarkDocReadError as exc:
+            raise HTTPException(status_code=400, detail=f"读取文档失败：{exc}") from exc
+
+        # 3. 构建需求描述
+        requirement = f"{doc_data['title']}\n\n{doc_data['content']}"
+
+        # 4. 在多维表格中创建记录
+        try:
+            create_bitable_record(requirement=requirement, doc_url=body.doc_url)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=500, detail=f"创建多维表格记录失败：{exc}") from exc
+
+        # 5. 创建 pipeline（内存态）
+        state = engine.create_pipeline(requirement, body.template if hasattr(body, 'template') else 'default')
         return PipelineCreateResponse(id=state.id)
 
     # ========== Visual Edit ==========

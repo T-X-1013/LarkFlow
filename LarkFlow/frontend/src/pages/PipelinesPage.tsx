@@ -2,7 +2,7 @@ import type { FormEvent } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
-import { createPipeline, listDemands } from "../lib/api";
+import { createPipelineFromDoc, listDemands } from "../lib/api";
 import type { DemandListItem, PipelineStatus } from "../types/api";
 
 const POLL_INTERVAL_MS = 3000;
@@ -40,6 +40,7 @@ export function PipelinesPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [requirement, setRequirement] = useState("");
   const [template, setTemplate] = useState("default");
+  const [docUrl, setDocUrl] = useState("");
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<PipelineStatus | "all">("all");
   const [providerFilter, setProviderFilter] = useState<string>("all");
@@ -88,9 +89,9 @@ export function PipelinesPage() {
 
   async function handleCreate(event: FormEvent) {
     event.preventDefault();
-    const created = await createPipeline(requirement, template);
+    const created = await createPipelineFromDoc(docUrl);
     setCreatedId(created.id);
-    setRequirement("");
+    setDocUrl("");
     try {
       setPipelines(await listDemands());
     } catch {
@@ -141,28 +142,17 @@ export function PipelinesPage() {
         <form className="panel form" onSubmit={handleCreate}>
           <div>
             <p className="eyebrow">Create Pipeline</p>
-            <h3>模拟创建入口</h3>
+            <h3>从飞书文档创建</h3>
           </div>
           <input
             className="input"
-            placeholder="输入需求描述"
-            value={requirement}
-            onChange={(event) => setRequirement(event.target.value)}
+            placeholder="输入飞书文档链接（docx）"
+            value={docUrl}
+            onChange={(event) => setDocUrl(event.target.value)}
             required
           />
-          <select
-            className="select"
-            value={template}
-            onChange={(event) => setTemplate(event.target.value)}
-          >
-            <option value="default">default</option>
-            <option value="feature">feature</option>
-            <option value="bugfix">bugfix</option>
-            <option value="refactor">refactor</option>
-            <option value="feature_multi">feature_multi</option>
-          </select>
           <button className="button" type="submit">
-            创建 mock Pipeline
+            从文档创建 Pipeline
           </button>
           {createdId ? <p className="muted">最近创建：{createdId}</p> : null}
         </form>

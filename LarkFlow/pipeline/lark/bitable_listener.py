@@ -1,18 +1,16 @@
 """
 LarkFlow 多维表格（Base）事件监听
 
-负责方案 B 的入向链路：
+负责需求 Pipeline 的入向链路：通过飞书 WebSocket 长连监听多维表格记录变更事件，
+自动触发 Pipeline 启动审批流程。
+
+核心流程：
 1. 进程启动时向飞书订阅目标 Base 的文件事件（幂等）
 2. 收到 bitable_record_changed 事件后，按 table_id 过滤
-3. 读取记录的当前字段值，状态列为空或「待启动」时，按 env 配置的 target + receive_id_type 发卡
+3. 读取记录的当前字段值，状态列为空或「待启动」时发送启动审批卡片
 4. 发卡后回写状态列为「已发卡」，作为去重标记；异常时回写「失败」
 
-接收方通过两个 env 决定：
-  - LARK_DEMAND_APPROVE_TARGET：chat_id 或 open_id 字符串
-  - LARK_DEMAND_APPROVE_RECEIVE_ID_TYPE：chat_id / open_id，默认 open_id
-
-所有状态变更都走 Base 状态列，避免额外依赖 DB 做幂等；事件重复投递时，
-状态列已变就天然跳过。
+幂等策略：所有状态变更都走 Base 状态列，事件重复投递时状态列已变就天然跳过。
 """
 
 from __future__ import annotations
@@ -22,6 +20,7 @@ from typing import Any, Optional
 
 from lark_oapi.api.bitable.v1 import (
     AppTableRecord,
+    CreateAppTableRecordRequest,
     GetAppTableRecordRequest,
     ListAppTableFieldRequest,
     ListAppTableRecordRequest,
@@ -459,6 +458,66 @@ def update_demand_tech_doc_url(record_id: str, url: str) -> bool:
     return True
 
 
+def create_bitable_record(requirement: str, doc_url: str) -> str:
+    """
+    在多维表格中创建新记录
+
+    @params:
+        requirement: 需求描述（当前未使用，预留）
+        doc_url: 需求文档链接
+
+    @return:
+        返回 record_id；失败抛 RuntimeError
+    """
+    field_name_status = _demand_status_field()
+    field_name_doc = _demand_doc_field()
+
+    # 构建字段值（只包含必填字段：状态 + 文档链接）
+    fields = {
+        field_name_status: STATUS_PENDING,  # "待启动"
+        field_name_doc: {"text": doc_url, "link": doc_url},
+    }
+
+    body = AppTableRecord.builder().fields(fields).build()
+    request = (
+        CreateAppTableRecordRequest.builder()
+        .app_token(_demand_base_token())
+        .table_id(_demand_table_id())
+        .request_body(body)
+        .build()
+    )
+
+    client = get_lark_client()
+    response = client.bitable.v1.app_table_record.create(request)
+
+    if not response.success():
+        raise RuntimeError(f"创建记录失败 (Code: {response.code}): {response.msg}")
+
+    # 尝试多种方式获取 record_id（兼容不同 SDK 版本响应结构）
+    data = response.data
+    record_id = getattr(data, "record_id", None)
+
+    # 如果 data.record_id 为空，尝试从 record 对象中获取
+    if not record_id:
+        record = getattr(data, "record", None)
+        if record:
+            record_id = getattr(record, "record_id", None)
+
+    # 仍然为空时，从原始响应中尝试提取
+    if not record_id and hasattr(response, 'raw') and response.raw and response.raw.content:
+        import json
+        try:
+            raw_data = json.loads(response.raw.content)
+            record_id = raw_data.get("data", {}).get("record_id")
+        except Exception:
+            pass
+
+    if not record_id:
+        raise RuntimeError(f"创建记录成功但响应缺少 record_id，原始响应：{response}")
+
+    return record_id
+
+
 def _process_record(record_id: str) -> None:
     """
     针对单条记录执行「读取 → 判断状态 → 发卡 → 回写」逻辑
@@ -480,13 +539,13 @@ def _process_record(record_id: str) -> None:
 
     doc_url = _extract_plain_text(fields.get(_demand_doc_field()))
     if not doc_url:
-        # 新增行时字段往往还没填完：需求文档作为"完成信号"，没填就静默等下次事件
+        # 需求文档作为"完成信号"：新增行时字段往往还没填完，没填就静默等下次事件
         print(f"[BitableListener] 记录 {record_id} 尚未填写需求文档，等待后续编辑事件")
         return
 
     demand_id = _extract_plain_text(fields.get(_demand_id_field()))
     if not demand_id:
-        # 自增编号字段有时滞后一点，用 record_id 兜底
+        # 自增编号字段有时滞后，用 record_id 兜底
         demand_id = record_id
     template = _normalize_template(_extract_plain_text(fields.get(_demand_template_field())))
 
