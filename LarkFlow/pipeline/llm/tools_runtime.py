@@ -81,6 +81,34 @@ class ToolContext:
     target_dir: str              # 允许写入本次需求产物的目标目录
     logger: Any = None           # 结构化 logger；未接入时回退到 print
     phase: Optional[str] = None
+    # Skill 闸门用：每次 file_editor read 成功时把 skills/ 前缀的相对路径写进来。
+    # engine 层在每轮工具执行后把集合回写到 session["skills_read"] 持久化。
+    skills_read: Optional[set] = None
+
+
+def _record_skill_read_if_applicable(path: Path, ctx: ToolContext) -> None:
+    """file_editor read 成功且落在 workspace_root/skills/*.md 时记入已读集。
+
+    规则：
+    - ctx.skills_read 为 None 表示调用方不关心闸门，不做任何事。
+    - 非 workspace_root 下文件忽略（外部文件不属于 skill）。
+    - 仅收 skills/ 前缀的 .md 文件。
+    - 写入路径用相对 workspace_root 的 POSIX 风格，与路由器产出的 skill 路径对齐。
+    """
+    if ctx.skills_read is None:
+        return
+    try:
+        workspace = Path(ctx.workspace_root).resolve()
+        resolved = path.resolve()
+        relative = resolved.relative_to(workspace)
+    except (ValueError, OSError):
+        return
+    parts = relative.parts
+    if not parts or parts[0] != "skills":
+        return
+    if resolved.suffix.lower() != ".md":
+        return
+    ctx.skills_read.add(relative.as_posix())
 
 
 def _log(ctx: ToolContext, message: str) -> None:
@@ -707,6 +735,7 @@ def execute(tool_name: str, args: dict, ctx: ToolContext) -> str:
                 if action == "read":
                     _ensure_read_allowed(path, ctx)
                     result_text = path.read_text(encoding="utf-8")
+                    _record_skill_read_if_applicable(path, ctx)
                 elif action == "list_dir":
                     _ensure_read_allowed(path, ctx)
                     if not path.is_dir():

@@ -14,6 +14,8 @@ import {
   updateProvider,
 } from "../lib/api";
 import type { ArtifactResponse, CheckpointName, PipelineState, Stage } from "../types/api";
+import { NormalizedDemandCard } from "./NormalizedDemandCard";
+import { SkillRoutingCard } from "./SkillRoutingCard";
 
 export function PipelineDetailPage() {
   const { pipelineId = "" } = useParams();
@@ -296,6 +298,15 @@ export function PipelineDetailPage() {
           </pre>
         </div>
       </div>
+
+      <NormalizedDemandCard
+        snapshot={pipeline.normalized_demand}
+        pipelineId={pipeline.id}
+        status={pipeline.status}
+        onClarified={setPipeline}
+      />
+
+      <SkillRoutingCard snapshot={pipeline.skill_routing} gate={pipeline.skill_gate} />
 
       {reviewSubroles.length ? (
         <div className="panel">

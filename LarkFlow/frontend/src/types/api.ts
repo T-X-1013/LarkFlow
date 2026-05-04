@@ -5,11 +5,12 @@ export type PipelineStatus =
   | "running"
   | "paused"
   | "waiting_approval"
+  | "waiting_clarification"
   | "stopped"
   | "failed"
   | "rejected"
   | "succeeded";
-export type CheckpointName = "design" | "deploy";
+export type CheckpointName = "clarification" | "design" | "deploy";
 export type VisualEditSessionStatus =
   | "draft"
   | "editing"
@@ -56,6 +57,72 @@ export interface ReviewMultiSnapshot {
   subroles: ReviewSubRoleResult[];
 }
 
+export type SkillRoutingTier = "baseline" | "conditional" | "route";
+export type SkillRoutingSource = "" | "keyword" | "semantic" | "both";
+
+export interface SkillRoutingReason {
+  skill: string;
+  tier: SkillRoutingTier | string;
+  detail: string;
+  score: number;
+  source: SkillRoutingSource | string;
+}
+
+export interface SkillRoutingSnapshot {
+  skills: string[];
+  reasons: SkillRoutingReason[];
+}
+
+export interface SkillGateSnapshot {
+  passed: boolean;
+  missing_mandatory: string[];
+  missing_optional: string[];
+  read: string[];
+  attempt: number;
+}
+
+export interface ApiSketchSnapshot {
+  method: string;
+  path: string;
+  purpose: string;
+}
+
+export interface PersistenceSnapshot {
+  needs_storage: boolean;
+  needs_migration: boolean;
+  tables: string[];
+  notes: string;
+}
+
+export interface NfrSnapshot {
+  auth: boolean;
+  idempotent: boolean;
+  rate_limit: boolean;
+  transactional: boolean;
+  high_concurrency: boolean;
+}
+
+export interface OpenQuestionSnapshot {
+  text: string;
+  blocking: boolean;
+  candidates: string[];
+}
+
+export interface NormalizedDemandSnapshot {
+  raw_demand: string;
+  goal: string;
+  out_of_scope: string[];
+  entities: string[];
+  apis: ApiSketchSnapshot[];
+  persistence: PersistenceSnapshot;
+  nfr: NfrSnapshot;
+  domain_tags: string[];
+  touches_python: boolean;
+  open_questions: OpenQuestionSnapshot[];
+  confidence: number;
+  source: string;
+}
+
 export interface PipelineState {
   id: string;
   requirement: string;
@@ -68,6 +135,9 @@ export interface PipelineState {
   created_at: number;
   updated_at: number;
   review_multi?: ReviewMultiSnapshot | null;
+  skill_routing?: SkillRoutingSnapshot | null;
+  skill_gate?: SkillGateSnapshot | null;
+  normalized_demand?: NormalizedDemandSnapshot | null;
 }
 
 export interface PipelineCreateResponse {

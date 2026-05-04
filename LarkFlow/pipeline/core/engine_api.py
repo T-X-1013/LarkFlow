@@ -235,6 +235,23 @@ def reject_checkpoint(
     return engine_control.build_state(ctl, _session(pipeline_id))
 
 
+def submit_clarification(
+    pipeline_id: str, answers: list[dict]
+) -> PipelineState:
+    """回答 Phase 0 澄清回路的 open_questions，触发 demand 重新规范化。
+
+    @params:
+        pipeline_id : 目标 Pipeline ID
+        answers     : [{"question": str, "answer": str}, ...]
+    @return:
+        最新的 PipelineState。澄清仍不充分时 status 仍是 waiting_clarification。
+    """
+    ctl = _ctl(pipeline_id)
+    # 后台线程跑重规范化；内部若放行会继续推进 Phase 1，避免 REST 调用长阻塞
+    engine_control.launch(ctl, engine.resume_from_clarification, pipeline_id, answers)
+    return engine_control.build_state(ctl, _session(pipeline_id))
+
+
 def set_provider(pipeline_id: str, provider: str) -> PipelineState:
     """
     在 Pipeline 启动前设置大模型 Provider。

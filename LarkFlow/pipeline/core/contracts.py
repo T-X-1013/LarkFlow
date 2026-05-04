@@ -33,6 +33,7 @@ class PipelineStatus(str, Enum):
     RUNNING = "running"
     PAUSED = "paused"
     WAITING_APPROVAL = "waiting_approval"
+    WAITING_CLARIFICATION = "waiting_clarification"  # Phase 0 blocking / 低置信度挂起
     STOPPED = "stopped"
     FAILED = "failed"
     REJECTED = "rejected"
@@ -40,8 +41,9 @@ class PipelineStatus(str, Enum):
 
 
 class CheckpointName(str, Enum):
-    DESIGN = "design"      # 第 1 HITL：Design 产出审批
-    DEPLOY = "deploy"      # 第 2 HITL：Review 通过后是否部署
+    CLARIFICATION = "clarification"  # Phase 0 澄清：blocking question 或低置信度触发
+    DESIGN = "design"                # 第 1 HITL：Design 产出审批
+    DEPLOY = "deploy"                # 第 2 HITL：Review 通过后是否部署
 
 
 class VisualEditSessionStatus(str, Enum):
@@ -104,6 +106,84 @@ class ReviewMultiSnapshot(BaseModel):
     subroles: List[ReviewSubRoleResult] = Field(default_factory=list)
 
 
+class SkillRoutingReason(BaseModel):
+    """SkillRouter 单条命中理由，前端按 tier / source 分色展示。"""
+
+    skill: str
+    tier: str                          # "baseline" | "conditional" | "route"
+    detail: str = ""
+    score: float = 0.0                 # baseline/conditional=1.0；route=weight
+    source: str = ""                   # Tier-2 专属："keyword" | "semantic" | "both"
+
+
+class SkillRoutingSnapshot(BaseModel):
+    """pipeline/skills/router.py 对本次需求的路由结果。
+
+    由 engine 在 start_new_demand 时一次性计算并写入 session；REST 透传给前端。
+    老 demand 没有该字段时前端拿到 None，折叠卡片即可。
+    """
+
+    skills: List[str] = Field(default_factory=list)
+    reasons: List[SkillRoutingReason] = Field(default_factory=list)
+
+
+class ApiSketchSnapshot(BaseModel):
+    method: str = ""
+    path: str = ""
+    purpose: str = ""
+
+
+class PersistenceSnapshot(BaseModel):
+    needs_storage: bool = False
+    needs_migration: bool = False
+    tables: List[str] = Field(default_factory=list)
+    notes: str = ""
+
+
+class NfrSnapshot(BaseModel):
+    auth: bool = False
+    idempotent: bool = False
+    rate_limit: bool = False
+    transactional: bool = False
+    high_concurrency: bool = False
+
+
+class OpenQuestionSnapshot(BaseModel):
+    text: str = ""
+    blocking: bool = False
+    candidates: List[str] = Field(default_factory=list)
+
+
+class NormalizedDemandSnapshot(BaseModel):
+    """Phase 0 规范化结果，REST 透传给前端用于核对。"""
+
+    raw_demand: str = ""
+    goal: str = ""
+    out_of_scope: List[str] = Field(default_factory=list)
+    entities: List[str] = Field(default_factory=list)
+    apis: List[ApiSketchSnapshot] = Field(default_factory=list)
+    persistence: PersistenceSnapshot = Field(default_factory=PersistenceSnapshot)
+    nfr: NfrSnapshot = Field(default_factory=NfrSnapshot)
+    domain_tags: List[str] = Field(default_factory=list)
+    touches_python: bool = False
+    open_questions: List[OpenQuestionSnapshot] = Field(default_factory=list)
+    confidence: float = 1.0
+    source: str = "rule"
+
+
+class SkillGateSnapshot(BaseModel):
+    """Skill 闸门判读结果，每次 Phase 结束后覆盖写回。
+
+    前端据此把已读打 ✓、缺 mandatory 标红；老 demand 没有该字段时返回 None。
+    """
+
+    passed: bool = True
+    missing_mandatory: List[str] = Field(default_factory=list)
+    missing_optional: List[str] = Field(default_factory=list)
+    read: List[str] = Field(default_factory=list)
+    attempt: int = 1
+
+
 class PipelineState(BaseModel):
     """Pipeline 运行态快照，GET /pipelines/{id} 直接返回。"""
 
@@ -120,6 +200,12 @@ class PipelineState(BaseModel):
     # D7：多视角并行 Review 的补充信息。仅 feature_multi 等声明 parallel_review
     # 的模板会写入；前端判 None 不渲染，保证向后兼容。
     review_multi: Optional[ReviewMultiSnapshot] = None
+    # PR-5：SkillRouter 的权威清单，PR-3 起写入 session；老 demand 为 None。
+    skill_routing: Optional[SkillRoutingSnapshot] = None
+    # Skill 闸门最近一次判读；Phase 2 在读齐前会阻塞，这里反映最终状态。
+    skill_gate: Optional[SkillGateSnapshot] = None
+    # Phase 0 规范化需求；老 demand 无此字段返回 None。
+    normalized_demand: Optional[NormalizedDemandSnapshot] = None
 
 
 # ==========================================
@@ -128,6 +214,15 @@ class PipelineState(BaseModel):
 class CreatePipelineRequest(BaseModel):
     requirement: str
     template: str = "default"
+
+
+class ClarificationAnswerItem(BaseModel):
+    question: str
+    answer: str
+
+
+class ClarificationRequest(BaseModel):
+    answers: List[ClarificationAnswerItem] = Field(default_factory=list)
 
 
 class CheckpointRejectRequest(BaseModel):

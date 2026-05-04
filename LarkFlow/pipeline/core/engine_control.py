@@ -12,7 +12,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from pipeline.core.contracts import (
     Checkpoint,
@@ -180,6 +180,9 @@ def _infer_status(ctl: PipelineControl, session_phase: Optional[str]) -> Pipelin
         return PipelineStatus.FAILED
     if session_phase == "done":
         return PipelineStatus.SUCCEEDED
+    # Phase 0 澄清挂起有独立状态，与 design/deploy 的 waiting_approval 区分开
+    if session_phase == "clarification_pending":
+        return PipelineStatus.WAITING_CLARIFICATION
     # session_phase like "design_pending" 表示等审批
     if session_phase and session_phase.endswith("_pending"):
         return PipelineStatus.WAITING_APPROVAL
@@ -241,6 +244,12 @@ def build_state(ctl: PipelineControl, session: Optional[Dict]) -> PipelineState:
         if parsed:
             review_multi = ReviewMultiSnapshot(subroles=parsed)
 
+    # PR-5：session["skill_routing"] 由 start_new_demand 一次性计算并落盘，
+    # 这里直接反序化为 Pydantic 契约。字段缺失或损坏不阻塞查询，保持 None。
+    skill_routing = _parse_skill_routing((session or {}).get("skill_routing"))
+    skill_gate = _parse_skill_gate((session or {}).get("skill_gate"))
+    normalized_demand = _parse_normalized_demand((session or {}).get("normalized_demand"))
+
     return PipelineState(
         id=ctl.demand_id,
         requirement=ctl.requirement,
@@ -253,4 +262,111 @@ def build_state(ctl: PipelineControl, session: Optional[Dict]) -> PipelineState:
         created_at=ctl.created_at,
         updated_at=ctl.updated_at,
         review_multi=review_multi,
+        skill_routing=skill_routing,
+        skill_gate=skill_gate,
+        normalized_demand=normalized_demand,
     )
+
+
+def _parse_normalized_demand(raw: Any) -> Optional["NormalizedDemandSnapshot"]:
+    """反序化 session["normalized_demand"]；异常返回 None。"""
+    if not isinstance(raw, dict):
+        return None
+    from pipeline.core.contracts import (
+        ApiSketchSnapshot,
+        NfrSnapshot,
+        NormalizedDemandSnapshot,
+        OpenQuestionSnapshot,
+        PersistenceSnapshot,
+    )
+    try:
+        persistence = raw.get("persistence") or {}
+        nfr = raw.get("nfr") or {}
+        return NormalizedDemandSnapshot(
+            raw_demand=str(raw.get("raw_demand", "") or ""),
+            goal=str(raw.get("goal", "") or ""),
+            out_of_scope=[str(x) for x in (raw.get("out_of_scope") or []) if x],
+            entities=[str(x) for x in (raw.get("entities") or []) if x],
+            apis=[
+                ApiSketchSnapshot(
+                    method=str(a.get("method", "") or ""),
+                    path=str(a.get("path", "") or ""),
+                    purpose=str(a.get("purpose", "") or ""),
+                )
+                for a in (raw.get("apis") or [])
+                if isinstance(a, dict)
+            ],
+            persistence=PersistenceSnapshot(
+                needs_storage=bool(persistence.get("needs_storage")),
+                needs_migration=bool(persistence.get("needs_migration")),
+                tables=[str(t) for t in (persistence.get("tables") or []) if t],
+                notes=str(persistence.get("notes", "") or ""),
+            ),
+            nfr=NfrSnapshot(
+                auth=bool(nfr.get("auth")),
+                idempotent=bool(nfr.get("idempotent")),
+                rate_limit=bool(nfr.get("rate_limit")),
+                transactional=bool(nfr.get("transactional")),
+                high_concurrency=bool(nfr.get("high_concurrency")),
+            ),
+            domain_tags=[str(x) for x in (raw.get("domain_tags") or []) if x],
+            touches_python=bool(raw.get("touches_python")),
+            open_questions=[
+                OpenQuestionSnapshot(
+                    text=str(q.get("text", "") or ""),
+                    blocking=bool(q.get("blocking")),
+                    candidates=[str(c) for c in (q.get("candidates") or []) if c],
+                )
+                for q in (raw.get("open_questions") or [])
+                if isinstance(q, dict)
+            ],
+            confidence=float(raw.get("confidence", 1.0) or 0.0),
+            source=str(raw.get("source", "rule") or "rule"),
+        )
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _parse_skill_gate(raw: Any) -> Optional["SkillGateSnapshot"]:
+    """反序化 session["skill_gate"]；异常返回 None。"""
+    if not isinstance(raw, dict):
+        return None
+    from pipeline.core.contracts import SkillGateSnapshot
+    try:
+        return SkillGateSnapshot(
+            passed=bool(raw.get("passed", True)),
+            missing_mandatory=[str(s) for s in (raw.get("missing_mandatory") or []) if s],
+            missing_optional=[str(s) for s in (raw.get("missing_optional") or []) if s],
+            read=[str(s) for s in (raw.get("read") or []) if s],
+            attempt=int(raw.get("attempt", 1) or 1),
+        )
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _parse_skill_routing(raw: Any) -> Optional["SkillRoutingSnapshot"]:
+    """把 session 里存的 dict 反序化为 SkillRoutingSnapshot；缺字段返回 None。"""
+    if not isinstance(raw, dict):
+        return None
+    skills = [str(s) for s in (raw.get("skills") or []) if s]
+    reasons_raw = raw.get("reasons") or []
+    if not skills and not reasons_raw:
+        return None
+    from pipeline.core.contracts import SkillRoutingReason, SkillRoutingSnapshot
+    reasons: list[SkillRoutingReason] = []
+    for entry in reasons_raw:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            reasons.append(
+                SkillRoutingReason(
+                    skill=str(entry.get("skill", "")),
+                    tier=str(entry.get("tier", "")),
+                    detail=str(entry.get("detail", "") or ""),
+                    score=float(entry.get("score", 0.0) or 0.0),
+                    source=str(entry.get("source", "") or ""),
+                )
+            )
+        except Exception:  # noqa: BLE001 — 损坏条目不阻塞状态查询
+            continue
+    return SkillRoutingSnapshot(skills=skills, reasons=reasons)

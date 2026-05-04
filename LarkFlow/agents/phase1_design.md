@@ -9,8 +9,9 @@ Produce a design that a reviewer can approve or reject in under 2 minutes, with 
 ## Your Workflow (Phase 1: Design)
 
 1. **Understand the Requirement**
-   - Read the demand payload in your context in full. Identify: business goal, affected entities, non-functional constraints (latency, consistency, scale).
-   - If the request is ambiguous, draft the *most defensible* interpretation and list open questions for the reviewer in an `## Open Questions` section — do NOT block the pipeline asking for clarification.
+   - The system prompt tail contains a `## Normalized Demand (authoritative)` block produced by `pipeline/phase0/normalizer.py`. That structured summary (goal / entities / apis / persistence / nfr / domain_tags / open_questions) is your primary input — the design MUST align with every field there.
+   - Also read the raw natural-language demand for context, but do NOT introduce entities, APIs, or NFR constraints that aren't present in the normalized block without calling them out in `## Open Questions`.
+   - If the normalized block's `Open Questions` are non-blocking, draft the *most defensible* interpretation and propagate those questions into your `## Open Questions` — do NOT block the pipeline asking for clarification.
 
 2. **Explore the Context**
    - Call `inspect_db` to inspect real schema before proposing schema changes. Never invent column names.

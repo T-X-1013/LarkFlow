@@ -50,6 +50,9 @@ from pipeline.core.subsession import (
     subsession_key,
 )
 from pipeline.skills.router import SkillRouting, route_from_text
+from pipeline.skills import gate as skill_gate
+from pipeline.phase0 import NormalizedDemand, normalize_demand
+from pipeline.phase0 import llm_classifier as _phase0_llm
 from telemetry.hooks import (
     trace_approval_resume,
     trace_demand_start,
@@ -152,6 +155,258 @@ def _inject_skill_routing(system_prompt: str, session: Optional[dict]) -> str:
     if not block:
         return system_prompt
     return f"{system_prompt.rstrip()}\n\n{block}"
+
+
+def _inject_normalized_demand(system_prompt: str, session: Optional[dict]) -> str:
+    """把 session 里缓存的 Phase 0 规范化需求拼到 system prompt 尾部。
+
+    所有阶段都注入同一份结构化需求（Phase 1 按它写设计、Phase 2/4 据它做验收）。
+    session 缺字段时原样返回，保持对老 demand 的零回归。
+    """
+    if not session:
+        return system_prompt
+    payload = session.get("normalized_demand") or {}
+    if not payload or not (payload.get("raw_demand") or payload.get("goal")):
+        return system_prompt
+    try:
+        from pipeline.phase0 import (
+            ApiSketch,
+            NfrFlags,
+            NormalizedDemand,
+            OpenQuestion,
+            PersistenceHint,
+        )
+        rebuilt = NormalizedDemand(
+            raw_demand=str(payload.get("raw_demand", "")),
+            goal=str(payload.get("goal", "")),
+            out_of_scope=[str(x) for x in (payload.get("out_of_scope") or [])],
+            entities=[str(x) for x in (payload.get("entities") or [])],
+            apis=[
+                ApiSketch(
+                    method=str(a.get("method", "")),
+                    path=str(a.get("path", "")),
+                    purpose=str(a.get("purpose", "")),
+                )
+                for a in (payload.get("apis") or [])
+                if isinstance(a, dict)
+            ],
+            persistence=PersistenceHint(
+                needs_storage=bool((payload.get("persistence") or {}).get("needs_storage")),
+                needs_migration=bool((payload.get("persistence") or {}).get("needs_migration")),
+                tables=[str(t) for t in ((payload.get("persistence") or {}).get("tables") or [])],
+                notes=str((payload.get("persistence") or {}).get("notes", "")),
+            ),
+            nfr=NfrFlags(
+                auth=bool((payload.get("nfr") or {}).get("auth")),
+                idempotent=bool((payload.get("nfr") or {}).get("idempotent")),
+                rate_limit=bool((payload.get("nfr") or {}).get("rate_limit")),
+                transactional=bool((payload.get("nfr") or {}).get("transactional")),
+                high_concurrency=bool((payload.get("nfr") or {}).get("high_concurrency")),
+            ),
+            domain_tags=[str(x) for x in (payload.get("domain_tags") or [])],
+            touches_python=bool(payload.get("touches_python")),
+            open_questions=[
+                OpenQuestion(
+                    text=str(q.get("text", "")),
+                    blocking=bool(q.get("blocking")),
+                    candidates=[str(c) for c in (q.get("candidates") or [])],
+                )
+                for q in (payload.get("open_questions") or [])
+                if isinstance(q, dict)
+            ],
+            confidence=float(payload.get("confidence", 1.0) or 0.0),
+            source=str(payload.get("source", "rule")),
+        )
+    except Exception:  # noqa: BLE001 — 序列化损坏不阻塞 agent 继续跑
+        return system_prompt
+    block = rebuilt.render_prompt_block()
+    if not block:
+        return system_prompt
+    return f"{system_prompt.rstrip()}\n\n{block}"
+
+
+def _needs_clarification(normalized: NormalizedDemand) -> bool:
+    """判断 Phase 0 产物是否需要挂起走澄清回路。
+
+    触发条件（任一满足即挂起）：
+    - 有 `blocking=True` 的 open_question
+    - LLM 版置信度低于 `confidence_floor()`（规则版 confidence=1.0 不会触发）
+    """
+    if any(q.blocking for q in normalized.open_questions):
+        return True
+    floor = _phase0_llm.confidence_floor()
+    return normalized.confidence < floor
+
+
+def resume_from_clarification(demand_id: str, answers: list[dict]) -> None:
+    """澄清回路恢复入口。
+
+    把 reviewer 的答案拼进 requirement 尾部，重跑 Phase 0；
+    若仍 blocking 则继续挂起，否则推进 Phase 1。
+
+    @params:
+        demand_id : 当前 demand id
+        answers   : [{"question": str, "answer": str}, ...]，text 原文匹配即可
+    """
+    session = _load_session(demand_id)
+    if session is None:
+        raise ValueError(f"demand {demand_id} not found")
+    current_phase = session.get("phase")
+    if current_phase != PHASE_CLARIFICATION_PENDING:
+        raise ValueError(
+            f"demand {demand_id} not in clarification pending; phase={current_phase}"
+        )
+    original = str(session.get("original_requirement") or session.get("raw_demand") or "")
+    if not original:
+        payload = session.get("normalized_demand") or {}
+        original = str(payload.get("raw_demand", ""))
+    session["original_requirement"] = original
+
+    addendum_lines: list[str] = []
+    for entry in answers or []:
+        if not isinstance(entry, dict):
+            continue
+        q = str(entry.get("question", "") or "").strip()
+        a = str(entry.get("answer", "") or "").strip()
+        if q and a:
+            addendum_lines.append(f"Q: {q}\nA: {a}")
+    addendum = "\n\n".join(addendum_lines)
+    merged = original
+    if addendum:
+        merged = f"{original}\n\n【澄清补充】\n{addendum}"
+
+    normalized = normalize_demand(merged)
+    session["normalized_demand"] = normalized.to_dict()
+    session["skill_routing"] = route_from_text(
+        normalized.derived_text() or merged
+    ).to_dict()
+    logger = get_logger(demand_id, PHASE_DESIGN)
+
+    if _needs_clarification(normalized):
+        # 仍有 blocking：保持挂起，等下一轮答案
+        session["phase"] = PHASE_CLARIFICATION_PENDING
+        _save_session(demand_id, session)
+        logger.info(
+            "clarification incomplete, still pending",
+            extra={
+                "event": "clarification_still_pending",
+                "phase": PHASE_CLARIFICATION_PENDING,
+            },
+        )
+        return
+
+    # 放行：推进到 Phase 1
+    session["phase"] = PHASE_DESIGN
+    _save_session(demand_id, session)
+    cp = _ctl_checkpoint(demand_id, CheckpointName.CLARIFICATION)
+    if cp is not None:
+        cp.status = StageStatus.SUCCESS
+        import time as _t
+        cp.resolved_at = int(_t.time())
+
+    logger.info(
+        "clarification resolved, entering design phase",
+        extra={"event": "clarification_resolved", "phase": PHASE_DESIGN},
+    )
+    _run_phase(demand_id, PHASE_DESIGN)
+
+
+def _ctl_checkpoint(demand_id: str, name: "CheckpointName") -> Optional["Checkpoint"]:
+    """从 pipeline control 取 checkpoint；缺失返回 None。"""
+    from pipeline.core.engine_control import get_pipeline_control
+    ctl = get_pipeline_control(demand_id)
+    if ctl is None:
+        return None
+    return ctl.checkpoints.get(name)
+
+
+# 闸门生效阶段：只有 Phase 2 Coding 未读 mandatory 时会被强制回补；
+# 其他阶段跑闸门只是为了把读齐情况写进 session 供可观测，不 block。
+_GATE_ENFORCED_PHASES: frozenset = frozenset({"coding"})
+
+
+def _enforce_skill_gate(demand_id: str, phase: str, system_prompt: str) -> bool:
+    """Phase 结束时校验 skill 读齐情况，必要时追加一轮 agent loop。
+
+    @params:
+        demand_id     : 当前需求 ID
+        phase         : 阶段常量（PHASE_CODING 等）
+        system_prompt : 当前阶段的 system prompt（用于追加轮次复用）
+
+    @return:
+        通过闸门返回 True；仅 Phase 2 在耗尽重试仍缺 mandatory 时返回 False。
+    """
+    if not skill_gate.is_enabled():
+        return True
+    session = _load_session(demand_id)
+    if session is None:
+        return True
+    routing = session.get("skill_routing") or {}
+    if not routing.get("skills"):
+        return True
+
+    logger = get_logger(demand_id, phase)
+    verdict = skill_gate.check_coverage(
+        routing, session.get("skills_read"), attempt=1
+    )
+    session["skill_gate"] = verdict.to_dict()
+    _save_session(demand_id, session)
+
+    if phase not in _GATE_ENFORCED_PHASES:
+        return True
+    if verdict.passed:
+        return True
+
+    max_retry = skill_gate.max_retries()
+    attempt = 1
+    while attempt <= max_retry:
+        logger.warning(
+            "skill gate failed, injecting remediation turn",
+            extra={
+                "event": "skill_gate_retry",
+                "phase": phase,
+                "attempt": attempt,
+                "missing_mandatory": verdict.missing_mandatory,
+            },
+        )
+        session = _load_session(demand_id)
+        if session is None:
+            return False
+        append_user_text(session, verdict.render_remediation_message())
+        _save_session(demand_id, session)
+
+        check_lifecycle(demand_id)
+        run_agent_loop(demand_id, system_prompt)
+
+        session = _load_session(demand_id)
+        attempt += 1
+        verdict = skill_gate.check_coverage(
+            routing, (session or {}).get("skills_read"), attempt=attempt
+        )
+        if session is not None:
+            session["skill_gate"] = verdict.to_dict()
+            _save_session(demand_id, session)
+        if verdict.passed:
+            logger.info(
+                "skill gate passed after retry",
+                extra={"event": "skill_gate_passed", "phase": phase, "attempt": attempt},
+            )
+            return True
+
+    logger.error(
+        "skill gate exhausted retries",
+        extra={
+            "event": "skill_gate_blocked",
+            "phase": phase,
+            "missing_mandatory": verdict.missing_mandatory,
+        },
+    )
+    _mark_failed(
+        demand_id,
+        phase,
+        f"Skill gate blocked: mandatory skills unread after retries: {verdict.missing_mandatory}",
+    )
+    return False
 
 
 # 骨架物化标记：`go.mod` 存在即视为 target_dir 已是 Kratos 布局
@@ -497,15 +752,21 @@ def run_agent_loop(demand_id: str, system_prompt: str) -> bool:
 
                 # 常规工具执行：workspace_root 与 target_dir 在 start_new_demand 阶段已固化到 session
                 workspace_root, target_dir = _resolve_workspace_and_target(session.get("target_dir"))
+                # 把 session 里已读 skill 集合传进工具上下文；tools_runtime 会在
+                # file_editor read 成功且路径在 skills/ 下时加进来，供 gate 判读齐。
+                skills_read_set = set(session.get("skills_read") or [])
                 tool_ctx = ToolContext(
                     demand_id=demand_id,
                     phase=session.get("phase"),
                     workspace_root=workspace_root,
                     target_dir=target_dir,
                     logger=session.get("logger"),
+                    skills_read=skills_read_set,
                 )
                 result_text = execute_local_tool(tool_name, tool_args, tool_ctx)
                 append_tool_result(session, tool_call, result_text)
+                # 回写成 list（JSON 友好）
+                session["skills_read"] = sorted(skills_read_set)
 
             # 每轮工具执行完成后持久化，支持中途崩溃恢复
             _save_session(demand_id, session)
@@ -526,6 +787,7 @@ def run_agent_loop(demand_id: str, system_prompt: str) -> bool:
 # 合法阶段常量；session["phase"] 仅能取这些值
 PHASE_DESIGN = "design"
 PHASE_DESIGN_PENDING = "design_pending"  # 审批挂起态
+PHASE_CLARIFICATION_PENDING = "clarification_pending"  # Phase 0 澄清挂起
 PHASE_CODING = "coding"
 PHASE_TESTING = "testing"
 PHASE_REVIEWING = "reviewing"
@@ -965,10 +1227,10 @@ def _reviewer_worker(
         # 跑 agent loop；run_agent_loop 内部按 subkey 反序化 session，
         # 重建 client/logger，并依据 session.parent_demand_id 把 lifecycle 锚定到父 pipeline
         system_prompt = load_prompt(prompt_file)
-        # 多路 reviewer 用 subsession，skill_routing 只在父 session 里，这里从父 session 注入
-        system_prompt = _inject_skill_routing(
-            system_prompt, _load_session(parent_demand_id)
-        )
+        # 多路 reviewer 用 subsession，skill_routing / normalized_demand 都只在父 session 里
+        parent_session = _load_session(parent_demand_id)
+        system_prompt = _inject_normalized_demand(system_prompt, parent_session)
+        system_prompt = _inject_skill_routing(system_prompt, parent_session)
         # D7：给每路 reviewer 开独立 phase.reviewing span，attr 带 role，便于 Tempo 分色
         with trace_phase_execution(parent_demand_id, PHASE_REVIEWING, prompt_file, role=role) as span:
             completed = run_agent_loop(subkey, system_prompt)
@@ -1151,6 +1413,7 @@ def _run_phase_multi(demand_id: str, node) -> bool:
 
         # 用 user message 形式把三路评语喂给仲裁 agent
         parent = _load_session(demand_id) or parent
+        aggregator_system = _inject_normalized_demand(aggregator_system, parent)
         aggregator_system = _inject_skill_routing(aggregator_system, parent)
         append_user_text(parent, _build_aggregator_kickoff(demand_id, worker_results))
         _save_session(demand_id, parent)
@@ -1210,8 +1473,14 @@ def _run_phase(demand_id: str, phase: str) -> bool:
         check_lifecycle(demand_id)
         with trace_phase_execution(demand_id, phase, prompt_file) as span:
             system_prompt = load_prompt(prompt_file)
+            system_prompt = _inject_normalized_demand(system_prompt, session)
             system_prompt = _inject_skill_routing(system_prompt, session)
             completed = run_agent_loop(demand_id, system_prompt)
+            # Phase 2 Coding 后跑 skill 闸门：命中清单里的强约束 skill 必须被读过，
+            # 否则追加一轮让 agent 补读；超过上限直接判失败。
+            # 其他阶段只记录判读结果但不 block（观测用）。
+            if completed:
+                completed = _enforce_skill_gate(demand_id, phase, system_prompt)
             span.set_attribute("phase.completed", completed)
             if completed:
                 _record_stage_result(demand_id, phase, StageStatus.SUCCESS)
@@ -1281,9 +1550,26 @@ def start_new_demand(
         session["phase"] = PHASE_DESIGN
         if record_id:
             session["record_id"] = record_id
+
+        # Phase 0：把自然语言需求规范化为结构化 NormalizedDemand。
+        # Phase 1 的设计 agent 以它为权威输入；router 用 derived_text 做关键词召回，
+        # 覆盖率比纯 NL 更稳（例如结构化字段补齐了 persistence / nfr 信号）。
+        normalized = normalize_demand(requirement)
+        session["normalized_demand"] = normalized.to_dict()
+        logger.info(
+            "demand normalized",
+            extra={
+                "event": "demand_normalized",
+                "phase": PHASE_DESIGN,
+                "source": normalized.source,
+                "domain_tags": normalized.domain_tags,
+            },
+        )
+
         # 确定性 skill 路由：为本次需求一次性计算必读 skill 清单，
         # Phase1/2/4 都从 session 读这份清单，不再各自解析 YAML。
-        session["skill_routing"] = route_from_text(requirement).to_dict()
+        routing_input = normalized.derived_text() or requirement
+        session["skill_routing"] = route_from_text(routing_input).to_dict()
         logger.info(
             "skill routing resolved",
             extra={
@@ -1292,6 +1578,26 @@ def start_new_demand(
                 "skills": session["skill_routing"].get("skills", []),
             },
         )
+
+        # Phase 0 澄清闸：有 blocking question 或置信度过低 → 挂起，
+        # 让 reviewer 通过 REST /clarify 回答后再推进。
+        if _needs_clarification(normalized):
+            session["phase"] = PHASE_CLARIFICATION_PENDING
+            _save_session(demand_id, session)
+            _seed_pending_checkpoint(demand_id, CheckpointName.CLARIFICATION)
+            logger.info(
+                "demand suspended awaiting clarification",
+                extra={
+                    "event": "demand_clarification_pending",
+                    "phase": PHASE_CLARIFICATION_PENDING,
+                    "confidence": normalized.confidence,
+                    "blocking_questions": [
+                        q.text for q in normalized.open_questions if q.blocking
+                    ],
+                },
+            )
+            return
+
         _save_session(demand_id, session)
 
         # 进入 Phase 1: Design

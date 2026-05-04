@@ -21,6 +21,7 @@ from pipeline.core.contracts import (
     ArtifactResponse,
     CheckpointName,
     CheckpointRejectRequest,
+    ClarificationRequest,
     CreatePipelineRequest,
     MetricsResponse,
     PipelineCreateResponse,
@@ -369,6 +370,25 @@ def create_app() -> FastAPI:
         return _guard(
             lambda: engine.reject_checkpoint(pipeline_id, cp, body.reason)
         )
+
+    # ========== Phase 0 clarification ==========
+    @app.post("/pipelines/{pipeline_id}/clarify", response_model=PipelineState)
+    def clarify(
+        pipeline_id: str,
+        body: ClarificationRequest,
+        engine=Depends(get_engine),
+    ):
+        """提交 Phase 0 澄清答案，触发需求重新规范化。
+
+        @params:
+            pipeline_id: 处于 waiting_clarification 状态的 pipeline
+            body       : 答案列表，字段对齐 open_questions 的 text
+        @return:
+            最新 PipelineState；如果答案未覆盖所有 blocking question，
+            state 仍为 waiting_clarification。
+        """
+        payload = [item.model_dump() for item in body.answers]
+        return _guard(lambda: engine.submit_clarification(pipeline_id, payload))
 
     # ========== Provider ==========
     @app.put("/pipelines/{pipeline_id}/provider", response_model=PipelineState)

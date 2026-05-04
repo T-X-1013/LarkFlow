@@ -38,6 +38,7 @@ class MatchReason:
     tier: str              # "baseline" | "conditional" | "route"
     detail: str            # baseline 的 reason / 触发的关键词 / 匹配的 keywords
     score: float = 0.0     # conditional 固定 1.0；route 用 weight
+    source: str = ""       # Tier-2 专属："keyword" | "semantic" | "both"；其他层为空
 
 
 @dataclass
@@ -57,6 +58,7 @@ class SkillRouting:
                     "tier": r.tier,
                     "detail": r.detail,
                     "score": r.score,
+                    "source": r.source,
                 }
                 for r in self.reasons
             ],
@@ -126,13 +128,17 @@ def route_from_text(
     *,
     top_k: int = DEFAULT_TOP_K,
     table: Optional[dict[str, Any]] = None,
+    semantic_hits: Optional[dict[str, float]] = None,
 ) -> SkillRouting:
     """对一段自然语言需求执行三层路由。
 
     @params:
-        text   : 需求原文（自然语言或已规范化的描述文本都可）。
-        top_k  : Tier-2 routes 层保留的最大条目数。
-        table  : 预加载的路由表；None 时按默认路径读取。
+        text          : 需求原文（自然语言或已规范化的描述文本都可）。
+        top_k         : Tier-2 routes 层保留的最大条目数。
+        table         : 预加载的路由表；None 时按默认路径读取。
+        semantic_hits : 预计算的语义召回结果 `{skill: score}`；
+                        None 时按 env 开关自动决定是否调 embedding 通道。
+                        传空 dict 表示显式禁用语义通道。
 
     @return:
         SkillRouting：最终 skills 列表（已去重、按 tier 与 weight 排序）+ 原因。
@@ -140,12 +146,18 @@ def route_from_text(
     routing_table = table if table is not None else load_routing_table()
     normalized = (text or "").lower()
 
+    if semantic_hits is None:
+        semantic_hits = _resolve_semantic_hits(text, routing_table)
+
     baseline_reasons = _collect_baseline(routing_table.get("baseline", []))
     conditional_reasons = _collect_conditional(
         routing_table.get("conditional", []), normalized
     )
     route_reasons = _collect_routes(
-        routing_table.get("routes", []), normalized, top_k=top_k
+        routing_table.get("routes", []),
+        normalized,
+        top_k=top_k,
+        semantic_hits=semantic_hits,
     )
 
     ordered_skills: list[str] = []
@@ -217,37 +229,81 @@ def _collect_routes(
     normalized_text: str,
     *,
     top_k: int,
+    semantic_hits: Optional[dict[str, float]] = None,
 ) -> list[MatchReason]:
-    """Tier-2：keyword 子串匹配 → 按 weight DESC 取 top-K。
+    """Tier-2：keyword ∪ semantic 双通道召回 → 按 weight DESC 取 top-K。
 
     排序键：
         1. weight DESC （业务 skill weight=1.2 优于 generic=1.0）
-        2. 命中关键词数 DESC（tie-break，说明相关度更高）
+        2. 命中信号强度 DESC（keyword 命中数 + semantic 分数，tie-break）
         3. 路由在 YAML 中的原始顺序（稳定排序兜底）
+
+    source 标记：
+        - 只命中关键词  → "keyword"
+        - 只命中语义    → "semantic"
+        - 两者都命中    → "both"
     """
-    scored: list[tuple[float, int, int, MatchReason]] = []
+    semantic_hits = semantic_hits or {}
+    scored: list[tuple[float, float, int, MatchReason]] = []
     for idx, item in enumerate(items):
         skill = item.get("skill")
         keywords = item.get("keywords") or []
-        if not skill or not keywords:
+        if not skill:
             continue
-        matched = [kw for kw in keywords if _contains(normalized_text, kw)]
-        if not matched:
+        skill_str = str(skill)
+        matched_keywords = [kw for kw in keywords if _contains(normalized_text, kw)]
+        sem_score = float(semantic_hits.get(skill_str, 0.0))
+        keyword_hit = bool(matched_keywords)
+        semantic_hit = sem_score > 0.0
+        if not keyword_hit and not semantic_hit:
             continue
+        if keyword_hit and semantic_hit:
+            source = "both"
+        elif keyword_hit:
+            source = "keyword"
+        else:
+            source = "semantic"
+        detail_parts: list[str] = []
+        if keyword_hit:
+            head = ", ".join(str(kw) for kw in matched_keywords[:5])
+            extra = (
+                f"（共 {len(matched_keywords)} 条）"
+                if len(matched_keywords) > 5
+                else ""
+            )
+            detail_parts.append(f"命中关键词：{head}{extra}")
+        if semantic_hit:
+            detail_parts.append(f"语义相似度 {sem_score:.2f}")
+        detail = "；".join(detail_parts)
         weight = float(item.get("weight", 1.0))
-        detail = f"命中关键词：{', '.join(str(kw) for kw in matched[:5])}"
-        if len(matched) > 5:
-            detail += f"（共 {len(matched)} 条）"
+        # 命中信号强度：关键词数权重 1.0 + 语义分数权重 1.0（取 [0,1] 范围）
+        strength = float(len(matched_keywords)) + sem_score
         reason = MatchReason(
-            skill=str(skill),
+            skill=skill_str,
             tier="route",
             detail=detail,
             score=weight,
+            source=source,
         )
-        scored.append((-weight, -len(matched), idx, reason))
+        scored.append((-weight, -strength, idx, reason))
 
     scored.sort()
     return [reason for _, _, _, reason in scored[: max(0, top_k)]]
+
+
+def _resolve_semantic_hits(
+    text: str,
+    table: dict[str, Any],
+) -> dict[str, float]:
+    """按 env 开关决定是否调语义通道；失败安全地返回空 dict。"""
+    from pipeline.skills import semantic  # 局部导入，避免模块加载时就拉 openai SDK
+    if not semantic.is_enabled():
+        return {}
+    try:
+        return semantic.semantic_match(text, table=table)
+    except Exception as exc:  # 任何异常都降级到纯关键词
+        _LOG.warning("semantic router failed, falling back to keyword only: %s", exc)
+        return {}
 
 
 def _contains(normalized_text: str, keyword: Any) -> bool:

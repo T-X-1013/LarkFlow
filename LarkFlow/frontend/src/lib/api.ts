@@ -137,3 +137,13 @@ export function resumePipeline(id: string) {
 export function stopPipeline(id: string) {
   return jsonRequest<PipelineState>(`/pipelines/${id}/stop`, { method: "POST" });
 }
+
+export function clarifyPipeline(
+  id: string,
+  answers: Array<{ question: string; answer: string }>,
+) {
+  return jsonRequest<PipelineState>(`/pipelines/${id}/clarify`, {
+    method: "POST",
+    body: JSON.stringify({ answers }),
+  });
+}

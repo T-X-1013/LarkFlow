@@ -154,6 +154,37 @@ export const handlers = [
     return HttpResponse.json(pipeline);
   }),
 
+  http.post("/pipelines/:pipelineId/clarify", async ({ params, request }) => {
+    const pipeline = clonePipeline(String(params.pipelineId));
+    if (!pipeline) {
+      return HttpResponse.json({ detail: "not found" }, { status: 404 });
+    }
+    const body = (await request.json()) as {
+      answers: Array<{ question: string; answer: string }>;
+    };
+    const answered = new Set(body.answers.map((a) => a.question));
+    if (pipeline.normalized_demand) {
+      const remaining = pipeline.normalized_demand.open_questions.filter(
+        (q) => q.blocking && !answered.has(q.text),
+      );
+      // 把已回答的从 open_questions 里移除（mock：真后端会 re-normalize）
+      pipeline.normalized_demand.open_questions =
+        pipeline.normalized_demand.open_questions.filter(
+          (q) => !answered.has(q.text),
+        );
+      if (remaining.length === 0) {
+        pipeline.status = "running";
+        const cp = pipeline.checkpoints.clarification;
+        if (cp) {
+          cp.status = "success";
+          cp.resolved_at = Math.floor(Date.now() / 1000);
+        }
+      }
+    }
+    replacePipeline(stampUpdatedAt(pipeline));
+    return HttpResponse.json(pipeline);
+  }),
+
   http.put("/pipelines/:pipelineId/provider", async ({ params, request }) => {
     const pipeline = clonePipeline(String(params.pipelineId));
     if (!pipeline) {
