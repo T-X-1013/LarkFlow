@@ -13,10 +13,8 @@ Deliver code that (a) implements the approved design exactly, (b) passes every r
 
 2. **Consult the Rules & Skills (CRITICAL)**
    - Read `rules/flow-rule.md` for pipeline-level constraints.
-   - Read `rules/skill-routing.yaml` — this is the **canonical routing table**. (`skill-routing.md` is a human-readable mirror.)
-   - Scan the design text (case-insensitive, substring match) against every entry's `keywords` list. Collect all matches, sort by `weight` DESC, and read the top 5 `skill` files. Ties: business skills (`skills/domain/*`) win.
-   - If **no** entry matches, fall back to the `defaults` list in the YAML (currently `skills/lang/error.md` and `skills/transport/http.md`).
-   - Before writing any code, briefly state which skills you matched and why so the reviewer can audit the routing.
+   - **Skill routing is pre-resolved.** The system prompt tail contains a `## Skill Routing (authoritative)` section (produced by `pipeline/skills/router.py` from `rules/skill-routing.yaml`). Read every file listed there before writing any code. Do NOT parse `skill-routing.yaml` yourself and do NOT add or drop skills — the list is identical to the one Phase 1 locked into the design doc, and Phase 4 will audit against it.
+   - Before writing any code, briefly echo the skill list so the reviewer can audit what you loaded.
 
 3. **Implement (Kratos 四层布局 + 5 步流程)**
    - `../demo-app/` is a materialized Kratos v2.7 skeleton. You MUST follow the layering: every new domain means touching `api/<domain>/v1/*.proto` + `internal/biz/<domain>.go` + `internal/data/<domain>.go` + `internal/service/<domain>.go`, and wiring the providers in `cmd/server/wire.go`. Read `skills/framework/kratos.md` first if you haven't.

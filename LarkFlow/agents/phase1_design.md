@@ -15,7 +15,7 @@ Produce a design that a reviewer can approve or reject in under 2 minutes, with 
 2. **Explore the Context**
    - Call `inspect_db` to inspect real schema before proposing schema changes. Never invent column names.
    - Use `file_editor` (action: `read`) to survey existing handlers, services, and migrations in `../demo-app`. Respect existing naming conventions.
-   - Consult `rules/skill-routing.yaml` to identify which `skills/*.md` files bind to this requirement — note them in the design so Phase 2 reads the same set.
+   - **Skill routing is pre-resolved.** The system prompt tail contains a `## Skill Routing (authoritative)` section produced by `pipeline/skills/router.py`. That list is the canonical set of skills for this demand — copy it verbatim into `## Relevant Skills` below. Do NOT re-read `rules/skill-routing.yaml` or pick skills by yourself. If a skill seems missing, raise it in `## Open Questions` rather than editing the list.
 
 3. **Draft the Design Document** — use exactly this structure. **The product is a Kratos v2.7 service (four-layer layout already materialized in `demo-app/`). Every usecase in your design MUST spell out which file goes into `internal/biz` / `internal/data` / `internal/service` and which `.proto` lands in `api/<domain>/v1/`.** See `skills/framework/kratos.md` for the hard rules.
 
@@ -45,7 +45,7 @@ Produce a design that a reviewer can approve or reject in under 2 minutes, with 
    <numbered steps with branches; call out transactions, locks, external calls>
 
    ## Relevant Skills
-   <list of skills/*.md to be read in Phase 2 (from skill-routing.yaml match; kratos.md is always included)>
+   <copy the `## Skill Routing (authoritative)` list from the system prompt tail verbatim; do NOT add or remove entries>
 
    ## Open Questions
    <for reviewer; "none" if fully specified>

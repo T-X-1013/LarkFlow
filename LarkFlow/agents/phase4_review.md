@@ -10,12 +10,12 @@ Block any merge that violates a 🔴 rule in the matched `skills/*.md`. Fix 🟡
 
 1. **Understand the Context**
    - Read the Phase 1 design document and the Phase 3 test results in your context.
-   - Note which skills Phase 2 claimed it matched (in its `## Skill Routing` preamble). You will audit that routing.
+   - The system prompt tail contains a `## Skill Routing (authoritative)` section produced by `pipeline/skills/router.py` — this is the canonical skill set for the demand and the same list Phase 1/2 received.
 
 2. **Consult the Rules**
-   - Read `rules/flow-rule.md` and `rules/skill-routing.yaml`.
-   - Re-run the routing match yourself against the design. If Phase 2's matched set differs from yours, that is itself a finding — record it.
-   - Read every `skills/*.md` from the combined matched set.
+   - Read `rules/flow-rule.md`.
+   - Read every `skills/*.md` from the authoritative routing list above. Do NOT re-match `skill-routing.yaml` yourself.
+   - Finding candidate: if Phase 2's preamble claims a different set from the authoritative list, record that as a process violation.
 
 3. **Inspect the Code**
    - Use `file_editor` (action: `read`) to read every file Phase 2 created or modified in `../demo-app`.

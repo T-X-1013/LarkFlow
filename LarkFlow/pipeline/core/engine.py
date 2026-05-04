@@ -49,6 +49,7 @@ from pipeline.core.subsession import (
     save_subsession,
     subsession_key,
 )
+from pipeline.skills.router import SkillRouting, route_from_text
 from telemetry.hooks import (
     trace_approval_resume,
     trace_demand_start,
@@ -106,6 +107,51 @@ def load_prompt(phase_filename: str) -> str:
     path = os.path.join(os.path.dirname(__file__), "..", "..", "agents", phase_filename)
     with open(path, "r", encoding="utf-8") as f:
         return f.read()
+
+
+def _inject_skill_routing(system_prompt: str, session: Optional[dict]) -> str:
+    """把 session 里缓存的 skill 路由结果拼到 system prompt 尾部。
+
+    Phase1/2/4 共用同一份 `session["skill_routing"]`（start_new_demand 一次性算出），
+    保证三阶段看到相同的权威清单。session 缺字段时直接返回原 prompt，安全降级。
+
+    @params:
+        system_prompt: agents/phase*.md 读出的原始 prompt
+        session     : 当前 demand 的 session dict（可能为 None）
+
+    @return:
+        拼接后的 prompt；无路由数据时原样返回
+    """
+    if not session:
+        return system_prompt
+    routing_dict = session.get("skill_routing") or {}
+    if not routing_dict.get("skills"):
+        return system_prompt
+    block = SkillRouting(
+        skills=list(routing_dict.get("skills", [])),
+        reasons=[],
+    ).render_prompt_block()
+    # 用已保存的 reasons 重建细节；router 的 render_prompt_block 按 reason 列表展示 tier
+    reasons = routing_dict.get("reasons") or []
+    if reasons:
+        from pipeline.skills.router import MatchReason  # 局部导入避免循环
+        rebuilt = SkillRouting(
+            skills=list(routing_dict.get("skills", [])),
+            reasons=[
+                MatchReason(
+                    skill=str(r.get("skill", "")),
+                    tier=str(r.get("tier", "")),
+                    detail=str(r.get("detail", "")),
+                    score=float(r.get("score", 0.0)),
+                )
+                for r in reasons
+                if r.get("skill")
+            ],
+        )
+        block = rebuilt.render_prompt_block()
+    if not block:
+        return system_prompt
+    return f"{system_prompt.rstrip()}\n\n{block}"
 
 
 # 骨架物化标记：`go.mod` 存在即视为 target_dir 已是 Kratos 布局
@@ -919,6 +965,10 @@ def _reviewer_worker(
         # 跑 agent loop；run_agent_loop 内部按 subkey 反序化 session，
         # 重建 client/logger，并依据 session.parent_demand_id 把 lifecycle 锚定到父 pipeline
         system_prompt = load_prompt(prompt_file)
+        # 多路 reviewer 用 subsession，skill_routing 只在父 session 里，这里从父 session 注入
+        system_prompt = _inject_skill_routing(
+            system_prompt, _load_session(parent_demand_id)
+        )
         # D7：给每路 reviewer 开独立 phase.reviewing span，attr 带 role，便于 Tempo 分色
         with trace_phase_execution(parent_demand_id, PHASE_REVIEWING, prompt_file, role=role) as span:
             completed = run_agent_loop(subkey, system_prompt)
@@ -1101,6 +1151,7 @@ def _run_phase_multi(demand_id: str, node) -> bool:
 
         # 用 user message 形式把三路评语喂给仲裁 agent
         parent = _load_session(demand_id) or parent
+        aggregator_system = _inject_skill_routing(aggregator_system, parent)
         append_user_text(parent, _build_aggregator_kickoff(demand_id, worker_results))
         _save_session(demand_id, parent)
 
@@ -1159,6 +1210,7 @@ def _run_phase(demand_id: str, phase: str) -> bool:
         check_lifecycle(demand_id)
         with trace_phase_execution(demand_id, phase, prompt_file) as span:
             system_prompt = load_prompt(prompt_file)
+            system_prompt = _inject_skill_routing(system_prompt, session)
             completed = run_agent_loop(demand_id, system_prompt)
             span.set_attribute("phase.completed", completed)
             if completed:
@@ -1229,6 +1281,17 @@ def start_new_demand(
         session["phase"] = PHASE_DESIGN
         if record_id:
             session["record_id"] = record_id
+        # 确定性 skill 路由：为本次需求一次性计算必读 skill 清单，
+        # Phase1/2/4 都从 session 读这份清单，不再各自解析 YAML。
+        session["skill_routing"] = route_from_text(requirement).to_dict()
+        logger.info(
+            "skill routing resolved",
+            extra={
+                "event": "skill_routing_resolved",
+                "phase": PHASE_DESIGN,
+                "skills": session["skill_routing"].get("skills", []),
+            },
+        )
         _save_session(demand_id, session)
 
         # 进入 Phase 1: Design
