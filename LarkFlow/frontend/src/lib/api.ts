@@ -42,6 +42,13 @@ export function createPipeline(requirement: string, template = "default") {
   });
 }
 
+export function createPipelineFromDoc(docUrl: string) {
+  return jsonRequest<PipelineCreateResponse>("/pipelines/from-doc", {
+    method: "POST",
+    body: JSON.stringify({ doc_url: docUrl }),
+  });
+}
+
 export async function createAndStartPipeline(requirement: string, template = "default") {
   const created = await createPipeline(requirement, template);
   const state = await startPipeline(created.id);

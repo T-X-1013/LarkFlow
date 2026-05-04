@@ -16,10 +16,11 @@ from typing import Optional
 DEFAULT_RECEIVE_ID_TYPE = "open_id"
 DEFAULT_LOG_LEVEL = "INFO"
 DEFAULT_STATUS_FIELD = "状态"
-DEFAULT_ID_FIELD = "需求ID"
+DEFAULT_ID_FIELD = "需求 ID"
 DEFAULT_DOC_FIELD = "需求文档"
 DEFAULT_TECH_DOC_FIELD = "技术方案文档"
 DEFAULT_APPROVE_RECEIVE_ID_TYPE = "open_id"
+DEFAULT_REQUIREMENT_FIELD = "需求描述"
 
 
 def _strip_quoted(value: Optional[str]) -> str:
@@ -81,6 +82,10 @@ def demand_doc_field() -> str:
 
 def tech_doc_field() -> str:
     return (os.getenv("LARK_TECH_DOC_FIELD") or DEFAULT_TECH_DOC_FIELD).strip()
+
+
+def demand_requirement_field() -> str:
+    return (os.getenv("LARK_DEMAND_REQUIREMENT_FIELD") or DEFAULT_REQUIREMENT_FIELD).strip()
 
 
 # ---- approval target ----

@@ -130,6 +130,12 @@ class CreatePipelineRequest(BaseModel):
     template: str = "default"
 
 
+class CreatePipelineFromDocRequest(BaseModel):
+    """从飞书文档创建 Pipeline 的请求体。"""
+
+    doc_url: str  # 飞书文档链接
+
+
 class CheckpointRejectRequest(BaseModel):
     reason: str
 
