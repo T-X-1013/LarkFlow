@@ -1,26 +1,26 @@
 import { useEffect, useMemo, useState } from "react";
 
-import { listMetrics, listPipelines } from "../lib/api";
-import type { MetricsResponse, PipelineState } from "../types/api";
+import { listDemands, listMetrics } from "../lib/api";
+import type { DemandListItem, MetricsResponse } from "../types/api";
 
 export function DashboardPage() {
-  const [pipelines, setPipelines] = useState<PipelineState[]>([]);
+  const [demands, setDemands] = useState<DemandListItem[]>([]);
   const [metrics, setMetrics] = useState<MetricsResponse>({ pipelines: [] });
 
   useEffect(() => {
     let cancelled = false;
     async function loadDashboardData() {
       try {
-        const [nextPipelines, nextMetrics] = await Promise.all([
-          listPipelines(),
+        const [nextDemands, nextMetrics] = await Promise.all([
+          listDemands(),
           listMetrics(),
         ]);
         if (cancelled) return;
-        setPipelines(nextPipelines);
+        setDemands(nextDemands);
         setMetrics(nextMetrics);
       } catch {
         if (cancelled) return;
-        setPipelines([]);
+        setDemands([]);
         setMetrics({ pipelines: [] });
       }
     }
@@ -32,44 +32,49 @@ export function DashboardPage() {
     };
   }, []);
 
+  const baseDemandIds = useMemo(() => new Set(demands.map((item) => item.id)), [demands]);
+  const filteredMetrics = useMemo(
+    () => metrics.pipelines.filter((item) => baseDemandIds.has(item.pipeline_id)),
+    [baseDemandIds, metrics],
+  );
+
   const summary = useMemo(() => {
-    const metricPipelines = metrics.pipelines;
-    const total = metricPipelines.length;
-    const totalDuration = metricPipelines.reduce((sum, item) => sum + item.duration_ms, 0);
-    const totalTokens = metricPipelines.reduce(
+    const total = demands.length;
+    const totalDuration = filteredMetrics.reduce((sum, item) => sum + item.duration_ms, 0);
+    const totalTokens = filteredMetrics.reduce(
       (sum, item) => sum + item.tokens.input + item.tokens.output,
       0,
     );
     return {
       total,
-      avgDuration: total ? Math.round(totalDuration / total) : 0,
+      avgDuration: filteredMetrics.length ? Math.round(totalDuration / filteredMetrics.length) : 0,
       totalTokens,
-      successful: metricPipelines.filter((item) => item.status === "succeeded").length,
+      successful: demands.filter((item) => item.status === "succeeded").length,
     };
-  }, [metrics]);
+  }, [demands, filteredMetrics]);
 
-  const bars = metrics.pipelines.map((item) => ({
+  const bars = filteredMetrics.map((item) => ({
     label: item.pipeline_id,
     value: item.duration_ms,
   }));
   const maxBar = Math.max(...bars.map((item) => item.value), 1);
   const providerBreakdown = useMemo(() => {
     const counts = new Map<string, number>();
-    for (const pipeline of pipelines) {
-      const provider = pipeline.provider ?? "unknown";
+    for (const demand of demands) {
+      const provider = demand.provider ?? "unknown";
       counts.set(provider, (counts.get(provider) ?? 0) + 1);
     }
     return Array.from(counts.entries()).map(([provider, count]) => ({ provider, count }));
-  }, [pipelines]);
+  }, [demands]);
   const statusBreakdown = useMemo(() => {
     const counts = new Map<string, number>();
-    for (const pipeline of metrics.pipelines) {
-      counts.set(pipeline.status, (counts.get(pipeline.status) ?? 0) + 1);
+    for (const demand of demands) {
+      counts.set(demand.status, (counts.get(demand.status) ?? 0) + 1);
     }
     return Array.from(counts.entries()).map(([status, count]) => ({ status, count }));
-  }, [metrics]);
+  }, [demands]);
   const roleTokenGroups = useMemo(() => {
-    return metrics.pipelines
+    return filteredMetrics
       .map((pipeline) => {
         const roles = (pipeline.by_role ?? [])
           .map((role) => ({
@@ -85,7 +90,7 @@ export function DashboardPage() {
         return { pipeline_id: pipeline.pipeline_id, roles };
       })
       .filter((group) => group.roles.length > 0);
-  }, [metrics]);
+  }, [filteredMetrics]);
   const roleMetricCount = roleTokenGroups.reduce((sum, group) => sum + group.roles.length, 0);
   const maxRoleTokens = Math.max(
     ...roleTokenGroups.flatMap((group) => group.roles.map((item) => item.total)),
@@ -128,20 +133,24 @@ export function DashboardPage() {
             <h3>按耗时排序</h3>
           </div>
           <div className="bar-list">
-            {bars.map((bar) => (
-              <div key={bar.label} className="bar">
-                <div className="row">
-                  <span>{bar.label}</span>
-                  <span>{bar.value}ms</span>
+            {bars.length ? (
+              bars.map((bar) => (
+                <div key={bar.label} className="bar">
+                  <div className="row">
+                    <span>{bar.label}</span>
+                    <span>{bar.value}ms</span>
+                  </div>
+                  <div className="bar__track">
+                    <div
+                      className="bar__fill"
+                      style={{ width: `${Math.max(12, (bar.value / maxBar) * 100)}%` }}
+                    />
+                  </div>
                 </div>
-                <div className="bar__track">
-                  <div
-                    className="bar__fill"
-                    style={{ width: `${Math.max(12, (bar.value / maxBar) * 100)}%` }}
-                  />
-                </div>
-              </div>
-            ))}
+              ))
+            ) : (
+              <p className="muted">当前 Base 记录里暂无可用运行耗时。</p>
+            )}
           </div>
         </div>
 
@@ -152,11 +161,11 @@ export function DashboardPage() {
             <tbody>
               <tr>
                 <th>现阶段</th>
-                <td>消费 `/metrics/pipelines` 聚合返回</td>
+                <td>主数据来自 `/demands`，运行指标仅统计 Base 当前记录</td>
               </tr>
               <tr>
                 <th>数据来源</th>
-                <td>后端 Pipeline session 与 stage 结果</td>
+                <td>飞书 Base 当前需求 + 本地 runtime metrics 交集</td>
               </tr>
               <tr>
                 <th>重点字段</th>

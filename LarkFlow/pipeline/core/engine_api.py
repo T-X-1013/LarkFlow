@@ -50,7 +50,62 @@ def _ctl(demand_id: str) -> PipelineControl:
     @return:
         返回 PipelineControl；不存在时抛出异常
     """
-    return engine_control.require(demand_id)
+    ctl = engine_control.get(demand_id)
+    if ctl is not None:
+        return ctl
+    session = _session(demand_id)
+    if session is None:
+        raise KeyError(f"pipeline {demand_id} not found")
+    return _recover_ctl(demand_id, session)
+
+
+def _recover_ctl(demand_id: str, session: Dict) -> PipelineControl:
+    """
+    根据持久化 session 恢复缺失的运行时控制对象。
+
+    @params:
+        demand_id: 需求 ID
+        session: 已持久化的 session 字典
+
+    @return:
+        返回补建后的 PipelineControl
+    """
+    ctl = engine_control.register(
+        requirement=session.get("requirement") or "",
+        template=session.get("template") or "default",
+        demand_id=demand_id,
+    )
+    ctl.provider = session.get("provider")
+    _restore_checkpoints(ctl, session)
+    ctl.touch()
+    return ctl
+
+
+def _restore_checkpoints(ctl: PipelineControl, session: Dict) -> None:
+    """
+    从 session 中恢复 design/deploy 检查点的挂起状态。
+
+    @params:
+        ctl: 待回填的运行时控制对象
+        session: 已持久化的 session 字典
+
+    @return:
+        无返回值；按 phase 和 pending 标记补齐检查点
+    """
+    phase = session.get("phase")
+    # 旧 session 可能只落 phase，新逻辑还会写 pending_* 标记；两者都要兼容。
+    if phase == "design_pending" or session.get("pending_approval"):
+        ctl.checkpoints[CheckpointName.DESIGN] = Checkpoint(
+            name=CheckpointName.DESIGN,
+            status=StageStatus.PENDING,
+            requested_at=session.get("updated_at"),
+        )
+    if phase == "deploy_pending" or session.get("pending_deploy_approval"):
+        ctl.checkpoints[CheckpointName.DEPLOY] = Checkpoint(
+            name=CheckpointName.DEPLOY,
+            status=StageStatus.PENDING,
+            requested_at=session.get("updated_at"),
+        )
 
 
 # ==========================================
@@ -295,7 +350,16 @@ def list_states() -> Dict[str, PipelineState]:
     @return:
         返回以 demand_id 为键的状态字典
     """
-    return {
-        ctl.demand_id: engine_control.build_state(ctl, _session(ctl.demand_id))
-        for ctl in engine_control.list_all()
-    }
+    demand_ids = {ctl.demand_id for ctl in engine_control.list_all()}
+    demand_ids.update(engine.STORE.list_active())
+
+    states: Dict[str, PipelineState] = {}
+    for demand_id in demand_ids:
+        session = _session(demand_id)
+        ctl = engine_control.get(demand_id)
+        if ctl is None and session is not None:
+            ctl = _recover_ctl(demand_id, session)
+        if ctl is None:
+            continue
+        states[demand_id] = engine_control.build_state(ctl, session)
+    return states

@@ -6,7 +6,7 @@ import larkSrcPlugin from "./vite-plugin-lark-src";
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
   const backend = env.VITE_API_BASE ?? "http://127.0.0.1:8000";
-  console.log("[vite.config] loaded, proxying /pipelines /visual-edits /metrics /healthz to", backend);
+  console.log("[vite.config] loaded, proxying /pipelines /demands /visual-edits /metrics /healthz to", backend);
   const bypassSpaNavigation = (req: { headers: Record<string, string | string[] | undefined> }) => {
     const accept = req.headers.accept;
     const value = Array.isArray(accept) ? accept.join(",") : (accept ?? "");
@@ -20,6 +20,7 @@ export default defineConfig(({ mode }) => {
       port: 4173,
       proxy: {
         "/pipelines": { target: backend, changeOrigin: true, bypass: bypassSpaNavigation },
+        "/demands": { target: backend, changeOrigin: true, bypass: bypassSpaNavigation },
         "/visual-edits": { target: backend, changeOrigin: true, bypass: bypassSpaNavigation },
         "/metrics": { target: backend, changeOrigin: true, bypass: bypassSpaNavigation },
         "/healthz": { target: backend, changeOrigin: true, bypass: bypassSpaNavigation },

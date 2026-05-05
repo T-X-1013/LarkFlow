@@ -22,7 +22,9 @@ from pipeline.core.contracts import (
     CheckpointName,
     CheckpointRejectRequest,
     CreatePipelineRequest,
+    DemandListItem,
     MetricsResponse,
+    PipelineStatus,
     PipelineCreateResponse,
     PipelineState,
     ProviderUpdateRequest,
@@ -35,6 +37,7 @@ from pipeline.core.contracts import (
     VisualEditSession,
 )
 from pipeline.api.deps import get_engine, require_checkpoint, require_stage
+from pipeline.lark.bitable_listener import list_bitable_records
 from pipeline.ops.visual_edit import (
     VisualEditNotFoundError,
     VisualEditRequestError,
@@ -70,6 +73,41 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    def _map_bitable_status(status: str) -> tuple[PipelineStatus, Stage | None]:
+        """
+        把多维表格中的中文状态映射为前端契约状态。
+
+        @params:
+            status: Base 状态列中的原始中文值
+
+        @return:
+            返回 `(PipelineStatus, Stage | None)`；无法识别时回退为 pending
+        """
+        normalized = (status or "").strip()
+        if normalized == "设计审批中":
+            return PipelineStatus.WAITING_APPROVAL, Stage.DESIGN
+        if normalized in {"设计已通过", "编码中"}:
+            return PipelineStatus.RUNNING, Stage.CODING
+        if normalized == "测试中":
+            return PipelineStatus.RUNNING, Stage.TEST
+        if normalized == "审查中":
+            return PipelineStatus.RUNNING, Stage.REVIEW
+        if normalized == "部署审批中":
+            return PipelineStatus.WAITING_APPROVAL, Stage.REVIEW
+        if normalized == "部署中":
+            return PipelineStatus.RUNNING, Stage.REVIEW
+        if normalized == "已暂停":
+            return PipelineStatus.PAUSED, None
+        if normalized == "已停止":
+            return PipelineStatus.STOPPED, None
+        if normalized == "驳回":
+            return PipelineStatus.REJECTED, None
+        if normalized in {"失败", "部署失败"}:
+            return PipelineStatus.FAILED, None
+        if normalized == "已完成":
+            return PipelineStatus.SUCCEEDED, None
+        return PipelineStatus.PENDING, None
 
     # ========== Pipeline CRUD ==========
     @app.post("/pipelines", response_model=PipelineCreateResponse)
@@ -279,6 +317,59 @@ def create_app() -> FastAPI:
             返回 PipelineState 列表
         """
         return engine.list_pipelines()
+
+    @app.get("/demands", response_model=list[DemandListItem])
+    def list_demands(engine=Depends(get_engine)):
+        """
+        直接读取飞书多维表格需求记录，并叠加当前进程内 runtime 状态。
+
+        @params:
+            engine: 由依赖注入提供的 engine facade
+
+        @return:
+            返回需求列表
+        """
+        runtime_states = engine.list_states()
+        items: list[DemandListItem] = []
+        for row in list_bitable_records():
+            demand_id = row.get("demand_id") or row.get("record_id") or ""
+            runtime = runtime_states.get(demand_id)
+            if runtime:
+                # 运行时状态优先于 Base 文本状态，避免列表页看到过期的中文列值。
+                items.append(
+                    DemandListItem(
+                        id=runtime.id,
+                        record_id=row.get("record_id") or runtime.id,
+                        requirement=row.get("requirement") or runtime.requirement,
+                        status=runtime.status,
+                        current_stage=runtime.current_stage,
+                        provider=runtime.provider,
+                        template=runtime.template,
+                        updated_at=runtime.updated_at,
+                        doc_url=row.get("doc_url") or None,
+                        tech_doc_url=row.get("tech_doc_url") or None,
+                        runtime_available=True,
+                    )
+                )
+                continue
+
+            mapped_status, mapped_stage = _map_bitable_status(row.get("status") or "")
+            items.append(
+                DemandListItem(
+                    id=demand_id,
+                    record_id=row.get("record_id") or demand_id,
+                    requirement=row.get("requirement") or row.get("doc_url") or "",
+                    status=mapped_status,
+                    current_stage=mapped_stage,
+                    provider=None,
+                    template="default",
+                    updated_at=0,
+                    doc_url=row.get("doc_url") or None,
+                    tech_doc_url=row.get("tech_doc_url") or None,
+                    runtime_available=False,
+                )
+            )
+        return items
 
     @app.get("/pipelines/{pipeline_id}", response_model=PipelineState)
     def get(pipeline_id: str, engine=Depends(get_engine)):

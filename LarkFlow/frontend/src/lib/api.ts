@@ -1,5 +1,6 @@
 import type {
   ArtifactResponse,
+  DemandListItem,
   MetricsResponse,
   PipelineCreateResponse,
   Stage,
@@ -92,6 +93,10 @@ export function listMetrics() {
 
 export function listPipelines() {
   return jsonRequest<PipelineState[]>("/pipelines");
+}
+
+export function listDemands() {
+  return jsonRequest<DemandListItem[]>("/demands");
 }
 
 export function getPipeline(id: string) {

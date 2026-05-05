@@ -70,6 +70,20 @@ export interface PipelineState {
   review_multi?: ReviewMultiSnapshot | null;
 }
 
+export interface DemandListItem {
+  id: string;
+  record_id: string;
+  requirement: string;
+  status: PipelineStatus;
+  current_stage: Stage | null;
+  provider: string | null;
+  template: string;
+  updated_at: number;
+  doc_url?: string | null;
+  tech_doc_url?: string | null;
+  runtime_available: boolean;
+}
+
 export interface PipelineCreateResponse {
   id: string;
 }
