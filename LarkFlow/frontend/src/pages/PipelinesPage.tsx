@@ -2,8 +2,8 @@ import type { FormEvent } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
-import { createPipeline, listPipelines } from "../lib/api";
-import type { PipelineState, PipelineStatus } from "../types/api";
+import { createPipeline, listDemands } from "../lib/api";
+import type { DemandListItem, PipelineStatus } from "../types/api";
 
 const POLL_INTERVAL_MS = 3000;
 
@@ -15,8 +15,28 @@ function badgeClass(status: PipelineStatus) {
   return "badge badge--failed";
 }
 
+function statusLabel(status: PipelineStatus, currentStage: DemandListItem["current_stage"]) {
+  if (status === "waiting_approval") {
+    if (currentStage === "design") return "设计审批中";
+    return "部署审批中";
+  }
+  if (status === "running") {
+    if (currentStage === "coding") return "编码中";
+    if (currentStage === "test") return "测试中";
+    if (currentStage === "review") return "审查中";
+    return "运行中";
+  }
+  if (status === "paused") return "已暂停";
+  if (status === "pending") return "待启动";
+  if (status === "stopped") return "已停止";
+  if (status === "failed") return "失败";
+  if (status === "rejected") return "驳回";
+  if (status === "succeeded") return "已完成";
+  return status;
+}
+
 export function PipelinesPage() {
-  const [pipelines, setPipelines] = useState<PipelineState[]>([]);
+  const [pipelines, setPipelines] = useState<DemandListItem[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [requirement, setRequirement] = useState("");
   const [template, setTemplate] = useState("default");
@@ -29,7 +49,7 @@ export function PipelinesPage() {
     let cancelled = false;
     async function load() {
       try {
-        const data = await listPipelines();
+        const data = await listDemands();
         if (cancelled) return;
         setPipelines(data);
         setLoadError(null);
@@ -72,7 +92,7 @@ export function PipelinesPage() {
     setCreatedId(created.id);
     setRequirement("");
     try {
-      setPipelines(await listPipelines());
+      setPipelines(await listDemands());
     } catch {
       // 下次轮询会兜底刷新
     }
@@ -222,7 +242,9 @@ export function PipelinesPage() {
           filteredPipelines.map((pipeline) => (
             <article key={pipeline.id} className="pipeline-card">
               <div className="pipeline-card__meta">
-                <span className={badgeClass(pipeline.status)}>{pipeline.status}</span>
+                <span className={badgeClass(pipeline.status)}>
+                  {statusLabel(pipeline.status, pipeline.current_stage)}
+                </span>
                 <span className="badge badge--pending">{pipeline.current_stage ?? "n/a"}</span>
                 <span className="muted">{pipeline.provider ?? "provider pending"}</span>
               </div>
@@ -232,12 +254,30 @@ export function PipelinesPage() {
               </div>
               <div className="row">
                 <span>template: {pipeline.template}</span>
-                <span>stage count: {Object.keys(pipeline.stages).length}</span>
-                <span>updated: {new Date(pipeline.updated_at * 1000).toLocaleString()}</span>
+                <span>runtime: {pipeline.runtime_available ? "available" : "base only"}</span>
+                <span>
+                  updated:{" "}
+                  {pipeline.updated_at
+                    ? new Date(pipeline.updated_at * 1000).toLocaleString()
+                    : "n/a"}
+                </span>
               </div>
-              <Link className="button--ghost" to={`/pipelines/${pipeline.id}`}>
-                查看详情
-              </Link>
+              {pipeline.runtime_available ? (
+                <Link className="button--ghost" to={`/pipelines/${pipeline.id}`}>
+                  查看详情
+                </Link>
+              ) : (
+                <div className="muted" style={{ display: "grid", gap: 6 }}>
+                  <span
+                    className="button--ghost"
+                    aria-disabled="true"
+                    style={{ opacity: 0.45, display: "inline-block" }}
+                  >
+                    仅同步 Base 状态
+                  </span>
+                  <span>当前状态来自多维表格，详情运行态需等待后端重新接管。</span>
+                </div>
+              )}
             </article>
           ))
         ) : (

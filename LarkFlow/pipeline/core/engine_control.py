@@ -39,10 +39,28 @@ _PHASE_TO_STAGE: Dict[str, Stage] = {v: k for k, v in _STAGE_TO_PHASE.items()}
 
 
 def stage_to_phase(stage: Stage) -> str:
+    """
+    把契约层阶段枚举转换为 engine 内部 phase 名称。
+
+    @params:
+        stage: 对外阶段枚举
+
+    @return:
+        返回 engine 使用的 phase 字符串
+    """
     return _STAGE_TO_PHASE[stage]
 
 
 def phase_to_stage(phase: str) -> Optional[Stage]:
+    """
+    把 engine phase 名称映射回对外阶段枚举。
+
+    @params:
+        phase: engine 内部 phase 字符串
+
+    @return:
+        返回对应 Stage；未知 phase 时返回 None
+    """
     return _PHASE_TO_STAGE.get(phase)
 
 
@@ -58,6 +76,8 @@ class PipelineCancelled(Exception):
 # ==========================================
 @dataclass
 class PipelineControl:
+    """单条 Pipeline 的进程内控制块。"""
+
     demand_id: str
     requirement: str
     template: str = "default"
@@ -72,6 +92,7 @@ class PipelineControl:
     checkpoints: Dict[CheckpointName, Checkpoint] = field(default_factory=dict)
 
     def touch(self) -> None:
+        """刷新控制块更新时间，供列表和状态接口反映最近操作。"""
         self.updated_at = int(time.time())
 
 
@@ -87,6 +108,17 @@ def register(
     template: str = "default",
     demand_id: Optional[str] = None,
 ) -> PipelineControl:
+    """
+    注册一条新的 Pipeline 控制块。
+
+    @params:
+        requirement: 需求文本
+        template: 模板名
+        demand_id: 可选指定 demand_id；为空时自动生成
+
+    @return:
+        返回注册后的 PipelineControl
+    """
     did = demand_id or f"DEMAND-{uuid.uuid4().hex[:8]}"
     ctl = PipelineControl(demand_id=did, requirement=requirement, template=template)
     with _REGISTRY_LOCK:
@@ -95,11 +127,29 @@ def register(
 
 
 def get(demand_id: str) -> Optional[PipelineControl]:
+    """
+    读取指定需求的控制块。
+
+    @params:
+        demand_id: 需求 ID
+
+    @return:
+        返回 PipelineControl；不存在时返回 None
+    """
     with _REGISTRY_LOCK:
         return _REGISTRY.get(demand_id)
 
 
 def require(demand_id: str) -> PipelineControl:
+    """
+    强制读取指定需求的控制块。
+
+    @params:
+        demand_id: 需求 ID
+
+    @return:
+        返回 PipelineControl；不存在时抛出 KeyError
+    """
     ctl = get(demand_id)
     if ctl is None:
         raise KeyError(f"pipeline {demand_id} not found")
@@ -107,6 +157,15 @@ def require(demand_id: str) -> PipelineControl:
 
 
 def list_all() -> List[PipelineControl]:
+    """
+    枚举当前注册表中的全部控制块。
+
+    @params:
+        无
+
+    @return:
+        返回 PipelineControl 列表快照
+    """
     with _REGISTRY_LOCK:
         return list(_REGISTRY.values())
 
@@ -148,6 +207,15 @@ def launch(ctl: PipelineControl, target, *args, **kwargs) -> None:
 
 
 def pause(demand_id: str) -> PipelineControl:
+    """
+    标记指定 Pipeline 为暂停态。
+
+    @params:
+        demand_id: 需求 ID
+
+    @return:
+        返回更新后的 PipelineControl
+    """
     ctl = require(demand_id)
     ctl.pause_flag.set()
     ctl.touch()
@@ -155,6 +223,15 @@ def pause(demand_id: str) -> PipelineControl:
 
 
 def resume(demand_id: str) -> PipelineControl:
+    """
+    清除指定 Pipeline 的暂停态。
+
+    @params:
+        demand_id: 需求 ID
+
+    @return:
+        返回更新后的 PipelineControl
+    """
     ctl = require(demand_id)
     ctl.pause_flag.clear()
     ctl.touch()
@@ -162,6 +239,15 @@ def resume(demand_id: str) -> PipelineControl:
 
 
 def cancel(demand_id: str) -> PipelineControl:
+    """
+    标记指定 Pipeline 为停止态，并唤醒可能阻塞的线程。
+
+    @params:
+        demand_id: 需求 ID
+
+    @return:
+        返回更新后的 PipelineControl
+    """
     ctl = require(demand_id)
     ctl.cancel_flag.set()
     # 若处于 pause 中，解除阻塞让线程走到 cancel 分支退出
@@ -174,6 +260,16 @@ def cancel(demand_id: str) -> PipelineControl:
 # 状态反射：session + control → PipelineState
 # ==========================================
 def _infer_status(ctl: PipelineControl, session_phase: Optional[str]) -> PipelineStatus:
+    """
+    综合控制块和 session phase 推导对外 PipelineStatus。
+
+    @params:
+        ctl: 进程内控制块
+        session_phase: session 中记录的当前 phase
+
+    @return:
+        返回对外暴露的 PipelineStatus
+    """
     if ctl.cancel_flag.is_set():
         return PipelineStatus.STOPPED
     if session_phase == "failed":
@@ -197,8 +293,27 @@ def _infer_status(ctl: PipelineControl, session_phase: Optional[str]) -> Pipelin
 
 
 def build_state(ctl: PipelineControl, session: Optional[Dict]) -> PipelineState:
+    """
+    把运行时控制块与持久化 session 组装成契约层状态快照。
+
+    @params:
+        ctl: 进程内控制块
+        session: 可选 session 字典
+
+    @return:
+        返回供 REST/前端消费的 PipelineState
+    """
     phase = (session or {}).get("phase") if session else None
     current_stage = phase_to_stage(phase) if phase else None
+    # *_pending / deploying 不是正式 stage 名称，需要额外映射回用户可理解的阶段。
+    if current_stage is None and phase and phase.endswith("_pending"):
+        pending_phase = phase.removesuffix("_pending")
+        if pending_phase == "design":
+            current_stage = Stage.DESIGN
+        elif pending_phase == "deploy":
+            current_stage = Stage.REVIEW
+    if current_stage is None and phase == "deploying":
+        current_stage = Stage.REVIEW
 
     # D4：从 session["stage_results"] 反序列化真实 StageResult。
     # 不存在时返回空 dict；不合法条目跳过，不阻塞状态查询。

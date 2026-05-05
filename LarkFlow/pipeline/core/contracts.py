@@ -15,6 +15,8 @@ from pydantic import BaseModel, Field
 # Enum
 # ==========================================
 class Stage(str, Enum):
+    """Pipeline 对外暴露的四阶段枚举。"""
+
     DESIGN = "design"
     CODING = "coding"
     TEST = "test"
@@ -22,6 +24,8 @@ class Stage(str, Enum):
 
 
 class StageStatus(str, Enum):
+    """阶段产出或检查点的通用状态枚举。"""
+
     SUCCESS = "success"
     FAILED = "failed"
     REJECTED = "rejected"
@@ -29,6 +33,8 @@ class StageStatus(str, Enum):
 
 
 class PipelineStatus(str, Enum):
+    """Pipeline 整体运行态枚举，供 REST 和前端统一消费。"""
+
     PENDING = "pending"
     RUNNING = "running"
     PAUSED = "paused"
@@ -40,11 +46,15 @@ class PipelineStatus(str, Enum):
 
 
 class CheckpointName(str, Enum):
+    """人工审批检查点名称。"""
+
     DESIGN = "design"      # 第 1 HITL：Design 产出审批
     DEPLOY = "deploy"      # 第 2 HITL：Review 通过后是否部署
 
 
 class VisualEditSessionStatus(str, Enum):
+    """视觉编辑会话生命周期状态。"""
+
     DRAFT = "draft"
     EDITING = "editing"
     PREVIEW_READY = "preview_ready"
@@ -59,6 +69,8 @@ class VisualEditSessionStatus(str, Enum):
 # Stage / Pipeline 状态
 # ==========================================
 class TokenUsage(BaseModel):
+    """单个阶段或整条 Pipeline 的 token 消耗。"""
+
     input: int = 0
     output: int = 0
 
@@ -75,6 +87,8 @@ class StageResult(BaseModel):
 
 
 class Checkpoint(BaseModel):
+    """单个 HITL 检查点的审批状态。"""
+
     name: CheckpointName
     status: StageStatus = StageStatus.PENDING
     requested_at: Optional[int] = None
@@ -122,19 +136,41 @@ class PipelineState(BaseModel):
     review_multi: Optional[ReviewMultiSnapshot] = None
 
 
+class DemandListItem(BaseModel):
+    """多维表格需求列表项；前端列表页直接消费。"""
+
+    id: str
+    record_id: str
+    requirement: str
+    status: PipelineStatus = PipelineStatus.PENDING
+    current_stage: Optional[Stage] = None
+    provider: Optional[str] = None
+    template: str = "default"
+    updated_at: int = 0
+    doc_url: Optional[str] = None
+    tech_doc_url: Optional[str] = None
+    runtime_available: bool = False
+
+
 # ==========================================
 # Request body
 # ==========================================
 class CreatePipelineRequest(BaseModel):
+    """创建 Pipeline 的请求体。"""
+
     requirement: str
     template: str = "default"
 
 
 class CheckpointRejectRequest(BaseModel):
+    """驳回检查点时的请求体。"""
+
     reason: str
 
 
 class ProviderUpdateRequest(BaseModel):
+    """启动前切换模型 provider 的请求体。"""
+
     provider: str  # anthropic | openai | doubao | qwen
 
 
@@ -233,6 +269,8 @@ class VisualEditCommitResult(BaseModel):
 # Response
 # ==========================================
 class PipelineCreateResponse(BaseModel):
+    """创建 Pipeline 后返回的最小响应。"""
+
     id: str
 
 
@@ -246,6 +284,8 @@ class RoleMetrics(BaseModel):
 
 
 class MetricsItem(BaseModel):
+    """单条 Pipeline 的指标快照。"""
+
     pipeline_id: str
     status: PipelineStatus
     duration_ms: int = 0
@@ -257,10 +297,14 @@ class MetricsItem(BaseModel):
 
 
 class MetricsResponse(BaseModel):
+    """指标列表接口响应。"""
+
     pipelines: List[MetricsItem] = Field(default_factory=list)
 
 
 class ArtifactResponse(BaseModel):
+    """阶段产物查询响应。"""
+
     stage: Stage
     artifact_path: str
     content: Optional[str] = None

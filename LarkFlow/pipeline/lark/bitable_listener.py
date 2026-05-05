@@ -24,6 +24,7 @@ from lark_oapi.api.bitable.v1 import (
     AppTableRecord,
     GetAppTableRecordRequest,
     ListAppTableFieldRequest,
+    ListAppTableRecordRequest,
     UpdateAppTableRecordRequest,
 )
 from lark_oapi.api.drive.v1 import SubscribeFileRequest
@@ -50,30 +51,45 @@ _ERR_RECORD_NOT_FOUND = 1254043
 
 
 def _demand_base_token() -> str:
+    """返回需求 Base 的 app token。"""
     return lark_config.demand_base_token()
 
 
 def _demand_table_id() -> str:
+    """返回需求表 table_id。"""
     return lark_config.demand_table_id()
 
 
 def _demand_status_field() -> str:
+    """返回需求状态列名。"""
     return lark_config.demand_status_field()
 
 
 def _demand_id_field() -> str:
+    """返回需求编号列名。"""
     return lark_config.demand_id_field()
 
 
 def _demand_doc_field() -> str:
+    """返回需求文档列名。"""
     return lark_config.demand_doc_field()
 
 
 def _tech_doc_field() -> str:
+    """返回技术方案文档列名。"""
     return lark_config.tech_doc_field()
 
 
+def _demand_requirement_field() -> str:
+    """返回需求描述列名；旧配置缺失时回退到默认值。"""
+    getter = getattr(lark_config, "demand_requirement_field", None)
+    if callable(getter):
+        return getter()
+    return "需求描述"
+
+
 def _trigger_field() -> str:
+    """返回用来触发发卡的按钮/字段列名。"""
     return lark_config.demand_trigger_field()
 
 
@@ -82,7 +98,13 @@ _trigger_field_id_cache: dict[str, str] = {}
 
 def _resolve_trigger_field_id() -> Optional[str]:
     """
-    查询当前表的字段列表，返回触发字段名对应的 field_id；缓存命中时直接返回
+    查询触发字段名对应的 field_id，并做进程内缓存。
+
+    @params:
+        无
+
+    @return:
+        返回触发字段的 field_id；查不到或请求失败时返回 None
     """
     field_name = _trigger_field()
     cache_key = f"{_demand_base_token()}::{_demand_table_id()}::{field_name}"
@@ -126,7 +148,13 @@ def _resolve_trigger_field_id() -> Optional[str]:
 
 def _action_changed_field_ids(action: Any) -> set[str]:
     """
-    收集 before_value != after_value 的 field_id
+    收集本次事件里实际发生变化的 field_id 集合。
+
+    @params:
+        action: 飞书事件中的单条 action
+
+    @return:
+        返回 before/after 比较后真正变化的 field_id 集合
 
     Lark 的 before/after_value 在实测中会把整行字段都带上（不仅是本次变更），
     所以必须逐字段 diff field_value，才能真正识别"谁变了"
@@ -150,10 +178,12 @@ def _action_changed_field_ids(action: Any) -> set[str]:
 
 
 def _approve_target() -> str:
+    """返回发卡目标 receive_id。"""
     return lark_config.demand_approve_target()
 
 
 def _approve_receive_id_type() -> str:
+    """返回发卡目标类型，例如 open_id 或 chat_id。"""
     return lark_config.demand_approve_receive_id_type()
 
 
@@ -266,6 +296,66 @@ def _get_record_fields(record_id: str) -> Optional[dict[str, Any]]:
     data = response.data
     record = getattr(data, "record", None) if data else None
     return getattr(record, "fields", None) or {}
+
+
+def list_bitable_records() -> list[dict[str, Any]]:
+    """
+    列出需求 Base 的全部记录，返回前端列表页可消费的基础字段。
+
+    @return:
+        返回记录列表；异常时抛 RuntimeError
+    """
+    items: list[dict[str, Any]] = []
+    page_token = ""
+
+    while True:
+        builder = (
+            ListAppTableRecordRequest.builder()
+            .app_token(_demand_base_token())
+            .table_id(_demand_table_id())
+            .page_size(100)
+        )
+        if page_token:
+            builder = builder.page_token(page_token)
+        request = builder.build()
+
+        try:
+            response = get_lark_client().bitable.v1.app_table_record.list(request)
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(f"读取多维表格记录异常: {exc}") from exc
+
+        if not response.success():
+            raise RuntimeError(
+                f"读取多维表格记录失败 (Code: {response.code}): {response.msg}"
+            )
+
+        data = response.data
+        records = getattr(data, "items", None) or []
+        for record in records:
+            fields = getattr(record, "fields", None) or {}
+            items.append(
+                {
+                    "record_id": getattr(record, "record_id", "") or "",
+                    "demand_id": _extract_plain_text(fields.get(_demand_id_field())),
+                    "status": _extract_plain_text(fields.get(_demand_status_field())),
+                    # 列表页优先展示显式需求描述；老表可能仍把正文放在“需求”或文档列。
+                    "requirement": _extract_plain_text(fields.get(_demand_requirement_field()))
+                    or _extract_plain_text(fields.get("需求描述"))
+                    or _extract_plain_text(fields.get("需求"))
+                    or _extract_plain_text(fields.get(_demand_doc_field())),
+                    "doc_url": _extract_plain_text(fields.get(_demand_doc_field())),
+                    "tech_doc_url": _extract_plain_text(fields.get(_tech_doc_field())),
+                }
+            )
+
+        has_more = bool(getattr(data, "has_more", False)) if data else False
+        if not has_more:
+            break
+        page_token = getattr(data, "page_token", "") if data else ""
+        if not page_token:
+            break
+
+    return items
 
 
 def update_demand_status(record_id: str, status: str) -> bool:
