@@ -80,6 +80,14 @@ def _tech_doc_field() -> str:
     return lark_config.tech_doc_field()
 
 
+def _demand_template_field() -> str:
+    """返回模板列名。"""
+    getter = getattr(lark_config, "demand_template_field", None)
+    if callable(getter):
+        return getter()
+    return "模板"
+
+
 def _demand_requirement_field() -> str:
     """返回需求描述列名；旧配置缺失时回退到默认值。"""
     getter = getattr(lark_config, "demand_requirement_field", None)
@@ -91,6 +99,16 @@ def _demand_requirement_field() -> str:
 def _trigger_field() -> str:
     """返回用来触发发卡的按钮/字段列名。"""
     return lark_config.demand_trigger_field()
+
+
+def _normalize_template(raw: str) -> str:
+    """把 Base 中的模板值归一化到受支持的模板集合。"""
+    from pipeline.dag.schema import TEMPLATE_NAMES
+
+    normalized = (raw or "").strip()
+    if normalized in TEMPLATE_NAMES:
+        return normalized
+    return "default"
 
 
 _trigger_field_id_cache: dict[str, str] = {}
@@ -345,6 +363,9 @@ def list_bitable_records() -> list[dict[str, Any]]:
                     or _extract_plain_text(fields.get(_demand_doc_field())),
                     "doc_url": _extract_plain_text(fields.get(_demand_doc_field())),
                     "tech_doc_url": _extract_plain_text(fields.get(_tech_doc_field())),
+                    "template": _normalize_template(
+                        _extract_plain_text(fields.get(_demand_template_field()))
+                    ),
                 }
             )
 
@@ -467,6 +488,7 @@ def _process_record(record_id: str) -> None:
     if not demand_id:
         # 自增编号字段有时滞后一点，用 record_id 兜底
         demand_id = record_id
+    template = _normalize_template(_extract_plain_text(fields.get(_demand_template_field())))
 
     target = _approve_target()
     receive_id_type = _approve_receive_id_type()
@@ -482,6 +504,7 @@ def _process_record(record_id: str) -> None:
             target=target,
             demand_id=demand_id,
             doc_url=doc_url,
+            template=template,
             base_token=_demand_base_token(),
             table_id=_demand_table_id(),
             record_id=record_id,

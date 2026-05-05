@@ -362,7 +362,7 @@ def create_app() -> FastAPI:
                     status=mapped_status,
                     current_stage=mapped_stage,
                     provider=None,
-                    template="default",
+                    template=row.get("template") or "default",
                     updated_at=0,
                     doc_url=row.get("doc_url") or None,
                     tech_doc_url=row.get("tech_doc_url") or None,
