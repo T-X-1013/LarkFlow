@@ -10,12 +10,12 @@ Block any merge that violates a 🔴 rule in the matched `skills/*.md`. Fix 🟡
 
 1. **Understand the Context**
    - Read the Phase 1 design document and the Phase 3 test results in your context.
-   - Note which skills Phase 2 claimed it matched (in its `## Skill Routing` preamble). You will audit that routing.
+   - Note which skills Phase 2 claimed it read (in its `## Skill Routing` preamble). You will audit that against the `<skill-routing>` block injected into your own system prompt — they should match. Divergence is itself a finding.
 
 2. **Consult the Rules**
-   - Read `rules/flow-rule.md` and `rules/skill-routing.yaml`.
-   - Re-run the routing match yourself against the design. If Phase 2's matched set differs from yours, that is itself a finding — record it.
-   - Read every `skills/*.md` from the combined matched set.
+   - Read `rules/flow-rule.md`.
+   - Read every `skills/*.md` listed in the `<skill-routing>` block at the top of your system prompt. **Do not re-run keyword matching yourself — the engine has already resolved the authoritative list.**
+   - If you believe a rule was missed by the routing, record it as a `<skill-feedback>` with `<gap-type>routing</gap-type>` (see step 6).
 
 3. **Inspect the Code**
    - Use `file_editor` (action: `read`) to read every file Phase 2 created or modified in `../demo-app`.
@@ -62,6 +62,10 @@ Block any merge that violates a 🔴 rule in the matched `skills/*.md`. Fix 🟡
 
 6. **Emit `<skill-feedback>` blocks**
    - For any finding that reveals a **missing or unclear rule** (not a one-off typo), emit the block defined in `rules/skill-feedback-loop.md`. One block per distinct rule.
+   - Classify each block's **gap type** with the new `<gap-type>` field:
+     - `routing` — the `<suggested-skill>` was NOT in the `<skill-routing>` block the engine injected, so Phase 2 never read it. Fix path: extend `tech_tags` enum or keyword fallback.
+     - `content` — the `<suggested-skill>` WAS in the injected routing but the rule is missing / unclear in that skill file. Fix path: edit the `.md` content.
+   - Populate `<injected-skills>` with the exact skill paths from your `<skill-routing>` block, comma-separated. The engine uses these two fields to auto-bucket findings in the digest report.
 
 7. **Final Verdict**
    - Either `## Code Review Approved` with a one-line summary, or `## Code Review Blocked` with the blocking findings.
@@ -92,6 +96,8 @@ Skills consulted: <list>
   <summary>...</summary>
   <evidence>path/file.go:LINE — <snippet></evidence>
   <suggested-skill>skills/xxx.md</suggested-skill>
+  <gap-type>routing|content</gap-type>
+  <injected-skills>skills/a.md, skills/b.md</injected-skills>
 </skill-feedback>
 
 ## Verdict
@@ -117,6 +123,8 @@ Skills consulted: skills/domain/order.md, skills/governance/idempotency.md, skil
   <summary>Idempotency must be backed by shared storage, not in-process map.</summary>
   <evidence>internal/service/order.go:42 — `var seen = map[string]bool{}`</evidence>
   <suggested-skill>skills/governance/idempotency.md</suggested-skill>
+  <gap-type>content</gap-type>
+  <injected-skills>skills/framework/kratos.md, skills/domain/order.md, skills/governance/idempotency.md, skills/infra/database.md</injected-skills>
 </skill-feedback>
 
 ## Verdict

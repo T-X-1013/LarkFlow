@@ -2,7 +2,7 @@
 
 LarkFlow 已经从一个依赖本地 IDE 插件的工具，进化为一个**完全无头（Headless）、基于多阶段多 Agent（串行）自动化研发工作流引擎**。
 
-[![Version](https://img.shields.io/badge/version-1.9.1-blue.svg)](https://github.com/your-repo/larkflow)
+[![Version](https://img.shields.io/badge/version-2.4.0-blue.svg)](https://github.com/your-repo/larkflow)
 [![Architecture](https://img.shields.io/badge/architecture-Multi--Agent-orange.svg)](#architecture)
 [![Scaffold](https://img.shields.io/badge/scaffold-Kratos%20v2.7-00ADD8.svg)](#kratos-骨架自动物化)
 
@@ -239,8 +239,9 @@ graph TD
 这部分是编码 Agent 的"检索式规范库"：
 
 - `rules/flow-rule.md`：总规则，要求先查路由表再编码；明确"产物是 Kratos 骨架，禁止平铺 .go 文件"。
-- `rules/skill-routing.yaml`：**路由表唯一真源**，结构为 `keywords / skill / weight` 列表。权重分三档——**framework `1.3`（架构级硬约束）> domain `1.2`（业务） > 其他 `1.0`**。Phase 2 Agent 按权重降序读取全部命中 skill（framework 级硬约束优先进入上下文）；`defaults` 头条 `skills/framework/kratos.md` 保证每次必读。`rules/skill-routing.md` 作为人类可读镜像并在顶部声明以 YAML 为准。
-- `rules/skill-feedback-loop.md`：Phase 4 Reviewer 输出 `<skill-feedback>` 块 → 周度 triage → PR 回灌 `skills/*.md` 的四步闭环。
+- `rules/skill-routing.yaml`：**路由表唯一真源**，结构为 `keywords / skill / weight` 列表。权重分三档——**framework `1.3`（架构级硬约束）> domain `1.2`（业务） > 其他 `1.0`**；权重用于上下文排序（命中即读，不再 Top-N 截断）。`defaults` 头条 `skills/framework/kratos.md` 保证每次必读。`rules/skill-routing.md` 作为人类可读镜像并在顶部声明以 YAML 为准。
+- **路由执行路径（v2.4 起）**：Phase 1 Agent 在产出设计稿时同步打结构化标签 `tech_tags = {domains, capabilities, rationale}`（见 `agents/phase1_design.md` 的 *Tech Tags Contract*），通过 `ask_human_approval` 回传。Engine 在挂起审批前由 `pipeline/skills/resolver.py` 解析成 `SkillRouting`（tag → 关键词 fallback → defaults 三级回退）并落盘到 session；Phase 2 / Phase 4（含 feature_multi 的三路 reviewer + aggregator）进入各自 `run_agent_loop` 前，`_augment_with_skill_routing` 把 `<skill-routing>` 块注入 system prompt 顶部。下游 Agent 不再自行跑关键词匹配，改为按注入清单顺序读 md。
+- `rules/skill-feedback-loop.md`：Phase 4 Reviewer 输出 `<skill-feedback>` 块 → 引擎自动落盘 → 周度 digest → PR 回灌 `skills/*.md` 的四步闭环。`<skill-feedback>` 现携带 `<gap-type>routing|content</gap-type>` 与 `<injected-skills>`，由 `pipeline/skills/feedback.py` 在 Phase 4 结束时追加写入 `tmp/<demand_id>/skill_feedback.jsonl` 与 `telemetry/skill_feedback.jsonl`；`scripts/skill_feedback_digest.py --since 7d` 按 gap type 分桶聚合，区分"路由没覆盖到"和"skill 内容不够"两类问题。
 - `skills/**/*.md`：按 `framework/ / lang/ / transport/ / infra/ / governance/ / domain/` 六层组织的知识库，覆盖 Kratos 分层/wire/make 工具链、并发/错误、HTTP/RPC/分页/消息队列、DB/Redis/Config、认证/限流/幂等/日志/韧性/可观测/服务发现，以及订单/用户/支付业务规范。每份 md 保持 🔴 CRITICAL / 🟡 HIGH / 🟢 最佳实践 分级 + Go ❌/✅ 代码对照结构。
 
 ### 3. Pipeline
@@ -668,9 +669,11 @@ python pipeline/core/engine.py
 
 ## 核心特性：按需检索 (RAG) 知识库
 
-LarkFlow 的知识库架构会让 AI 在写代码前强制读取 `rules/skill-routing.yaml` 路由表，按关键词匹配并按 `weight` 降序读取全部命中的 skill。
+LarkFlow 的知识库架构由 Phase 1 Agent 在设计阶段产出结构化 `tech_tags`（`domains` + `capabilities`，取值为 `skills/**/*.md` 的 stem），引擎在挂起审批前由 `pipeline/skills/resolver.py` 一次性解析成 skill 清单并写入 session，再把 `<skill-routing>` 块注入 Phase 2 / Phase 4 的 system prompt 顶部——下游 Agent 按注入清单读 md，不再自行跑关键词匹配。`tech_tags` 缺失或出现非法 tag 时自动回退到 `rules/skill-routing.yaml` 的关键词子串匹配 + defaults，保证向后兼容。
 
-例如，当需求包含"Redis 缓存"时，AI 会自动调用 `file_editor` 工具读取 `skills/infra/redis.md`，学习团队规定的 Pipeline 批量操作和过期时间规范，从而写出完全符合团队标准的代码。这极大地降低了 Token 消耗并消除了 AI 幻觉。
+例如，当 Phase 1 打出 `capabilities: ["redis", "rate_limit"]` 时，engine 会解析出 `skills/infra/redis.md` + `skills/governance/rate_limit.md` + defaults（含 `skills/framework/kratos.md`），Phase 2 直接按序读取，写出完全符合团队标准的代码。这极大地降低了 Token 消耗并消除了 AI 幻觉。
+
+Phase 4 Reviewer 在发现规则被违反时，会按 `rules/skill-feedback-loop.md` 的契约输出 `<skill-feedback>` 块，并用 `<gap-type>` 区分"路由没覆盖到"（routing gap）与"skill 内容不够"（content gap）。引擎在 reviewing 阶段结束时自动把这些块落盘到 `telemetry/skill_feedback.jsonl`；运行 `python scripts/skill_feedback_digest.py --since 7d --out LarkFlow/docs/SKILL_BACKLOG.md` 即可生成按 gap type 分桶、按复发次数排序的 backlog，驱动后续扩 tag 枚举或补 skill 内容的决策。
 
 路由命中质量由 `tests/prompts/` 下的评测集保证：6 个 fixture 覆盖 CRUD / Redis 缓存 / 分页列表 / 幂等支付回调 / 并发批任务 / gRPC 订单服务，断言每个需求应触发的工具、应读取的 skill（含 `skills/framework/kratos.md`）以及代码产物的正则黑白名单。CI 友好的 mock 模式可用：
 

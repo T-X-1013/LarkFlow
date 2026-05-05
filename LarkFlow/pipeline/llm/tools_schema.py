@@ -75,6 +75,26 @@ def get_tool_specs() -> List[Dict[str, Any]]:
                     "design_doc": {
                         "type": "string",
                         "description": "The detailed technical design document in Markdown format, including goals, schema changes, API designs, and core logic flow."
+                    },
+                    "tech_tags": {
+                        "type": "object",
+                        "description": "Structured tech tags so the engine can deterministically inject the right skills/*.md into Phase 2 and Phase 4. Values MUST be lowercase skill stems from rules/skill-routing.yaml (e.g. 'user', 'order', 'http', 'idempotency'). Unknown tags are warned and ignored; omitting this object falls back to keyword matching on design_doc.",
+                        "properties": {
+                            "domains": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Business domain tags (stems of skills/domain/*.md), e.g. ['user', 'order']."
+                            },
+                            "capabilities": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Cross-cutting capability tags (stems of non-domain skills/*.md), e.g. ['http', 'database', 'idempotency', 'rate_limit']."
+                            },
+                            "rationale": {
+                                "type": "object",
+                                "description": "Optional per-tag reason (tag → short Chinese/English sentence). Used by Phase 4 to distinguish routing-gap vs content-gap when emitting skill-feedback."
+                            }
+                        }
                     }
                 },
                 "required": ["summary", "design_doc"]

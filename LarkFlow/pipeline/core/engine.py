@@ -49,6 +49,12 @@ from pipeline.core.subsession import (
     save_subsession,
     subsession_key,
 )
+from pipeline.skills import (
+    SkillRouting,
+    capture_feedback as _capture_skill_feedback,
+    render_for_prompt as _render_skill_routing,
+    resolve as _resolve_skill_routing,
+)
 from telemetry.hooks import (
     trace_approval_resume,
     trace_demand_start,
@@ -411,6 +417,7 @@ def run_agent_loop(demand_id: str, system_prompt: str) -> bool:
                     )
                     summary = tool_args.get("summary", "")
                     design_doc = tool_args.get("design_doc", "")
+                    tech_tags = tool_args.get("tech_tags") if isinstance(tool_args.get("tech_tags"), dict) else None
 
                     # 幂等：如果之前已为本需求建过 tech doc，复用；否则尝试新建 + 授权
                     prev_pending = session.get("pending_approval") or {}
@@ -428,9 +435,34 @@ def run_agent_loop(demand_id: str, system_prompt: str) -> bool:
                         "tool_name": tool_name,
                         "summary": summary,
                         "design_doc": design_doc,
+                        "tech_tags": tech_tags,
                         "tech_doc_token": tech_doc_token,
                         "tech_doc_url": tech_doc_url,
                     }
+
+                    # A方案：skill 决策就在 Phase1 产出 tech_tags 的此刻已经定了。
+                    # 提前 resolve 到挂起前：日志在 approval_requested 旁边立刻可见，
+                    # 审批人/运维在挂起期间就能看到本次路由的 skill 清单；
+                    # 驳回重跑 Phase1 会再次走到这里，天然覆盖最新结果。
+                    try:
+                        routing = _resolve_skill_routing(tech_tags, design_doc)
+                        session["skill_routing"] = routing.to_dict()
+                        logger.info(
+                            "skill routing resolved",
+                            extra={
+                                "event": "skill_routing_resolved",
+                                "phase": phase,
+                                "source": routing.source,
+                                "skills": routing.skills,
+                            },
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            f"skill routing resolve failed: {exc}",
+                            extra={"event": "skill_routing_failed", "phase": phase},
+                            exc_info=True,
+                        )
+
                     _save_session(demand_id, session)
 
                     lark_target = lark_config.chat_id()
@@ -687,6 +719,44 @@ _FINDINGS_RE = re.compile(
 )
 
 
+def _augment_with_skill_routing(demand_id: str, system_prompt: str) -> str:
+    """若 session 里有 skill_routing，则把 <skill-routing> 块拼到 system prompt 顶部。
+
+    缺失或解析失败时返回原 prompt（无注入），Phase2/4 prompt 本身带兜底指令。
+    """
+    try:
+        session = _load_session(demand_id)
+        if not session:
+            return system_prompt
+        routing = SkillRouting.from_dict(session.get("skill_routing"))
+        if not routing:
+            return system_prompt
+        block = _render_skill_routing(routing)
+        if not block:
+            return system_prompt
+        return block + "\n\n" + system_prompt
+    except Exception:
+        # 非致命：注入失败退回原 prompt
+        return system_prompt
+
+
+def _harvest_skill_feedback(demand_id: str) -> None:
+    """Phase4 结束后扫 final message 里的 <skill-feedback> 块，落到 jsonl。"""
+    try:
+        session = _load_session(demand_id)
+        if not session:
+            return
+        final_text = _extract_last_assistant_text(session)
+        if not final_text:
+            return
+        routing = SkillRouting.from_dict(session.get("skill_routing"))
+        injected = routing.skills if routing else []
+        _capture_skill_feedback(demand_id, final_text, injected_skills=injected)
+    except Exception:
+        # feedback 捕获是观测性功能，绝不阻塞主流程
+        pass
+
+
 def _extract_last_assistant_text(session: Dict[str, Any]) -> str:
     """反向找 session.messages 里最后一条 assistant 文本，支持 str / list[dict|str] 两种格式。"""
     for msg in reversed(session.get("messages") or []):
@@ -919,6 +989,8 @@ def _reviewer_worker(
         # 跑 agent loop；run_agent_loop 内部按 subkey 反序化 session，
         # 重建 client/logger，并依据 session.parent_demand_id 把 lifecycle 锚定到父 pipeline
         system_prompt = load_prompt(prompt_file)
+        # A方案：并行 reviewer 也注入 <skill-routing>，与单 agent review 保持一致
+        system_prompt = _augment_with_skill_routing(parent_demand_id, system_prompt)
         # D7：给每路 reviewer 开独立 phase.reviewing span，attr 带 role，便于 Tempo 分色
         with trace_phase_execution(parent_demand_id, PHASE_REVIEWING, prompt_file, role=role) as span:
             completed = run_agent_loop(subkey, system_prompt)
@@ -1098,6 +1170,8 @@ def _run_phase_multi(demand_id: str, node) -> bool:
         if not aggregator_prompt_file:
             raise RuntimeError("parallel review node missing aggregator_prompt_file")
         aggregator_system = load_prompt(aggregator_prompt_file)
+        # A方案：aggregator 也看得到注入的 skill 清单，便于判断 reviewer 是否漏读规则
+        aggregator_system = _augment_with_skill_routing(demand_id, aggregator_system)
 
         # 用 user message 形式把三路评语喂给仲裁 agent
         parent = _load_session(demand_id) or parent
@@ -1110,6 +1184,8 @@ def _run_phase_multi(demand_id: str, node) -> bool:
             span.set_attribute("phase.mode", "multi")
             if completed:
                 _record_stage_result(demand_id, phase, StageStatus.SUCCESS)
+                # D方案：并行 review 聚合完成后也抓 feedback
+                _harvest_skill_feedback(demand_id)
             return completed
 
     except PipelineCancelled:
@@ -1159,10 +1235,17 @@ def _run_phase(demand_id: str, phase: str) -> bool:
         check_lifecycle(demand_id)
         with trace_phase_execution(demand_id, phase, prompt_file) as span:
             system_prompt = load_prompt(prompt_file)
+            # A方案：Phase1 审批通过时 engine 已解析出 skill_routing；这里把它渲染为
+            # <skill-routing> 块注入到 system prompt 顶部，Coding/Reviewing 两阶段按此清单读 skills。
+            if phase in (PHASE_CODING, PHASE_REVIEWING):
+                system_prompt = _augment_with_skill_routing(demand_id, system_prompt)
             completed = run_agent_loop(demand_id, system_prompt)
             span.set_attribute("phase.completed", completed)
             if completed:
                 _record_stage_result(demand_id, phase, StageStatus.SUCCESS)
+                # D方案：Phase4 完成后抓取 <skill-feedback> 块，关联当时注入的 skills
+                if phase == PHASE_REVIEWING:
+                    _harvest_skill_feedback(demand_id)
             # completed=False 且无异常 → pending_approval 挂起；StageResult 由后续
             # resume_after_approval 按 approved/rejected 补写，此处刻意不记
             return completed
@@ -1345,6 +1428,8 @@ def resume_after_approval(demand_id: str, approved: bool, feedback: str):
             # Design 在挂起瞬间刻意未写 StageResult（见 _run_phase），
             # 审批通过后补记 success；duration 含审批等待时间，是已知口径
             _record_stage_result(demand_id, PHASE_DESIGN, StageStatus.SUCCESS)
+            # A方案：skill_routing 已在 Phase1 调 ask_human_approval 时前置 resolve 并写入 session，
+            # 这里无需再解析；Phase2/4 的 _run_phase 会直接读 session["skill_routing"] 注入 prompt。
             resume_from_phase(demand_id, PHASE_CODING)
         else:
             # 驳回：先把当次 Design 记为 rejected，feedback 作为 errors；

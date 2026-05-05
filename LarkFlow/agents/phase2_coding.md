@@ -13,10 +13,10 @@ Deliver code that (a) implements the approved design exactly, (b) passes every r
 
 2. **Consult the Rules & Skills (CRITICAL)**
    - Read `rules/flow-rule.md` for pipeline-level constraints.
-   - Read `rules/skill-routing.yaml` — this is the **canonical routing table**. (`skill-routing.md` is a human-readable mirror.)
-   - Scan the design text (case-insensitive, substring match) against every entry's `keywords` list. Collect all matches and read every matched `skill` file. Sort by `weight` DESC so framework-level hard constraints enter your context first; ties: business skills (`skills/domain/*`) win.
-   - If **no** entry matches, fall back to the `defaults` list in the YAML (currently `skills/lang/error.md` and `skills/transport/http.md`).
-   - Before writing any code, briefly state which skills you matched and why so the reviewer can audit the routing.
+   - Your system prompt contains a `<skill-routing>` block injected by the engine. It lists the exact `skills/*.md` files the engine resolved from Phase 1's structured `tech_tags`. **This list IS the authoritative set — do NOT re-run keyword matching against `skill-routing.yaml` yourself.**
+   - Read every skill file listed in the `<skill-routing>` block with `file_editor` (action: `read`), in the listed order.
+   - If the `<skill-routing>` block is absent (e.g. old demand or routing failed), fall back to the `defaults` list in `rules/skill-routing.yaml` (currently `skills/framework/kratos.md`, `skills/governance/observability.md`, `skills/lang/error.md`, `skills/transport/http.md`).
+   - Before writing any code, emit a `## Skill Routing` section at the top of your first message listing the skill paths you actually read — Phase 4 audits this against its own injected list.
 
 3. **Implement (Kratos 四层布局 + 5 步流程)**
    - `../demo-app/` is a materialized Kratos v2.7 skeleton. You MUST follow the layering: every new domain means touching `api/<domain>/v1/*.proto` + `internal/biz/<domain>.go` + `internal/data/<domain>.go` + `internal/service/<domain>.go`, and wiring the providers in `cmd/server/wire.go`. Read `skills/framework/kratos.md` first if you haven't.

@@ -24,6 +24,7 @@ These are the tools provided by the Pipeline for the LLM provider to call.
 - **Parameters**:
   - `summary` (string, required): A brief, 1-2 sentence summary of the proposed technical design.
   - `design_doc` (string, required): The detailed technical design document in Markdown format, including goals, schema changes, API designs, and core logic flow.
+  - `tech_tags` (object, optional): Structured tech tags so the engine can deterministically inject the right skills/*.md into Phase 2 and Phase 4. Values MUST be lowercase skill stems from rules/skill-routing.yaml (e.g. 'user', 'order', 'http', 'idempotency'). Unknown tags are warned and ignored; omitting this object falls back to keyword matching on design_doc.
 
 ## 4. run_bash
 - **Description**: Executes a bash command in the project's Docker container or sandbox. Useful for running tests ('go test ./...'), building ('go build'), or managing dependencies ('go mod tidy').
