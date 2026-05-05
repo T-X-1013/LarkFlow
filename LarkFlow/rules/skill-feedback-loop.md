@@ -27,15 +27,26 @@ machine-readable output; freeform prose around it is fine.
     path/to/file.go:42 — actual code snippet or a short quote
   </evidence>
   <suggested-skill>skills/xxx.md</suggested-skill>
+  <gap-type>routing|content</gap-type>
+  <injected-skills>skills/a.md, skills/b.md</injected-skills>
 </skill-feedback>
 ```
 
-Multiple blocks per review are expected; emit one per distinct rule.
+Field semantics:
+- `gap-type` = `routing` — `suggested-skill` was **not** in the `<skill-routing>` block the engine injected into Phase 2. Fix path: extend `tech_tags` enum in `agents/phase1_design.md` or the keyword fallback in `rules/skill-routing.yaml`.
+- `gap-type` = `content` — `suggested-skill` **was** injected but the rule is missing / unclear in that file. Fix path: edit the `.md`.
+- `injected-skills` — comma-separated paths from the `<skill-routing>` block in this review's system prompt, so the digest can double-check the agent's classification.
+
+Multiple blocks per review are expected; emit one per distinct rule. The engine auto-harvests blocks after every Phase 4 run into `tmp/<demand_id>/skill_feedback.jsonl` (per-demand audit) and `telemetry/skill_feedback.jsonl` (append-only global log).
 
 ### 2 — Human / lead triages (weekly, ~15 min)
-Collect all `<skill-feedback>` blocks from the week's Phase 4 runs
-(`grep -h '<skill-feedback>' logs/*.jsonl` once A4 ships structured logs). For
-each block decide:
+Run the digest instead of grepping logs:
+
+```
+python LarkFlow/scripts/skill_feedback_digest.py --since 7d --out LarkFlow/docs/SKILL_BACKLOG.md
+```
+
+The digest buckets findings into **routing gaps** (fix the routing) vs **content gaps** (edit the skill md) and counts recurrences. For each bucket decide:
 
 - **Promote** — same category has appeared ≥2 times, or severity is `critical`.
 - **Hold** — one-off; keep in the backlog for now.

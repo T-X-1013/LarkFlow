@@ -8,8 +8,8 @@
 # Phase 2 agent MUST read this file, match the demand text against `keywords`
 # (case-insensitive, substring), and read every matched skill BEFORE writing code.
 #
-# Scoring: when multiple entries match, sort by `weight` DESC and read the top-N
-# (N = 5 unless the caller specifies otherwise). Higher weight = higher priority.
+# Scoring: when multiple entries match, sort by `weight` DESC and read every
+# matched skill. Higher weight = earlier context priority, not a filter.
 # Business skills (domain/*) default to weight 1.2 so they outrank generic ones.
 #
 # Path is relative to the LarkFlow workspace root.
