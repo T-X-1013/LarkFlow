@@ -15,7 +15,7 @@ Produce a design that a reviewer can approve or reject in under 2 minutes, with 
 2. **Explore the Context**
    - Call `inspect_db` to inspect real schema before proposing schema changes. Never invent column names.
    - Use `file_editor` (action: `read`) to survey existing handlers, services, and migrations in `../demo-app`. Respect existing naming conventions.
-   - Consult `rules/skill-routing.yaml` to identify which `skills/*.md` files bind to this requirement — note them in the design so Phase 2 reads the same set.
+   - Consult `rules/skill-routing.yaml` to pick the `tech_tags` for this requirement (see §Tech Tags Contract below). The engine uses these tags — not your prose — to inject skills into Phase 2 / Phase 4, so omitting a tag means the rule will not be enforced downstream.
 
 3. **Draft the Design Document** — use exactly this structure. **The product is a Kratos v2.7 service (four-layer layout already materialized in `demo-app/`). Every usecase in your design MUST spell out which file goes into `internal/biz` / `internal/data` / `internal/service` and which `.proto` lands in `api/<domain>/v1/`.** See `skills/framework/kratos.md` for the hard rules.
 
@@ -45,14 +45,48 @@ Produce a design that a reviewer can approve or reject in under 2 minutes, with 
    <numbered steps with branches; call out transactions, locks, external calls>
 
    ## Relevant Skills
-   <list of skills/*.md to be read in Phase 2 (from skill-routing.yaml match; kratos.md is always included)>
+   <human-readable mirror of the tech_tags you will pass to ask_human_approval; list the skills/*.md paths for the reviewer to eyeball. Authoritative routing is the tech_tags JSON, not this list.>
 
    ## Open Questions
    <for reviewer; "none" if fully specified>
    ```
 
 4. **Seek Approval**
-   - Call `ask_human_approval` with the full design summary as the message. The pipeline will suspend and push a Lark card to the reviewer. Do NOT continue to coding on your own authority.
+   - Call `ask_human_approval` with:
+     - `summary` — 1-2 sentence overview
+     - `design_doc` — the full markdown design above
+     - `tech_tags` — structured JSON (see §Tech Tags Contract); the engine uses this to inject skills downstream. Omit the field only if truly no rule applies (rare).
+   - The pipeline will suspend and push a Lark card to the reviewer. Do NOT continue to coding on your own authority.
+
+## Tech Tags Contract
+
+`tech_tags` is a JSON object with three fields:
+
+```json
+{
+  "domains":      ["user", "order"],
+  "capabilities": ["http", "database", "idempotency"],
+  "rationale": {
+    "idempotency": "需求要求'防止同一手机号重复提交'"
+  }
+}
+```
+
+**Rules**:
+- Values MUST be **lowercase stems** of files under `skills/*/` (e.g. `skills/domain/user.md` → `"user"`, `skills/governance/idempotency.md` → `"idempotency"`). Unknown tags are warned and dropped by the engine.
+- `domains` — business-domain stems under `skills/domain/`: currently `user`, `order`, `payment`. Pick every one the demand touches.
+- `capabilities` — cross-cutting stems (non-domain): `kratos`, `http`, `rpc`, `mq`, `pagination`, `database`, `redis`, `config`, `auth`, `idempotency`, `rate_limit`, `logging`, `observability`, `resilience`, `service_discovery`, `error`, `concurrency`, `python-comments`. Pick every one the implementation will touch or must satisfy.
+- `rationale` — optional map `tag → one-line reason`. Helps Phase 4 distinguish routing gaps from content gaps when emitting `<skill-feedback>`. Use Chinese or English.
+
+**Selection heuristic** (think semantically, not by keyword match):
+- "用户注册 / 登录 / 改密码 / 实名" → `domains: ["user"]` + `capabilities: ["auth", "http", "database"]`
+- "下单 / 购物车 / 库存 / 超卖" → `domains: ["order"]` + `capabilities: ["database", "idempotency"]`
+- "支付 / 退款 / 对账 / 回调" → `domains: ["payment"]` + `capabilities: ["idempotency", "http"]`
+- "防重复提交 / webhook 去重" → always include `capabilities: ["idempotency"]` even if the word "幂等" is not in the demand text
+- "限流 / 429 / 防爆破" → `capabilities: ["rate_limit"]`
+- "异步 / 消息队列 / 事件驱动" → `capabilities: ["mq"]`
+
+Write tags for **intent**, not only literal keywords — that is the whole point of this contract.
 
 ## Forbidden
 
