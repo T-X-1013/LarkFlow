@@ -522,7 +522,7 @@ PYTHONPATH=. PYTHONUNBUFFERED=1 python -m pipeline.app >> logs/lark_listener.log
 - 同一时刻只应保留一个进程；不要同时执行两条命令各起一份实例。
 - 如果希望既保留终端查看能力、又让 `Loki` 实时采集，推荐使用重定向到 `logs/lark_listener.log` 的方式，再配合 `tail -f logs/lark_listener.log` 本地查看。
 
-多维表格录入新需求后，由 `pipeline/lark/bitable_listener.py` 通过同一条 WebSocket 长连接收 `drive.file.bitable_record_changed_v1` 事件，自动向配置好的接收方发送「需求启动」卡片——**不再需要公网 HTTP 入口、不再需要单独进程**。
+多维表格录入新需求后，在该行点击「开始需求」按钮（按钮动作配置为更新「触发时间」字段），由 `pipeline/lark/bitable_listener.py` 通过同一条 WebSocket 长连接收 `drive.file.bitable_record_changed_v1` 事件，识别到触发字段变更后，自动向配置好的接收方发送「需求启动」卡片——**不再需要公网 HTTP 入口、不再需要单独进程**。贴链接、改标题、编辑其它字段不会触发发卡。
 
 对应环境变量：
 
@@ -539,6 +539,8 @@ LARK_DEMAND_APPROVE_RECEIVE_ID_TYPE=open_id
 # LARK_DEMAND_DOC_FIELD=需求文档
 # 技术方案文档链接回写列名，默认“技术方案文档”
 # LARK_TECH_DOC_FIELD=技术方案文档
+# 按钮触发字段名（按钮的"修改记录"动作需要更新此字段），默认“触发时间”
+# LARK_DEMAND_TRIGGER_FIELD=触发时间
 # 可选：指定新建 docx 落到哪个飞书文件夹；未配置时落在 bot 根目录
 # LARK_TECH_DOC_FOLDER_TOKEN=
 # 可选：覆盖默认文档域名，默认 https://feishu.cn
@@ -548,8 +550,9 @@ LARK_DEMAND_APPROVE_RECEIVE_ID_TYPE=open_id
 需求 Base 的最低要求：
 - 有 `状态` 单选列（选项需包含：`待启动 / 已发卡 / 处理中 / 已启动 / 驳回 / 失败`）
 - 有 `需求ID` 列（自增编号或其他业务唯一键；留空会 fallback 到 record_id）
-- 有 `需求文档` 列（作为"完成信号"：填入内容后才发卡，避免新增空行就触发）
+- 有 `需求文档` 列（按钮触发时若该列为空会静默跳过，提示先补文档再点按钮）
 - 有 `技术方案文档`列（技术方案会回写到该位置）
+- 有 `开始需求` 按钮列 + `触发时间` 字段列（按钮类型字段，动作配置为"修改记录 → 更新触发时间为当前时间"；点击按钮才会触发发卡）
 
 飞书开放平台侧需要：`docs:event:subscribe` + `bitable:app` + `bitable:app:readonly` scope；事件订阅里勾选「多维表格记录变更」；机器人被加为该 Base（或所在 wiki 空间）的协作者/成员。
 

@@ -19,6 +19,7 @@ DEFAULT_STATUS_FIELD = "状态"
 DEFAULT_ID_FIELD = "需求ID"
 DEFAULT_DOC_FIELD = "需求文档"
 DEFAULT_TECH_DOC_FIELD = "技术方案文档"
+DEFAULT_TRIGGER_FIELD = "触发时间"
 DEFAULT_APPROVE_RECEIVE_ID_TYPE = "open_id"
 
 
@@ -81,6 +82,10 @@ def demand_doc_field() -> str:
 
 def tech_doc_field() -> str:
     return (os.getenv("LARK_TECH_DOC_FIELD") or DEFAULT_TECH_DOC_FIELD).strip()
+
+
+def demand_trigger_field() -> str:
+    return (os.getenv("LARK_DEMAND_TRIGGER_FIELD") or DEFAULT_TRIGGER_FIELD).strip()
 
 
 # ---- approval target ----
