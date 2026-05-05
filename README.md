@@ -1,6 +1,6 @@
 # LarkFlow Framework
 
-LarkFlow 已经从一个依赖本地 IDE 插件的工具，进化为一个**完全无头（Headless）、基于多阶段多 Agent（串行）自动化研发工作流引擎**。
+LarkFlow 为一个**完全无头（Headless）、基于多阶段多 Agent（串行）自动化研发工作流引擎**。
 
 [![Version](https://img.shields.io/badge/version-2.4.0-blue.svg)](https://github.com/your-repo/larkflow)
 [![Architecture](https://img.shields.io/badge/architecture-Multi--Agent-orange.svg)](#architecture)
@@ -88,7 +88,7 @@ graph TD
 .
 ├── README.md
 ├── doc/                              # 技术方案与阶段计划文档
-│   ├── 2026-05-02-larkflow-feature-multi-technical-plan.md
+│   ├── front
 │   └── ...
 ├── LarkFlow/
 │   ├── .env.example
@@ -253,7 +253,7 @@ graph TD
 - 收到审批回调后，按显式状态机 `design → design_pending → coding → testing → reviewing → deploying → done` 推进；任一阶段 LLM 异常 / 超时 / 超轮数 / 连续空响应都会落入 `failed` 并发飞书告警。
 - 最后委托 `pipeline/ops/deploy_strategy.py` 的 `DeployStrategy` 完成 Docker 构建与运行；`target_dir` 与策略名从 session 读取，未指定时默认 `demo-app/` + `docker-go` 策略。
 
-引擎可靠性组件（release/A 生产化改造，对应 `ownership.pdf` 中的 A1~A6）：
+引擎可靠性组件：
 
 - `LarkFlow/pipeline/core/persistence.py` 的 `SqliteSessionStore` 把 session 持久化到 `.larkflow/sessions.db`（WAL + 线程锁），进程重启后通过 `list_active()` 列出未完成需求并自动续跑；序列化时自动剥离 `client` / `logger` 等 transient 字段，载入时按 provider 重建。
 - `resume_from_phase(demand_id, phase)` 入口支持从 `coding / testing / reviewing / deploying` 任意阶段断点续跑，失败不退回 Phase 1。
@@ -639,10 +639,6 @@ PYTHONPATH=. python scripts/smoke_lark_sdk.py send "SDK 冒烟"
 PYTHONPATH=. python scripts/smoke_lark_sdk.py ws
 ```
 
-通过飞书表格即可启动需求：
-
-![image-20260418163029819](./image/image.png)
-
 ### 4.简单测试
 
 简单测试：你可以直接运行引擎脚本来模拟一个需求的完整生命周期：（不会向飞书发送技术方案卡片）
@@ -721,27 +717,7 @@ docker run --rm -p 8080:8000 -p 9000:9000 <image-id>     # 宿主机 HTTP 8080 -
 ```
 
 ---
-
-## 当前能力边界
-
-按当前代码状态，以下边界仍然存在：
-
-- `inspect_db` 目前仅支持 SQLite 和 MySQL；若后续引入其他数据库引擎，还需要继续补适配。
-- Kratos 骨架要求宿主 Go ≥ 1.22（否则 `make init` / `make api` 在本地跑不通；Docker builder 使用 `golang:1.22-alpine` 不受影响）。
-- `SqliteSessionStore` 默认走本地文件系统，多实例部署时应把 `.larkflow/sessions.db` 放在共享卷，或换成 Redis 实现（`SessionStore` 抽象已预留）。
-- `AGENT_TURN_TIMEOUT` 基于 `ThreadPoolExecutor.result(timeout=...)`，只能让**等待**超时、不能真正杀掉正在跑的 LLM 调用线程；强杀需要切换到 `signal.alarm` 或子进程沙箱。当前方案叠加 SDK 自带的 connect/read timeout 已能覆盖生产场景。
-- `DeployStrategy` 当前只有 `DockerfileGoStrategy` 一个内置实现；非 Docker / 非 Go 的部署目标需通过 `register(strategy)` 自行注入。
-- 飞书事件走 `lark-oapi` SDK 的 WebSocket 长连，对**出站**网络可达性有要求（默认 `wss://open.feishu.cn`）；对入站不要求公网可达，但代价是一份飞书应用同一时刻只能有一个实例消费事件（多实例需自行做主备或消息再分发）。
-
 ## 相关文档
 
 - `LarkFlow/LarkFlow.md`：引擎模块速览。
 - `LarkFlow/CHANGELOG.md`：版本变更记录。
-
-## 🔮 未来展望
-
-本框架具备极强的可扩展性与业务适应能力：
-- **规范无缝迁移**：未来可轻松接入并适配各公司内部的专属中间件规范与代码风格指南。
-- **基建深度打通**：支持通过内部 MCP (Model Context Protocol) 协议，直连生产/测试环境的数据库、缓存及配置中心。
-- **CI/CD 自动化闭环**：可直接对接自动化部署流水线，实现测试环境的一键部署，并将详尽的自动化测试报告与运行效果实时回传至飞书卡片。
-- **加入业务规则代码**：轻松加入业务规则代码，更加简单的写业务
