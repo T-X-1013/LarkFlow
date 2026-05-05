@@ -75,7 +75,7 @@ def create_app() -> FastAPI:
     )
 
     # ========== Pipeline CRUD ==========
-    @app.post("/pipelines", response_model=PipelineCreateResponse)
+    @app.post("/pipelines", response_model=PipelineCreateResponse, status_code=201)
     def create_pipeline(body: CreatePipelineRequest, engine=Depends(get_engine)):
         """
         创建一条新的 Pipeline 控制记录。
@@ -91,7 +91,7 @@ def create_app() -> FastAPI:
         return PipelineCreateResponse(id=state.id)
 
     # ========== From Feishu Doc ==========
-    @app.post("/pipelines/from-doc", response_model=PipelineCreateResponse)
+    @app.post("/pipelines/from-doc", response_model=PipelineCreateResponse, status_code=201)
     def create_pipeline_from_doc(body: CreatePipelineFromDocRequest, engine=Depends(get_engine)):
         """
         从飞书文档创建 Pipeline。
@@ -125,12 +125,16 @@ def create_app() -> FastAPI:
 
         # 4. 在多维表格中创建记录
         try:
-            create_bitable_record(requirement=requirement, doc_url=body.doc_url)
+            record_id = create_bitable_record(requirement=requirement, doc_url=body.doc_url)
         except RuntimeError as exc:
             raise HTTPException(status_code=500, detail=f"创建多维表格记录失败：{exc}") from exc
 
         # 5. 创建 pipeline（内存态）
-        state = engine.create_pipeline(requirement, body.template if hasattr(body, 'template') else 'default')
+        state = engine.create_pipeline(
+            requirement,
+            body.template if hasattr(body, 'template') else 'default',
+            record_id=record_id,
+        )
         return PipelineCreateResponse(id=state.id)
 
     # ========== Visual Edit ==========
@@ -257,7 +261,7 @@ def create_app() -> FastAPI:
         except VisualEditRequestError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    @app.post("/pipelines/{pipeline_id}/start", response_model=PipelineState)
+    @app.post("/pipelines/{pipeline_id}/start", response_model=PipelineState, status_code=202)
     def start(pipeline_id: str, engine=Depends(get_engine)):
         """
         启动指定 Pipeline。
@@ -271,7 +275,7 @@ def create_app() -> FastAPI:
         """
         return _guard(lambda: engine.start(pipeline_id))
 
-    @app.post("/pipelines/{pipeline_id}/pause", response_model=PipelineState)
+    @app.post("/pipelines/{pipeline_id}/pause", response_model=PipelineState, status_code=202)
     def pause(pipeline_id: str, engine=Depends(get_engine)):
         """
         暂停指定 Pipeline。
@@ -285,7 +289,7 @@ def create_app() -> FastAPI:
         """
         return _guard(lambda: engine.pause(pipeline_id))
 
-    @app.post("/pipelines/{pipeline_id}/resume", response_model=PipelineState)
+    @app.post("/pipelines/{pipeline_id}/resume", response_model=PipelineState, status_code=202)
     def resume(pipeline_id: str, engine=Depends(get_engine)):
         """
         恢复指定 Pipeline。
@@ -299,7 +303,7 @@ def create_app() -> FastAPI:
         """
         return _guard(lambda: engine.resume(pipeline_id))
 
-    @app.post("/pipelines/{pipeline_id}/stop", response_model=PipelineState)
+    @app.post("/pipelines/{pipeline_id}/stop", response_model=PipelineState, status_code=202)
     def stop(pipeline_id: str, engine=Depends(get_engine)):
         """
         停止指定 Pipeline。
@@ -371,6 +375,7 @@ def create_app() -> FastAPI:
     @app.post(
         "/pipelines/{pipeline_id}/checkpoints/{cp}/approve",
         response_model=PipelineState,
+        status_code=202,  # Accepted: 审批通过，流程继续
     )
     def approve(
         pipeline_id: str,
@@ -393,6 +398,7 @@ def create_app() -> FastAPI:
     @app.post(
         "/pipelines/{pipeline_id}/checkpoints/{cp}/reject",
         response_model=PipelineState,
+        status_code=202,  # Accepted: 审批驳回，流程返回上一阶段
     )
     def reject(
         pipeline_id: str,

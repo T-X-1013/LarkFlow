@@ -23,6 +23,18 @@ from pipeline.core.contracts import (
     StageStatus,
 )
 from pipeline.core.engine_control import PipelineControl
+from pipeline.lark.bitable_listener import (
+    STATUS_CODING,
+    STATUS_DEPLOY_PENDING,
+    STATUS_DEPLOYING,
+    STATUS_DESIGN_PENDING,
+    STATUS_PAUSED,
+    STATUS_REJECTED,
+    STATUS_REVIEWING,
+    STATUS_STOPPED,
+    STATUS_TESTING,
+    update_bitable_status,
+)
 from pipeline.llm.adapter import validate_provider_name
 from pipeline.ops.observability import build_metrics_item
 
@@ -56,7 +68,11 @@ def _ctl(demand_id: str) -> PipelineControl:
 # ==========================================
 # 9 个对外方法
 # ==========================================
-def create_pipeline(requirement: str, template: str = "default") -> PipelineState:
+def create_pipeline(
+    requirement: str,
+    template: str = "default",
+    record_id: Optional[str] = None,
+) -> PipelineState:
     """
     创建一条新的 Pipeline 控制记录。
 
@@ -67,7 +83,11 @@ def create_pipeline(requirement: str, template: str = "default") -> PipelineStat
     @return:
         返回新建后的 PipelineState
     """
-    ctl = engine_control.register(requirement=requirement, template=template)
+    ctl = engine_control.register(
+        requirement=requirement,
+        template=template,
+        record_id=record_id,
+    )
     return engine_control.build_state(ctl, _session(ctl.demand_id))
 
 
@@ -89,7 +109,7 @@ def start(pipeline_id: str) -> PipelineState:
         engine.start_new_demand,
         ctl.demand_id,
         ctl.requirement,
-        None,  # record_id
+        ctl.record_id,
     )
     return engine_control.build_state(ctl, _session(pipeline_id))
 
@@ -105,6 +125,7 @@ def pause(pipeline_id: str) -> PipelineState:
         返回暂停后的最新 PipelineState
     """
     engine_control.pause(pipeline_id)
+    _sync_control_status(pipeline_id, STATUS_PAUSED)
     return engine_control.build_state(_ctl(pipeline_id), _session(pipeline_id))
 
 
@@ -119,6 +140,7 @@ def resume(pipeline_id: str) -> PipelineState:
         返回恢复后的最新 PipelineState
     """
     engine_control.resume(pipeline_id)
+    _sync_control_status(pipeline_id, _resume_bitable_status(pipeline_id))
     return engine_control.build_state(_ctl(pipeline_id), _session(pipeline_id))
 
 
@@ -133,6 +155,7 @@ def stop(pipeline_id: str) -> PipelineState:
         返回停止后的最新 PipelineState
     """
     engine_control.cancel(pipeline_id)
+    _sync_control_status(pipeline_id, STATUS_STOPPED)
     return engine_control.build_state(_ctl(pipeline_id), _session(pipeline_id))
 
 
@@ -230,6 +253,7 @@ def reject_checkpoint(
         )
     # deploy rejected 直接 stop，不发部署
     elif checkpoint == CheckpointName.DEPLOY:
+        _sync_control_status(pipeline_id, STATUS_REJECTED)
         engine_control.cancel(pipeline_id)
 
     return engine_control.build_state(ctl, _session(pipeline_id))
@@ -255,6 +279,41 @@ def set_provider(pipeline_id: str, provider: str) -> PipelineState:
     ctl.provider = validate_provider_name(provider)
     ctl.touch()
     return engine_control.build_state(ctl, _session(pipeline_id))
+
+
+def _record_id_for(pipeline_id: str) -> Optional[str]:
+    session = _session(pipeline_id) or {}
+    record_id = session.get("record_id")
+    if record_id:
+        return record_id
+    return _ctl(pipeline_id).record_id
+
+
+def _sync_control_status(pipeline_id: str, status: Optional[str]) -> None:
+    if not status:
+        return
+    record_id = _record_id_for(pipeline_id)
+    if not record_id:
+        return
+    update_bitable_status(record_id, status)
+
+
+def _resume_bitable_status(pipeline_id: str) -> Optional[str]:
+    session = _session(pipeline_id) or {}
+    phase = session.get("phase")
+    if phase == "design_pending":
+        return STATUS_DESIGN_PENDING
+    if phase == "deploy_pending":
+        return STATUS_DEPLOY_PENDING
+    if phase == "coding":
+        return STATUS_CODING
+    if phase == "testing":
+        return STATUS_TESTING
+    if phase == "reviewing":
+        return STATUS_REVIEWING
+    if phase == "deploying":
+        return STATUS_DEPLOYING
+    return None
 
 
 def list_metrics() -> list[MetricsItem]:
