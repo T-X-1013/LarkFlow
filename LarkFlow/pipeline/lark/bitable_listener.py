@@ -34,16 +34,32 @@ from pipeline.lark.client import send_demand_start_card
 from pipeline.lark.sdk import get_lark_client
 
 
+# ===== 状态常量定义 =====
+
+# 触发状态：事件到达时处于这些状态会重新发卡
 STATUS_EMPTY = ""
 STATUS_PENDING = "待启动"
-STATUS_CARD_SENT = "已发卡"
-STATUS_PROCESSING = "处理中"
-STATUS_STARTED = "已启动"
-STATUS_REJECTED = "驳回"
-STATUS_FAILED = "失败"
-
-# 状态列处于这些值时，事件到达会重新发卡；其它值一律跳过
 _TRIGGER_STATUSES = {STATUS_EMPTY, STATUS_PENDING}
+
+# 流程状态：Pipeline 各阶段对应的飞书状态
+STATUS_CARD_SENT = "已发卡"
+STATUS_DESIGN_PENDING = "设计审批中"      # Design 阶段等待审批
+STATUS_DESIGN_APPROVED = "设计已通过"     # Design 审批通过
+STATUS_CODING = "编码中"                  # Coding 阶段
+STATUS_TESTING = "测试中"                 # Testing 阶段
+STATUS_REVIEWING = "审查中"               # Review 阶段
+STATUS_DEPLOY_PENDING = "部署审批中"      # Deploy 阶段等待审批
+STATUS_DEPLOYING = "部署中"               # Deploying 阶段
+STATUS_DEPLOY_FAILED = "部署失败"         # Deploy 阶段失败
+
+# 终态：成功/失败/停止
+STATUS_STARTED = "已启动"    # 兼容旧数据
+STATUS_PROCESSING = "处理中" # 兼容旧数据
+STATUS_SUCCEEDED = "已完成"
+STATUS_FAILED = "失败"
+STATUS_REJECTED = "驳回"
+STATUS_PAUSED = "已暂停"
+STATUS_STOPPED = "已停止"
 
 # 记录已被删除 / 事件延迟投递导致 record_id 找不到；这是正常场景，静默跳过
 _ERR_RECORD_NOT_FOUND = 1254043
@@ -451,6 +467,62 @@ def update_demand_tech_doc_url(record_id: str, url: str) -> bool:
     if not response.success():
         print(
             f"[BitableListener] 回写技术方案链接失败 record={record_id}: "
+            f"code={response.code} msg={response.msg}"
+        )
+        return False
+
+    return True
+
+
+def update_bitable_status(record_id: str, status: str) -> bool:
+    """
+    把 Pipeline 状态回写到 Base 的状态列
+
+    @params:
+        record_id: 需求行 record_id
+        status: 状态值（必须是 Base 状态列的合法单选项）
+
+    @return:
+        成功返回 True；失败返回 False 并打印日志
+
+    状态说明：
+    - 设计审批中：Design 阶段等待审批
+    - 设计已通过：Design 审批通过
+    - 编码中：Coding 阶段
+    - 测试中：Testing 阶段
+    - 审查中：Review 阶段
+    - 部署审批中：Deploy 阶段等待审批
+    - 部署中：Deploying 阶段
+    - 部署失败：Deploy 阶段失败
+    - 已完成：Pipeline Succeeded
+    - 失败：Pipeline Failed（非部署阶段）
+    - 驳回：审批驳回
+    - 已暂停：Pipeline Paused
+    - 已停止：Pipeline Stopped
+    """
+    if not record_id or not status:
+        return False
+
+    field_name = _demand_status_field()
+    body = AppTableRecord.builder().fields({field_name: status}).build()
+    request = (
+        UpdateAppTableRecordRequest.builder()
+        .app_token(_demand_base_token())
+        .table_id(_demand_table_id())
+        .record_id(record_id)
+        .request_body(body)
+        .build()
+    )
+
+    try:
+        response = get_lark_client().bitable.v1.app_table_record.update(request)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[BitableListener] 回写状态异常 record={record_id} status={status}: {exc}")
+        return False
+
+    if not response.success():
+        print(
+            f"[BitableListener] 回写状态失败 record={record_id} status={status}: "
             f"code={response.code} msg={response.msg}"
         )
         return False

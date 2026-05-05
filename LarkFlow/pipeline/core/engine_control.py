@@ -81,6 +81,7 @@ class PipelineControl:
     demand_id: str
     requirement: str
     template: str = "default"
+    record_id: Optional[str] = None
     created_at: int = field(default_factory=lambda: int(time.time()))
     updated_at: int = field(default_factory=lambda: int(time.time()))
     provider: Optional[str] = None
@@ -107,6 +108,7 @@ def register(
     requirement: str,
     template: str = "default",
     demand_id: Optional[str] = None,
+    record_id: Optional[str] = None,
 ) -> PipelineControl:
     """
     注册一条新的 Pipeline 控制块。
@@ -120,7 +122,12 @@ def register(
         返回注册后的 PipelineControl
     """
     did = demand_id or f"DEMAND-{uuid.uuid4().hex[:8]}"
-    ctl = PipelineControl(demand_id=did, requirement=requirement, template=template)
+    ctl = PipelineControl(
+        demand_id=did,
+        requirement=requirement,
+        template=template,
+        record_id=record_id,
+    )
     with _REGISTRY_LOCK:
         _REGISTRY[did] = ctl
     return ctl

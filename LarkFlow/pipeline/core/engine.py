@@ -651,7 +651,132 @@ def _record_stage_result(
         errors=list(errors or []),
     )
     session.setdefault("stage_results", {})[stage.value] = result.model_dump(mode="json")
+    
+    # 调试日志：记录阶段完成
+    print(
+        f"[BitableSync] 阶段完成 demand_id={demand_id} phase={phase} "
+        f"status={status.value} record_id={session.get('record_id')}"
+    )
+
+    # 阶段状态变更后，回写飞书多维表格状态列
+    _sync_status_to_bitable(demand_id, phase, status, session)
+
     _save_session(demand_id, session)
+
+
+def _sync_status_to_bitable(
+    demand_id: str,
+    phase: str,
+    status: StageStatus,
+    session: dict,
+) -> None:
+    """
+    将 Pipeline 状态同步到飞书多维表格状态列
+
+    @params:
+        demand_id: 需求 ID
+        phase: 当前阶段（design/coding/testing/reviewing/deploying）
+        status: 阶段状态（success/failed/rejected/pending）
+        session: 当前 session 对象
+
+    状态映射：
+    - design + pending → 设计审批中
+    - design + success → 设计已通过
+    - coding + success → 编码中
+    - testing + success → 测试中
+    - reviewing + success → 审查中
+    - deploying + pending → 部署审批中
+    - deploying + success → 已完成
+    - failed → 失败
+    - rejected → 驳回
+    """
+    # 检查是否有 record_id（从飞书 Base 创建的需求才有）
+    record_id = session.get("record_id")
+    if not record_id:
+        # 非飞书入口的需求（如 HTTP API 直接创建），不需要同步
+        print(f"[BitableSync] 无 record_id，跳过状态同步 demand_id={demand_id}")
+        return
+
+    try:
+        from pipeline.lark.bitable_listener import update_bitable_status
+
+        # 根据 phase 和 status 确定飞书状态
+        bitable_status = _map_to_bitable_status(phase, status)
+        print(
+            f"[BitableSync] 同步状态 demand_id={demand_id} record_id={record_id} "
+            f"phase={phase} status={status.value} → {bitable_status}"
+        )
+        if bitable_status:
+            success = update_bitable_status(record_id, bitable_status)
+            if not success:
+                print(
+                    f"[BitableSync] 回写失败 demand_id={demand_id} record_id={record_id} "
+                    f"status={bitable_status}"
+                )
+        else:
+            print(
+                f"[BitableSync] 状态映射为 None demand_id={demand_id} "
+                f"phase={phase} status={status.value}，跳过同步"
+            )
+    except Exception as exc:  # noqa: BLE001
+        # 同步失败不影响主流程，静默跳过
+        print(f"[BitableSync] 同步异常 demand_id={demand_id}: {exc}")
+
+
+def _map_to_bitable_status(phase: str, status: StageStatus) -> Optional[str]:
+    """
+    将引擎内部状态映射为飞书表格状态值
+
+    @params:
+        phase: 当前阶段（design/coding/testing/reviewing/deploying）
+        status: 阶段状态（success/failed/rejected/pending）
+
+    @return:
+        返回飞书表格状态字符串；None 表示不更新
+    """
+    from pipeline.lark.bitable_listener import (
+        STATUS_CODING,
+        STATUS_DEPLOY_FAILED,
+        STATUS_DEPLOY_PENDING,
+        STATUS_DESIGN_APPROVED,
+        STATUS_DESIGN_PENDING,
+        STATUS_FAILED,
+        STATUS_REJECTED,
+        STATUS_REVIEWING,
+        STATUS_SUCCEEDED,
+        STATUS_TESTING,
+    )
+
+    # 阶段失败：部署失败用专用状态，其他阶段失败用通用「失败」
+    if status == StageStatus.FAILED:
+        if phase == "deploying":
+            return STATUS_DEPLOY_FAILED
+        return STATUS_FAILED
+    if status == StageStatus.REJECTED:
+        return STATUS_REJECTED
+
+    # 阶段映射
+    if phase == "design":
+        if status == StageStatus.PENDING:
+            return STATUS_DESIGN_PENDING
+        if status == StageStatus.SUCCESS:
+            return STATUS_DESIGN_APPROVED
+    elif phase == "coding":
+        if status == StageStatus.SUCCESS:
+            return STATUS_CODING
+    elif phase == "testing":
+        if status == StageStatus.SUCCESS:
+            return STATUS_TESTING
+    elif phase == "reviewing":
+        if status == StageStatus.SUCCESS:
+            return STATUS_REVIEWING
+    elif phase == "deploying":
+        if status == StageStatus.PENDING:
+            return STATUS_DEPLOY_PENDING
+        if status == StageStatus.SUCCESS:
+            return STATUS_SUCCEEDED
+
+    return None  # 其他情况不更新
 
 
 def _mark_failed(demand_id: str, phase: str, error: str) -> None:
@@ -703,7 +828,63 @@ def _advance_to_phase(demand_id: str, phase: str) -> Optional[Dict[str, Any]]:
     if kickoff:
         append_user_text(session, kickoff)
     _save_session(demand_id, session)
+    
+    # 新增：阶段开始时同步状态到飞书表格
+    _sync_phase_start_status(demand_id, phase, session)
+    
     return session
+
+
+def _sync_phase_start_status(demand_id: str, phase: str, session: dict) -> None:
+    """
+    在阶段开始时同步状态到飞书表格
+
+    @params:
+        demand_id: 需求 ID
+        phase: 当前阶段（coding/testing/reviewing/deploying）
+        session: 当前 session 对象
+
+    状态映射：
+    - coding → 编码中
+    - testing → 测试中
+    - reviewing → 审查中
+    - deploying → 部署中
+    """
+    # 只对 coding/testing/reviewing/deploying 阶段做开始时同步
+    if phase not in ("coding", "testing", "reviewing", "deploying"):
+        return
+
+    record_id = session.get("record_id")
+    if not record_id:
+        return  # 非飞书入口的需求，不需要同步
+
+    try:
+        from pipeline.lark.bitable_listener import (
+            STATUS_CODING,
+            STATUS_DEPLOYING,
+            STATUS_REVIEWING,
+            STATUS_TESTING,
+            update_bitable_status,
+        )
+
+        # 确定飞书状态
+        status_map = {
+            "coding": STATUS_CODING,
+            "testing": STATUS_TESTING,
+            "reviewing": STATUS_REVIEWING,
+            "deploying": STATUS_DEPLOYING,
+        }
+        bitable_status = status_map.get(phase)
+
+        print(
+            f"[BitableSync] 阶段开始同步 demand_id={demand_id} record_id={record_id} "
+            f"phase={phase} → {bitable_status}"
+        )
+        if bitable_status:
+            update_bitable_status(record_id, bitable_status)
+    except Exception:  # noqa: BLE001
+        # 同步失败不影响主流程，静默跳过
+        pass
 
 
 # ==========================================
@@ -1328,6 +1509,10 @@ def start_new_demand(
                 # 能看到 pending 状态的 checkpoint 条目（之前只在 approve/reject 时才 setdefault，
                 # 导致前端 waiting_approval 期间渲染不出 Reject/Approve 按钮）。
                 _seed_pending_checkpoint(demand_id, CheckpointName.DESIGN)
+                
+                # 新增：同步状态到飞书表格（设计审批中）
+                _sync_status_to_bitable(demand_id, PHASE_DESIGN, StageStatus.PENDING, latest)
+                
                 logger.info(
                     "demand suspended awaiting approval",
                     extra={"event": "demand_suspended", "phase": PHASE_DESIGN_PENDING},
@@ -1552,6 +1737,9 @@ def _request_deploy_approval(demand_id: str, logger) -> None:
     _save_session(demand_id, session)
     # D6 bugfix：同 design，让前端能在 deploy_pending 期间看到 checkpoint 条目
     _seed_pending_checkpoint(demand_id, CheckpointName.DEPLOY)
+    
+    # 新增：同步状态到飞书表格（部署审批中）
+    _sync_status_to_bitable(demand_id, "deploying", StageStatus.PENDING, session)
 
     lark_target = lark_config.chat_id()
     if lark_target:
@@ -1603,6 +1791,12 @@ def trigger_deploy(demand_id: str) -> None:
     if session is None:
         return
     if deploy_ok:
+        # 部署成功：记录 StageResult(success) 并同步状态到飞书
+        print(
+            f"[BitableSync] Deploy 成功，准备同步状态 demand_id={demand_id} "
+            f"record_id={session.get('record_id')}"
+        )
+        _record_stage_result(demand_id, PHASE_DEPLOYING, StageStatus.SUCCESS)
         session["phase"] = PHASE_DONE
         session["pending_deploy_approval"] = None
         _save_session(demand_id, session)
