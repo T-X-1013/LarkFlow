@@ -16,9 +16,10 @@ from typing import Optional
 DEFAULT_RECEIVE_ID_TYPE = "open_id"
 DEFAULT_LOG_LEVEL = "INFO"
 DEFAULT_STATUS_FIELD = "状态"
-DEFAULT_ID_FIELD = "需求 ID"
+DEFAULT_ID_FIELD = "需求ID"
 DEFAULT_DOC_FIELD = "需求文档"
 DEFAULT_TECH_DOC_FIELD = "技术方案文档"
+DEFAULT_TRIGGER_FIELD = "触发时间"
 DEFAULT_APPROVE_RECEIVE_ID_TYPE = "open_id"
 DEFAULT_REQUIREMENT_FIELD = "需求描述"
 
@@ -86,6 +87,10 @@ def tech_doc_field() -> str:
 
 def demand_requirement_field() -> str:
     return (os.getenv("LARK_DEMAND_REQUIREMENT_FIELD") or DEFAULT_REQUIREMENT_FIELD).strip()
+
+
+def demand_trigger_field() -> str:
+    return (os.getenv("LARK_DEMAND_TRIGGER_FIELD") or DEFAULT_TRIGGER_FIELD).strip()
 
 
 # ---- approval target ----
