@@ -23,6 +23,7 @@ from typing import Any, Optional
 from lark_oapi.api.bitable.v1 import (
     AppTableRecord,
     GetAppTableRecordRequest,
+    ListAppTableFieldRequest,
     UpdateAppTableRecordRequest,
 )
 from lark_oapi.api.drive.v1 import SubscribeFileRequest
@@ -70,6 +71,82 @@ def _demand_doc_field() -> str:
 
 def _tech_doc_field() -> str:
     return lark_config.tech_doc_field()
+
+
+def _trigger_field() -> str:
+    return lark_config.demand_trigger_field()
+
+
+_trigger_field_id_cache: dict[str, str] = {}
+
+
+def _resolve_trigger_field_id() -> Optional[str]:
+    """
+    查询当前表的字段列表，返回触发字段名对应的 field_id；缓存命中时直接返回
+    """
+    field_name = _trigger_field()
+    cache_key = f"{_demand_base_token()}::{_demand_table_id()}::{field_name}"
+    if cache_key in _trigger_field_id_cache:
+        return _trigger_field_id_cache[cache_key]
+
+    request = (
+        ListAppTableFieldRequest.builder()
+        .app_token(_demand_base_token())
+        .table_id(_demand_table_id())
+        .page_size(100)
+        .build()
+    )
+
+    try:
+        response = get_lark_client().bitable.v1.app_table_field.list(request)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[BitableListener] 拉取字段列表异常: {exc}")
+        return None
+
+    if not response.success():
+        print(
+            f"[BitableListener] 拉取字段列表失败: code={response.code} msg={response.msg}"
+        )
+        return None
+
+    items = getattr(response.data, "items", None) or []
+    for item in items:
+        if getattr(item, "field_name", None) == field_name:
+            field_id = getattr(item, "field_id", None)
+            if field_id:
+                _trigger_field_id_cache[cache_key] = field_id
+                return field_id
+
+    print(
+        f"[BitableListener] 未在表 {_demand_table_id()} 找到触发字段 '{field_name}'，"
+        f"请确认按钮动作更新的是该字段"
+    )
+    return None
+
+
+def _action_changed_field_ids(action: Any) -> set[str]:
+    """
+    收集 before_value != after_value 的 field_id
+
+    Lark 的 before/after_value 在实测中会把整行字段都带上（不仅是本次变更），
+    所以必须逐字段 diff field_value，才能真正识别"谁变了"
+    """
+    def _to_map(bucket: Any) -> dict[str, str]:
+        result: dict[str, str] = {}
+        for field in bucket or []:
+            fid = getattr(field, "field_id", None)
+            if fid:
+                result[fid] = getattr(field, "field_value", None) or ""
+        return result
+
+    before = _to_map(getattr(action, "before_value", None))
+    after = _to_map(getattr(action, "after_value", None))
+
+    changed: set[str] = set()
+    for fid in set(before) | set(after):
+        if before.get(fid, "") != after.get(fid, ""):
+            changed.add(fid)
+    return changed
 
 
 def _approve_target() -> str:
@@ -377,10 +454,21 @@ def on_record_changed(event: P2DriveFileBitableRecordChangedV1) -> None:
         )
         return
 
+    trigger_field_id = _resolve_trigger_field_id()
+    if not trigger_field_id:
+        # 解析不到触发字段就放弃这次事件，避免退化回"贴链接即发卡"的旧行为
+        return
+
     for action in data.action_list or []:
         record_id = getattr(action, "record_id", None)
         if not record_id:
             continue
+
+        changed = _action_changed_field_ids(action)
+        if trigger_field_id not in changed:
+            print(f"[BitableListener] 非按钮触发，跳过 record={record_id}")
+            continue
+
         try:
             _process_record(record_id)
         except Exception as exc:  # noqa: BLE001  兜底避免打断事件循环
