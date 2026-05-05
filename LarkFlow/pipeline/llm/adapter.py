@@ -530,7 +530,7 @@ def _create_anthropic_turn(session: Dict[str, Any], client: Any, system_prompt: 
     started_at = time.monotonic()
     response = client.messages.create(
         model=model_name,
-        max_tokens=4096,
+        max_tokens=12288,
         system=system_prompt,
         messages=messages,
         tools=get_anthropic_tools()
@@ -669,7 +669,7 @@ def _create_responses_turn(
         "instructions": system_prompt,
         "input": pending_inputs,
         "tools": get_openai_tools(),
-        "max_output_tokens": 4096,
+        "max_output_tokens": 12288,
     }
 
     if reasoning_env_name and _model_supports_reasoning(model_name):
@@ -1097,7 +1097,7 @@ def _safe_json_loads(raw: str) -> dict:
         解析成功时返回字典；失败时返回带 `raw_arguments` 的兜底结构
     """
     try:
-        return json.loads(raw)
+        return json.loads(raw, strict=False)
     except json.JSONDecodeError:
         return {"raw_arguments": raw}
 
