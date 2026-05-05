@@ -52,6 +52,24 @@ os.environ.setdefault("SSL_CERT_FILE", certifi.where())
 EVENT_ID_TTL_SECONDS = 24 * 60 * 60
 
 
+def _normalize_template(raw: Any) -> str:
+    """
+    把启动 payload 中的模板值归一化到受支持的模板集合。
+
+    @params:
+        raw: 卡片回调或事件载荷中的模板原始值
+
+    @return:
+        返回受支持的模板名；不合法时回退为 default
+    """
+    from pipeline.dag.schema import TEMPLATE_NAMES
+
+    normalized = str(raw or "").strip()
+    if normalized in TEMPLATE_NAMES:
+        return normalized
+    return "default"
+
+
 def _project_root() -> Path:
     """
     返回 LarkFlow Python 项目根目录
@@ -225,9 +243,11 @@ def handle_start_request(payload: dict[str, Any]) -> dict[str, Any]:
     """
     demand_id, doc_url = _normalize_start_payload(payload)
     record_id = payload.get("record_id") if isinstance(payload, dict) else None
+    template = _normalize_template(payload.get("template") if isinstance(payload, dict) else None)
     with trace_lark_start_request(demand_id, doc_url):
         print(
-            f"[LarkListener] 收到启动请求，开始处理新需求: {demand_id}, 文档: {doc_url}, record={record_id}"
+            f"[LarkListener] 收到启动请求，开始处理新需求: {demand_id}, 文档: {doc_url}, "
+            f"template={template}, record={record_id}"
         )
 
     # 走新入口：注册到 engine_control 注册表，后续可被 pause/resume/stop
@@ -236,16 +256,18 @@ def handle_start_request(payload: dict[str, Any]) -> dict[str, Any]:
 
     ctl = engine_control.get(demand_id) or engine_control.register(
         requirement=doc_url,
+        template=template,
         demand_id=demand_id,
     )
 
-    def run_start(demand_id: str, doc_url: str, record_id: Optional[str]) -> None:
+    def run_start(demand_id: str, doc_url: str, record_id: Optional[str], template: str) -> None:
         requirement_text = _resolve_requirement_text(doc_url)
         ctl.requirement = requirement_text
+        ctl.template = template
         ctl.touch()
         start_new_demand(demand_id, requirement_text, record_id=record_id)
 
-    engine_control.launch(ctl, run_start, demand_id, doc_url, record_id)
+    engine_control.launch(ctl, run_start, demand_id, doc_url, record_id, template)
     return {"code": 0, "msg": "success"}
 
 
@@ -374,6 +396,9 @@ def process_card_action(
             # 方案 B：Base 新增需求行后发送的启动审批卡片点击「开始处理」
             record_id = action_value.get("record_id") if isinstance(action_value, dict) else None
             doc_url = action_value.get("doc_url", "") if isinstance(action_value, dict) else ""
+            template = _normalize_template(
+                action_value.get("template") if isinstance(action_value, dict) else None
+            )
             print(f"[LarkListener] 启动新需求: demand_id={demand_id} record={record_id}")
 
             if record_id and not update_demand_status(record_id, STATUS_PROCESSING):
@@ -382,7 +407,12 @@ def process_card_action(
 
             try:
                 handle_start_request(
-                    {"demand_id": demand_id, "doc_url": doc_url, "record_id": record_id}
+                    {
+                        "demand_id": demand_id,
+                        "doc_url": doc_url,
+                        "record_id": record_id,
+                        "template": template,
+                    }
                 )
             except Exception as exc:  # noqa: BLE001
                 print(f"[LarkListener] 启动需求失败 demand_id={demand_id}: {exc}")
@@ -440,7 +470,15 @@ def _on_bitable_record_changed(event: P2DriveFileBitableRecordChangedV1) -> None
 
 
 def _noop_event_handler(_event) -> None:
-    """占位 handler：仅为"吞掉"应用订阅了但不需要业务处理的事件类型，避免 SDK 打 ERROR"""
+    """
+    占位 handler：吞掉已订阅但当前无需处理的事件类型。
+
+    @params:
+        _event: SDK 传入的任意事件对象
+
+    @return:
+        固定返回 None；目的是避免 SDK 对未处理事件刷 ERROR 日志
+    """
     return None
 
 

@@ -195,9 +195,17 @@ def send_lark_card(
 
 
 def send_lark_card_raw(target: str, card: dict[str, Any]) -> dict[str, Any]:
-    """直接发送已构建好的卡片 JSON（绕过 build_approval_card 固定模板）。
+    """
+    直接发送已构建好的卡片 JSON。
 
     D3 第 2 HITL deploy 卡片不走 design 卡片模板，直接传 lark_cards 构建的 JSON。
+
+    @params:
+        target: 飞书消息接收方 ID（与 LARK_RECEIVE_ID_TYPE 匹配）
+        card: 已构建完成的飞书卡片 JSON
+
+    @return:
+        返回统一响应结构 {"code": int, "msg": str, "data": Any}
     """
     return _send_message(target, "interactive", card)
 
@@ -219,6 +227,7 @@ def send_lark_text(target: str, text: str) -> dict[str, Any]:
 def build_demand_start_card(
     demand_id: str,
     doc_url: str,
+    template: str,
     base_token: str,
     table_id: str,
     record_id: str,
@@ -229,6 +238,7 @@ def build_demand_start_card(
     @params:
         demand_id: Base 里的业务唯一键（需求ID 列值）
         doc_url: 需求文档链接
+        template: 需求选择的模板名，供启动前在卡片中确认
         base_token: 需求 Base 的 file_token，用于按钮回调时写回状态列
         table_id: 需求表的 table_id
         record_id: 当前记录 record_id
@@ -241,6 +251,7 @@ def build_demand_start_card(
         "table_id": table_id,
         "record_id": record_id,
         "demand_id": demand_id,
+        "template": template,
     }
 
     return {
@@ -258,6 +269,7 @@ def build_demand_start_card(
                 "content": (
                     "**Base 里新增了一条需求，请确认是否启动 AI 流水线：**\n\n"
                     f"**📌 需求 ID**：{demand_id}\n\n"
+                    f"**🧩 模板**：{template}\n\n"
                     f"**📄 需求文档**：{doc_url or '（未提供）'}\n"
                 ),
             },
@@ -294,6 +306,7 @@ def send_demand_start_card(
     target: str,
     demand_id: str,
     doc_url: str,
+    template: str,
     base_token: str,
     table_id: str,
     record_id: str,
@@ -309,6 +322,7 @@ def send_demand_start_card(
         target: 接收方 ID
         demand_id: 需求 ID
         doc_url: 需求文档链接
+        template: 启动时选定的模板名
         base_token: Base 的 file_token
         table_id: 需求表 table_id
         record_id: 需求行 record_id
@@ -317,5 +331,12 @@ def send_demand_start_card(
     @return:
         返回统一响应结构 {"code": int, "msg": str, "data": Any}
     """
-    card = build_demand_start_card(demand_id, doc_url, base_token, table_id, record_id)
+    card = build_demand_start_card(
+        demand_id,
+        doc_url,
+        template,
+        base_token,
+        table_id,
+        record_id,
+    )
     return _send_message(target, "interactive", card, receive_id_type=receive_id_type)
