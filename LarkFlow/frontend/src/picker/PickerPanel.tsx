@@ -382,9 +382,9 @@ export function PickerPanel() {
           maxHeight: "min(70vh, 760px)",
           overflowY: "auto",
           zIndex: 2147483647,
-          background: "linear-gradient(180deg, rgba(244, 250, 255, 0.88) 0%, rgba(228, 240, 248, 0.88) 100%)",
-          border: "1px solid rgba(101, 150, 184, 0.18)",
-          boxShadow: "0 18px 44px rgba(36, 28, 18, 0.22)",
+          background: "linear-gradient(180deg, rgba(244, 250, 255, 0.38) 0%, rgba(228, 240, 248, 0.28) 100%)",
+          border: "1px solid rgba(101, 150, 184, 0.08)",
+          boxShadow: "0 18px 44px rgba(36, 28, 18, 0.08)",
         }}
       >
         <div
@@ -407,8 +407,8 @@ export function PickerPanel() {
               marginBottom: 10,
               padding: 14,
               borderRadius: 16,
-              background: "rgba(255,255,255,0.46)",
-              border: "1px solid rgba(101, 150, 184, 0.12)",
+              background: "rgba(255,255,255,0.22)",
+              border: "1px solid rgba(101, 150, 184, 0.08)",
             }}
           >
             <p style={{ margin: 0, fontWeight: 700 }}>{describeLocator(locator)}</p>
@@ -444,8 +444,8 @@ export function PickerPanel() {
               marginTop: 8,
               padding: 12,
               borderRadius: 14,
-              background: "rgba(255,255,255,0.4)",
-              border: "1px solid rgba(101, 150, 184, 0.12)",
+              background: "rgba(255,255,255,0.18)",
+              border: "1px solid rgba(101, 150, 184, 0.08)",
             }}
           >
             <p style={{ margin: "0 0 6px", fontSize: 12, fontWeight: 700 }}>本次改动</p>
@@ -467,8 +467,8 @@ export function PickerPanel() {
               marginTop: 8,
               padding: 12,
               borderRadius: 14,
-              background: "rgba(255,255,255,0.4)",
-              border: "1px solid rgba(101, 150, 184, 0.12)",
+              background: "rgba(255,255,255,0.18)",
+              border: "1px solid rgba(101, 150, 184, 0.08)",
             }}
             open
           >
@@ -495,11 +495,11 @@ export function PickerPanel() {
               padding: 12,
               borderRadius: 14,
               background: deliveryCheck.safe_to_commit
-                ? "rgba(236, 253, 245, 0.62)"
-                : "rgba(255, 247, 237, 0.72)",
+                ? "rgba(236, 253, 245, 0.28)"
+                : "rgba(255, 247, 237, 0.32)",
               border: deliveryCheck.safe_to_commit
-                ? "1px solid rgba(34, 197, 94, 0.22)"
-                : "1px solid rgba(249, 115, 22, 0.24)",
+                ? "1px solid rgba(34, 197, 94, 0.14)"
+                : "1px solid rgba(249, 115, 22, 0.14)",
             }}
           >
             <p style={{ margin: "0 0 6px", fontSize: 12, fontWeight: 700 }}>
@@ -523,8 +523,8 @@ export function PickerPanel() {
               marginTop: 8,
               padding: 12,
               borderRadius: 14,
-              background: "rgba(255,255,255,0.4)",
-              border: "1px solid rgba(101, 150, 184, 0.12)",
+              background: "rgba(255,255,255,0.18)",
+              border: "1px solid rgba(101, 150, 184, 0.08)",
             }}
             open
           >
@@ -608,8 +608,8 @@ export function PickerPanel() {
               marginTop: 10,
               padding: 12,
               borderRadius: 14,
-              background: "rgba(255,255,255,0.34)",
-              border: "1px solid rgba(101, 150, 184, 0.12)",
+              background: "rgba(255,255,255,0.14)",
+              border: "1px solid rgba(101, 150, 184, 0.08)",
             }}
           >
             <summary style={{ cursor: "pointer", fontWeight: 600 }}>
@@ -702,12 +702,12 @@ export function PickerPanel() {
         letterSpacing: "0.04em",
         background:
           phase === "idle" || phase === "confirmed" || phase === "cancelled" || phase === "error"
-            ? "linear-gradient(135deg, #cb5123 0%, #ef9d65 100%)"
-            : "linear-gradient(135deg, #366d8b 0%, #5da6c9 100%)",
+            ? "linear-gradient(135deg, rgba(203, 81, 35, 0.5) 0%, rgba(239, 157, 101, 0.5) 100%)"
+            : "linear-gradient(135deg, rgba(54, 109, 139, 0.5) 0%, rgba(93, 166, 201, 0.5) 100%)",
         boxShadow:
           phase === "idle" || phase === "confirmed" || phase === "cancelled" || phase === "error"
-            ? "0 16px 36px rgba(203, 81, 35, 0.26)"
-            : "0 16px 36px rgba(54, 109, 139, 0.28)",
+            ? "0 16px 36px rgba(203, 81, 35, 0.13)"
+            : "0 16px 36px rgba(54, 109, 139, 0.14)",
         display: "inline-flex",
         alignItems: "center",
         justifyContent: "center",

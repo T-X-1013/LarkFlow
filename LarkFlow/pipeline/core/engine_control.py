@@ -321,6 +321,12 @@ def build_state(ctl: PipelineControl, session: Optional[Dict]) -> PipelineState:
             current_stage = Stage.REVIEW
     if current_stage is None and phase == "deploying":
         current_stage = Stage.REVIEW
+    raw_current_stage_override = (session or {}).get("current_stage_override")
+    if raw_current_stage_override:
+        try:
+            current_stage = Stage(raw_current_stage_override)
+        except ValueError:
+            pass
 
     # D4：从 session["stage_results"] 反序列化真实 StageResult。
     # 不存在时返回空 dict；不合法条目跳过，不阻塞状态查询。
@@ -363,11 +369,19 @@ def build_state(ctl: PipelineControl, session: Optional[Dict]) -> PipelineState:
         if parsed:
             review_multi = ReviewMultiSnapshot(subroles=parsed)
 
+    status = _infer_status(ctl, phase)
+    raw_status_override = (session or {}).get("status_override")
+    if raw_status_override and not (ctl.cancel_flag.is_set() or ctl.pause_flag.is_set() or (ctl.thread and ctl.thread.is_alive())):
+        try:
+            status = PipelineStatus(raw_status_override)
+        except ValueError:
+            pass
+
     return PipelineState(
         id=ctl.demand_id,
         requirement=ctl.requirement,
         template=ctl.template,
-        status=_infer_status(ctl, phase),
+        status=status,
         current_stage=current_stage,
         stages=stages,
         checkpoints=dict(ctl.checkpoints),

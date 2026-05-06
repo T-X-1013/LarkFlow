@@ -104,6 +104,50 @@ def _save_session(demand_id: str, session: Dict[str, Any]) -> None:
     """
     STORE.save(demand_id, session)
 
+
+def _sync_bitable_status(demand_id: str, status: str) -> None:
+    """
+    把当前需求状态回写到飞书多维表格。
+
+    仅当 session 中存在 record_id 时执行；回写失败只打日志，不中断主流程。
+    """
+    session = _load_session(demand_id)
+    if not session:
+        return
+    record_id = session.get("record_id")
+    if not record_id:
+        return
+    try:
+        from pipeline.lark.bitable_listener import update_demand_status
+
+        if not update_demand_status(record_id, status):
+            logger = session.get("logger") or get_logger(demand_id, session.get("phase"))
+            logger.warning(
+                "bitable status writeback returned False",
+                extra={"event": "bitable_status_writeback_failed", "status_text": status},
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger = session.get("logger") or get_logger(demand_id, session.get("phase"))
+        logger.warning(
+            f"bitable status writeback exception: {exc}",
+            extra={"event": "bitable_status_writeback_exception", "status_text": status},
+        )
+
+
+def _sync_bitable_status_for_phase(demand_id: str, phase: str) -> None:
+    phase_status_map = {
+        PHASE_CODING: "编码中",
+        PHASE_TESTING: "测试中",
+        PHASE_REVIEWING: "审查中",
+        PHASE_DEPLOY_PENDING: "部署审批中",
+        PHASE_DEPLOYING: "部署中",
+        PHASE_DONE: "已完成",
+        PHASE_FAILED: "失败",
+    }
+    status_text = phase_status_map.get(phase)
+    if status_text:
+        _sync_bitable_status(demand_id, status_text)
+
 # ==========================================
 # 1. 辅助函数：加载 Prompt
 # ==========================================
@@ -795,6 +839,7 @@ def _mark_failed(demand_id: str, phase: str, error: str) -> None:
     session["phase"] = PHASE_FAILED
     session["last_error"] = {"phase": phase, "message": error}
     _save_session(demand_id, session)
+    _sync_bitable_status_for_phase(demand_id, PHASE_FAILED)
 
     # A3 验收要求：失败态落地后发飞书告警，方便值班人员介入
     lark_target = lark_config.chat_id()
@@ -828,10 +873,8 @@ def _advance_to_phase(demand_id: str, phase: str) -> Optional[Dict[str, Any]]:
     if kickoff:
         append_user_text(session, kickoff)
     _save_session(demand_id, session)
-    
-    # 新增：阶段开始时同步状态到飞书表格
+    # 阶段开始时同步状态到飞书表格
     _sync_phase_start_status(demand_id, phase, session)
-    
     return session
 
 
@@ -1505,6 +1548,7 @@ def start_new_demand(
             if latest and latest.get("pending_approval"):
                 latest["phase"] = PHASE_DESIGN_PENDING
                 _save_session(demand_id, latest)
+                _sync_bitable_status(demand_id, "设计审批中")
                 # D6 bugfix：把 design checkpoint 预埋到 ctl，让前端 GET /pipelines/{id}
                 # 能看到 pending 状态的 checkpoint 条目（之前只在 approve/reject 时才 setdefault，
                 # 导致前端 waiting_approval 期间渲染不出 Reject/Approve 按钮）。
@@ -1613,6 +1657,7 @@ def resume_after_approval(demand_id: str, approved: bool, feedback: str):
             # Design 在挂起瞬间刻意未写 StageResult（见 _run_phase），
             # 审批通过后补记 success；duration 含审批等待时间，是已知口径
             _record_stage_result(demand_id, PHASE_DESIGN, StageStatus.SUCCESS)
+            _sync_bitable_status(demand_id, "设计已通过")
             # A方案：skill_routing 已在 Phase1 调 ask_human_approval 时前置 resolve 并写入 session，
             # 这里无需再解析；Phase2/4 的 _run_phase 会直接读 session["skill_routing"] 注入 prompt。
             resume_from_phase(demand_id, PHASE_CODING)
@@ -1629,10 +1674,12 @@ def resume_after_approval(demand_id: str, approved: bool, feedback: str):
                 StageStatus.REJECTED,
                 errors=[feedback] if feedback else [],
             )
+            _sync_bitable_status(demand_id, "驳回")
             session = _load_session(demand_id)
             if session:
                 session["phase"] = PHASE_DESIGN
                 _save_session(demand_id, session)
+                _sync_bitable_status(demand_id, "处理中")
             _run_phase(demand_id, PHASE_DESIGN)
 
 # ==========================================
@@ -1735,6 +1782,7 @@ def _request_deploy_approval(demand_id: str, logger) -> None:
         "target_dir": target_dir,
     }
     _save_session(demand_id, session)
+    _sync_bitable_status_for_phase(demand_id, PHASE_DEPLOY_PENDING)
     # D6 bugfix：同 design，让前端能在 deploy_pending 期间看到 checkpoint 条目
     _seed_pending_checkpoint(demand_id, CheckpointName.DEPLOY)
     
@@ -1800,6 +1848,7 @@ def trigger_deploy(demand_id: str) -> None:
         session["phase"] = PHASE_DONE
         session["pending_deploy_approval"] = None
         _save_session(demand_id, session)
+        _sync_bitable_status_for_phase(demand_id, PHASE_DONE)
         logger.info("demand done", extra={"event": "demand_done", "phase": PHASE_DONE})
     else:
         _mark_failed(demand_id, PHASE_DEPLOYING, "deploy reported failure")

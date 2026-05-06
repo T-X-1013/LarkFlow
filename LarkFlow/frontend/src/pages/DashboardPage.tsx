@@ -99,37 +99,84 @@ export function DashboardPage() {
 
   return (
     <section className="page">
-      <div className="toolbar">
-        <div>
-          <p className="eyebrow">Observability View</p>
-          <h2>仪表盘</h2>
+      <div className="hero hero--stacked">
+        <div className="hero__layout hero__layout--stacked">
+          <div className="hero__content">
+            <div>
+              <p className="eyebrow">运行观测</p>
+              <h2 className="hero__title hero__title--stacked">让每条需求的运行状态、模型分布和资源消耗一眼可读</h2>
+            </div>
+            <p className="hero__lede">
+              这里聚合需求记录和运行指标，用来快速判断当前链路是否顺畅、资源消耗是否合理，以及哪些需求需要继续关注
+            </p>
+            <div className="hero__signal hero__signal--inline">
+              <p className="eyebrow">实时信号</p>
+              <strong>仪表盘每 5 秒自动刷新一次</strong>
+              <div className="signal-list">
+                <div className="signal-list__item">
+                  <span>主数据来源</span>
+                  <span>/demands</span>
+                </div>
+                <div className="signal-list__item">
+                  <span>指标来源</span>
+                  <span>/metrics/pipelines</span>
+                </div>
+                <div className="signal-list__item">
+                  <span>当前模式</span>
+                  <span>需求记录 + 运行指标</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <aside className="hero__aside hero__aside--stacked">
+            <div className="mini-stat-grid mini-stat-grid--hero-aside">
+              <div className="mini-stat">
+                <p className="eyebrow">需求数</p>
+                <div className="mini-stat__value">{summary.total}</div>
+                <div className="mini-stat__label">纳入本次观测的需求数</div>
+              </div>
+              <div className="mini-stat">
+                <p className="eyebrow">平均耗时</p>
+                <div className="mini-stat__value">{summary.avgDuration}ms</div>
+                <div className="mini-stat__label">平均运行耗时</div>
+              </div>
+              <div className="mini-stat">
+                <p className="eyebrow">Token 总量</p>
+                <div className="mini-stat__value">{summary.totalTokens}</div>
+                <div className="mini-stat__label">累计输入输出 token</div>
+              </div>
+            </div>
+          </aside>
         </div>
-        <span className="badge badge--running">live metrics</span>
       </div>
 
       <div className="metric-grid">
         <div className="stat-card">
-          <p className="eyebrow">Pipelines</p>
+          <p className="eyebrow">需求数</p>
           <div className="stat-card__value">{summary.total}</div>
+          <span className="stat-card__trend">实时观测范围</span>
         </div>
         <div className="stat-card">
-          <p className="eyebrow">Avg Duration</p>
+          <p className="eyebrow">平均耗时</p>
           <div className="stat-card__value">{summary.avgDuration}ms</div>
+          <span className="stat-card__trend">平均运行耗时</span>
         </div>
         <div className="stat-card">
-          <p className="eyebrow">Token Volume</p>
+          <p className="eyebrow">Token 总量</p>
           <div className="stat-card__value">{summary.totalTokens}</div>
+          <span className="stat-card__trend">输入与输出总量</span>
         </div>
         <div className="stat-card">
-          <p className="eyebrow">Succeeded</p>
+          <p className="eyebrow">已完成</p>
           <div className="stat-card__value">{summary.successful}</div>
+          <span className="stat-card__trend">已完成需求</span>
         </div>
       </div>
 
       <div className="details-grid">
         <div className="panel chart">
           <div>
-            <p className="eyebrow">Duration Ranking</p>
+            <p className="eyebrow">耗时排序</p>
             <h3>按耗时排序</h3>
           </div>
           <div className="bar-list">
@@ -149,23 +196,25 @@ export function DashboardPage() {
                 </div>
               ))
             ) : (
-              <p className="muted">当前 Base 记录里暂无可用运行耗时。</p>
+              <p className="muted">当前暂无可用运行耗时</p>
             )}
           </div>
         </div>
 
-        <div className="panel">
-          <p className="eyebrow">Scope</p>
-          <h3>本页当前承载的指标语义</h3>
+        <div className="panel section-heading">
+          <div>
+            <p className="eyebrow">数据范围</p>
+            <h3>当前页面展示的数据范围</h3>
+          </div>
           <table>
             <tbody>
               <tr>
                 <th>现阶段</th>
-                <td>主数据来自 `/demands`，运行指标仅统计 Base 当前记录</td>
+                <td>主数据来自 `/demands`，运行指标统计当前已接入系统的需求记录</td>
               </tr>
               <tr>
                 <th>数据来源</th>
-                <td>飞书 Base 当前需求 + 本地 runtime metrics 交集</td>
+                <td>飞书需求记录与运行指标聚合结果</td>
               </tr>
               <tr>
                 <th>重点字段</th>
@@ -177,9 +226,11 @@ export function DashboardPage() {
       </div>
 
       <div className="details-grid">
-        <div className="panel">
-          <p className="eyebrow">Provider Mix</p>
-          <h3>Provider 分布</h3>
+        <div className="panel section-heading">
+          <div>
+            <p className="eyebrow">模型分布</p>
+            <h3>Provider 分布</h3>
+          </div>
           <div className="timeline">
             {providerBreakdown.map((item) => (
               <div key={item.provider} className="timeline__item">
@@ -191,9 +242,11 @@ export function DashboardPage() {
             ))}
           </div>
         </div>
-        <div className="panel">
-          <p className="eyebrow">Status Mix</p>
-          <h3>状态分布</h3>
+        <div className="panel section-heading">
+          <div>
+            <p className="eyebrow">状态分布</p>
+            <h3>状态分布</h3>
+          </div>
           <div className="timeline">
             {statusBreakdown.map((item) => (
               <div key={item.status} className="timeline__item">
@@ -211,21 +264,21 @@ export function DashboardPage() {
         <div className="panel chart">
           <div className="toolbar">
             <div>
-              <p className="eyebrow">Review Role Tokens</p>
+              <p className="eyebrow">角色 Token</p>
               <h3>按 role 拆分 token 堆叠柱</h3>
             </div>
-            <span className="badge badge--pending">{roleMetricCount} role metrics</span>
+            <span className="badge badge--pending">{roleMetricCount} 个角色指标</span>
           </div>
           <div className="legend-row">
-            <span><i className="legend-swatch legend-swatch--input" />input</span>
-            <span><i className="legend-swatch legend-swatch--output" />output</span>
+            <span><i className="legend-swatch legend-swatch--input" />输入</span>
+            <span><i className="legend-swatch legend-swatch--output" />输出</span>
           </div>
           <div className="role-token-groups">
             {roleTokenGroups.map((group) => (
               <section key={group.pipeline_id} className="role-token-group">
                 <div className="role-token-group__header">
                   <strong>{group.pipeline_id}</strong>
-                  <span>{group.roles.length} roles</span>
+                  <span>{group.roles.length} 个角色</span>
                 </div>
                 <div className="role-token-chart">
                   {group.roles.map((item) => (

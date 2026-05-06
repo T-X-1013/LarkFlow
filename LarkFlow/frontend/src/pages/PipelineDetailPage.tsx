@@ -116,13 +116,14 @@ export function PipelineDetailPage() {
   const totalOutput = stageRows.reduce((sum, stage) => sum + (stage?.tokens.output ?? 0), 0);
   const totalDuration = stageRows.reduce((sum, stage) => sum + (stage?.duration_ms ?? 0), 0);
   const reviewSubroles = pipeline?.review_multi?.subroles ?? [];
+  const updatedAt = new Date(pipeline?.updated_at ? pipeline.updated_at * 1000 : Date.now()).toLocaleString();
 
   if (!pipeline) {
     return (
       <section className="page">
         <div className="panel">
           <h2>Pipeline 未找到</h2>
-          <p className="muted">当前 detail 页依赖 MSW mock；请确认 URL 中的 pipeline id 存在于 fixtures。</p>
+          <p className="muted">请确认 URL 中的 pipeline id 是否存在，或等待后端同步完成后再查看详情。</p>
         </div>
       </section>
     );
@@ -130,12 +131,52 @@ export function PipelineDetailPage() {
 
   return (
     <section className="page">
-      <div className="toolbar">
-        <div>
-          <p className="eyebrow">Pipeline Detail</p>
-          <h2>{pipeline.id}</h2>
+      <div className="hero">
+        <div className="hero__layout">
+          <div className="hero__content">
+            <div>
+              <p className="eyebrow">Pipeline Detail</p>
+              <h2 className="hero__title">{pipeline.id}</h2>
+            </div>
+            <p className="hero__lede">
+              这里聚合单条需求的执行状态、审批节点、阶段产物和运行指标。页面需要优先保证信息密度与操作连贯性，而不是做成普通详情表。
+            </p>
+            <div className="button-row">
+              <button className="button" onClick={() => runAction("start")} type="button">
+                Start
+              </button>
+              <button className="button--ghost" onClick={() => runAction("pause")} type="button">
+                Pause
+              </button>
+              <button className="button--ghost" onClick={() => runAction("resume")} type="button">
+                Resume
+              </button>
+              <button className="button--ghost" onClick={() => runAction("stop")} type="button">
+                Stop
+              </button>
+            </div>
+          </div>
+          <aside className="hero__aside">
+            <div className="hero__signal">
+              <p className="eyebrow">Current Status</p>
+              <strong>当前状态与关键上下文</strong>
+              <div className="signal-list">
+                <div className="signal-list__item">
+                  <span>Pipeline Status</span>
+                  <span>{pipeline.status}</span>
+                </div>
+                <div className="signal-list__item">
+                  <span>Current Stage</span>
+                  <span>{pipeline.current_stage ?? "n/a"}</span>
+                </div>
+                <div className="signal-list__item">
+                  <span>Updated At</span>
+                  <span>{updatedAt}</span>
+                </div>
+              </div>
+            </div>
+          </aside>
         </div>
-        <span className="badge badge--running">{pipeline.status}</span>
       </div>
 
       <div className="metric-grid">
@@ -161,30 +202,18 @@ export function PipelineDetailPage() {
         </div>
       </div>
 
-      <div className="button-row">
-        <button className="button" onClick={() => runAction("start")} type="button">
-          Start
-        </button>
-        <button className="button--ghost" onClick={() => runAction("pause")} type="button">
-          Pause
-        </button>
-        <button className="button--ghost" onClick={() => runAction("resume")} type="button">
-          Resume
-        </button>
-        <button className="button--ghost" onClick={() => runAction("stop")} type="button">
-          Stop
-        </button>
-      </div>
       {note ? (
         <p className="flash-note" style={note.isError ? { color: "crimson", borderColor: "crimson" } : undefined}>
           {note.text}
         </p>
       ) : null}
 
-      <div className="details-grid">
-        <div className="panel">
-          <p className="eyebrow">Overview</p>
-          <h3>运行状态</h3>
+      <div className="detail-summary-grid">
+        <div className="panel section-heading">
+          <div>
+            <p className="eyebrow">Overview</p>
+            <h3>运行状态</h3>
+          </div>
           <table>
             <tbody>
               <tr>
@@ -208,52 +237,64 @@ export function PipelineDetailPage() {
               </tr>
               <tr>
                 <th>更新时间</th>
-                <td>{new Date(pipeline.updated_at * 1000).toLocaleString()}</td>
+                <td>{updatedAt}</td>
               </tr>
             </tbody>
           </table>
         </div>
 
-        <div className="panel">
-          <p className="eyebrow">Checkpoints</p>
-          <h3>人工审批点</h3>
-          <div className="timeline">
-            {Object.values(pipeline.checkpoints).map((checkpoint) =>
-              checkpoint ? (
-                <div key={checkpoint.name} className="timeline__item">
-                  <div className="badge-row">
-                    <span className="badge badge--pending">{checkpoint.name}</span>
-                    <span className="badge badge--running">{checkpoint.status}</span>
+        <div className="stage-summary">
+          <div className="surface-note">
+            <strong>阶段聚焦</strong>
+            <span className="muted">
+              当前选中阶段：<code>{selectedStage}</code>。点击下方阶段表任意一行，可切换 artifact 预览。
+            </span>
+          </div>
+          <div className="panel section-heading">
+            <div>
+              <p className="eyebrow">Checkpoints</p>
+              <h3>人工审批点</h3>
+            </div>
+            <div className="timeline">
+              {Object.values(pipeline.checkpoints).map((checkpoint) =>
+                checkpoint ? (
+                  <div key={checkpoint.name} className="timeline__item">
+                    <div className="badge-row">
+                      <span className="badge badge--pending">{checkpoint.name}</span>
+                      <span className="badge badge--running">{checkpoint.status}</span>
+                    </div>
+                    <p className="muted">{checkpoint.reason ?? "暂无备注"}</p>
+                    <div className="button-row">
+                      <button
+                        className="button"
+                        type="button"
+                        onClick={() => handleCheckpoint("approve", checkpoint.name)}
+                      >
+                        Approve
+                      </button>
+                      <button
+                        className="button--ghost"
+                        type="button"
+                        onClick={() => handleCheckpoint("reject", checkpoint.name)}
+                      >
+                        Reject
+                      </button>
+                    </div>
                   </div>
-                  <p className="muted">{checkpoint.reason ?? "暂无备注"}</p>
-                  <div className="button-row">
-                    <button
-                      className="button"
-                      type="button"
-                      onClick={() => handleCheckpoint("approve", checkpoint.name)}
-                    >
-                      Approve
-                    </button>
-                    <button
-                      className="button--ghost"
-                      type="button"
-                      onClick={() => handleCheckpoint("reject", checkpoint.name)}
-                    >
-                      Reject
-                    </button>
-                  </div>
-                </div>
-              ) : null,
-            )}
+                ) : null,
+              )}
+            </div>
           </div>
         </div>
       </div>
 
       <div className="details-grid">
-        <div className="panel">
-          <p className="eyebrow">Stages</p>
-          <h3>阶段产物与 token</h3>
-          <table>
+        <div className="panel section-heading">
+          <div>
+            <p className="eyebrow">Stages</p>
+            <h3>阶段产物与 token</h3>
+          </div>
+          <table className="stage-table">
             <thead>
               <tr>
                 <th>Stage</th>
@@ -289,7 +330,7 @@ export function PipelineDetailPage() {
           <p className="eyebrow">Artifact Preview</p>
           <h3>{selectedStage} 阶段预览</h3>
           <p className="muted">
-            当前预览内容来自 <code>GET /pipelines/:id/stages/:stage/artifact</code> 的 MSW mock。
+            当前预览内容来自 <code>GET /pipelines/:id/stages/:stage/artifact</code> 返回的阶段产物内容。
           </p>
           <pre className="artifact-preview">
             {artifact?.content ?? "当前阶段暂无 artifact 内容，或尚未产生产物。"}

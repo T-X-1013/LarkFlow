@@ -19,7 +19,7 @@ DEFAULT_RECEIVE_ID_TYPE = "open_id"
 DEFAULT_LOG_LEVEL = "INFO"
 # 多维表格列名默认值必须与历史 Base 结构兼容，避免老环境未配新变量时读不到字段
 DEFAULT_STATUS_FIELD = "状态"
-DEFAULT_ID_FIELD = "需求 ID"
+DEFAULT_ID_FIELD = "需求ID"
 DEFAULT_DOC_FIELD = "需求文档"
 DEFAULT_TECH_DOC_FIELD = "技术方案文档"
 DEFAULT_TEMPLATE_FIELD = "模板"

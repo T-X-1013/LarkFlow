@@ -159,6 +159,7 @@ def start(pipeline_id: str) -> PipelineState:
     ctl = _ctl(pipeline_id)
     if ctl.thread and ctl.thread.is_alive():
         return engine_control.build_state(ctl, _session(pipeline_id))
+    session = _session(pipeline_id) or {}
     engine_control.launch(
         ctl,
         engine.start_new_demand,
