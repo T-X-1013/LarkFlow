@@ -15,8 +15,14 @@ from pydantic import BaseModel, Field
 # Enum
 # ==========================================
 class Stage(str, Enum):
-    """Pipeline 对外暴露的四阶段枚举。"""
+    """Pipeline 对外暴露的阶段枚举。
 
+    INVENTORY 是 brownfield 模板专属的可选前置阶段（Step 4 引入），用于扫描 demo-app
+    存量代码并产出 code_map JSON 给 Phase 1 Design 消费。greenfield 模板（feature /
+    bugfix / refactor / default）不包含 INVENTORY 节点，对外 REST / 前端契约保持四阶段。
+    """
+
+    INVENTORY = "inventory"
     DESIGN = "design"
     CODING = "coding"
     TEST = "test"

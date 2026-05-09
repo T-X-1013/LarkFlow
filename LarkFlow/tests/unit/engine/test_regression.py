@@ -175,9 +175,10 @@ def test_try_regress_first_attempt_succeeds():
     with patch("pipeline.core.engine._load_session", side_effect=loader), \
          patch("pipeline.core.engine._save_session", side_effect=saver), \
          patch("pipeline.core.engine.append_user_text", side_effect=_fake_append_user_text):
-        ok = _try_regress("d1", "- foo.go:1 — do X", logger)
+        target = _try_regress("d1", "- foo.go:1 — do X", logger)
 
-    assert ok is True
+    # Step 8：返回类型从 bool 改为 Optional[str]，成功时给出目标 phase
+    assert target == "coding"
     reg = store["d1"]["regression"]
     assert reg["attempts"] == 1
     assert len(reg["history"]) == 1
@@ -199,11 +200,11 @@ def test_try_regress_counts_up_then_rejects():
          patch("pipeline.core.engine._save_session", side_effect=saver), \
          patch("pipeline.core.engine.append_user_text", side_effect=_fake_append_user_text):
         for i in range(3):
-            assert _try_regress("d1", f"findings round {i+1}", logger) is True
+            assert _try_regress("d1", f"findings round {i+1}", logger) == "coding"
         assert store["d1"]["regression"]["attempts"] == 3
 
         # 第 4 次应被上限拒绝
-        assert _try_regress("d1", "findings 4", logger) is False
+        assert _try_regress("d1", "findings 4", logger) is None
         # attempts 不应递增
         assert store["d1"]["regression"]["attempts"] == 3
         # 拒绝时应打 regression_exhausted 日志
@@ -223,9 +224,9 @@ def test_try_regress_empty_findings_uses_fallback_hint():
     with patch("pipeline.core.engine._load_session", side_effect=loader), \
          patch("pipeline.core.engine._save_session", side_effect=saver), \
          patch("pipeline.core.engine.append_user_text", side_effect=_fake_append_user_text):
-        ok = _try_regress("d1", "", logger)
+        target = _try_regress("d1", "", logger)
 
-    assert ok is True
+    assert target == "coding"
     msgs = store["d1"]["messages"]
     assert any("未提供具体 findings" in str(m) for m in msgs)
 
@@ -237,7 +238,7 @@ def test_try_regress_missing_session_returns_false():
     with patch("pipeline.core.engine._load_session", side_effect=loader), \
          patch("pipeline.core.engine._save_session", side_effect=saver), \
          patch("pipeline.core.engine.append_user_text", side_effect=_fake_append_user_text):
-        assert _try_regress("ghost", "x", logger) is False
+        assert _try_regress("ghost", "x", logger) is None
 
 
 def test_end_to_end_regress_then_pass_via_resume_from_phase():
@@ -368,6 +369,6 @@ def test_try_regress_when_policy_disabled_returns_false():
          patch("pipeline.core.engine._save_session", side_effect=saver), \
          patch("pipeline.core.engine.append_user_text", side_effect=_fake_append_user_text), \
          patch("pipeline.dag.schema.default_dag", return_value=fake_dag):
-        ok = _try_regress("d1", "x", logger)
-    assert ok is False
+        target = _try_regress("d1", "x", logger)
+    assert target is None
     assert "regression" not in store["d1"]

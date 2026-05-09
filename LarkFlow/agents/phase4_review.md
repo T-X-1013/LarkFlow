@@ -11,6 +11,11 @@ Block any merge that violates a 🔴 rule in the matched `skills/*.md`. Fix 🟡
 1. **Understand the Context**
    - Read the Phase 1 design document and the Phase 3 test results in your context.
    - Note which skills Phase 2 claimed it read (in its `## Skill Routing` preamble). You will audit that against the `<skill-routing>` block injected into your own system prompt — they should match. Divergence is itself a finding.
+   - **Brownfield design pre-flight (🔴 BLOCKING)**: if `repo_mode == "brownfield"` (visible in your context), before reading any code, scan the Phase 1 design document for these two sections:
+     - `## Existing Surface Touched` — must exist AND have at least one row of substance. Empty body, `n/a`, `none`, or a single placeholder row is a 🔴 violation.
+     - `## Compatibility Risks` — must exist AND either list concrete risks OR say `none identified after reviewing X, Y, Z` (i.e. show the analysis was performed). Bare `none` / `n/a` / empty body is a 🔴 violation.
+     - If either fails, you MUST emit `<review-verdict>REGRESS</review-verdict>` with a `<review-findings>` block calling out the missing section by name. Do NOT proceed to inspect code — the design itself is the blocker, and rerunning Phase 2 against an incomplete design wastes a full coding/testing cycle. The brownfield DAG routes this REGRESS back to Phase 0 Inventory, not coding.
+     - For `repo_mode == "greenfield"` these two sections may be absent or say `none (greenfield)`; do not penalize.
 
 2. **Consult the Rules**
    - Read `rules/flow-rule.md`.
@@ -22,6 +27,7 @@ Block any merge that violates a 🔴 rule in the matched `skills/*.md`. Fix 🟡
    - Also read the test files — unrealistic mocks or weak assertions are in scope.
 
 4. **Enforce Standards — checklist**
+   - **🔴 Brownfield design completeness** (only when `repo_mode == "brownfield"`): the Phase 1 design must contain populated `## Existing Surface Touched` and `## Compatibility Risks` sections, as defined in step 1 pre-flight. This rule is checked before any code-level rule because an incomplete design corrupts everything downstream. REGRESS to Inventory, not Coding.
    - **🔴 Kratos layering** (BLOCK on violation, see `skills/framework/kratos.md`):
      - `internal/service/*.go` does not import `gorm`, `redis`, or `internal/data/*`; it calls biz usecases only.
      - `internal/biz/*.go` does not import `internal/data/*` concrete types; it depends on Repo interfaces it defines itself.
@@ -175,6 +181,27 @@ Code Review Blocked
 <review-findings>
 - internal/service/order.go:42 — remove gorm import; move DB calls behind biz.OrderRepo interface invoked from usecase.
 - internal/biz/order.go:15 — declare `type OrderRepo interface { ... }` in biz package and depend on it; data package implements it.
+</review-findings>
+<review-verdict>REGRESS</review-verdict>
+```
+
+### Example — REGRESS (brownfield design pre-flight)
+Triggered when `repo_mode == "brownfield"` but Phase 1 left `## Existing Surface Touched` empty or `## Compatibility Risks` blank. Code is NOT inspected — the design itself is the blocker.
+
+```
+## Review Summary
+Brownfield pre-flight failed; code inspection skipped.
+
+## Findings
+- [🔴] design_doc — `## Existing Surface Touched` is empty / says `none`. Brownfield design must enumerate every existing file, API, or table the demand will modify or rely on, citing the code_map.
+- [🔴] design_doc — `## Compatibility Risks` is missing. Brownfield design must call out regression risks per item or explicitly write `none identified after reviewing <X, Y, Z>`.
+
+## Verdict
+Code Review Blocked
+
+<review-findings>
+- design_doc:## Existing Surface Touched — populate the section with concrete rows pulled from session.artifacts.code_map (existing_domains / existing_apis / existing_tables). Do not write "none" without justification.
+- design_doc:## Compatibility Risks — analyze proto / API contract changes, migration impact, lock-time changes, error-code shifts, and naming-convention deviations from code_map.naming_conventions. List concrete risks or document the analysis explicitly.
 </review-findings>
 <review-verdict>REGRESS</review-verdict>
 ```

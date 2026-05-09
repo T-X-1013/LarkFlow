@@ -14,7 +14,17 @@ class ToolsSchemaTestCase(unittest.TestCase):
     def test_tool_names_are_stable(self):
         """工具名顺序属于协议的一部分，变更时应显式感知。"""
         names = [tool["name"] for tool in get_tool_specs()]
-        self.assertEqual(names, ["inspect_db", "file_editor", "ask_human_approval", "run_bash"])
+        self.assertEqual(
+            names,
+            [
+                "inspect_db",
+                "file_editor",
+                "ask_human_approval",
+                "grep_symbol",
+                "list_dir_summary",
+                "run_bash",
+            ],
+        )
 
     def test_file_editor_schema_exposes_replace_contract(self):
         """file_editor 的 replace 合约必须暴露给模型，避免生成不完整参数。"""

@@ -1,0 +1,45 @@
+name: brownfield
+description: |
+  存量代码改造链路：Inventory → Design → Coding → Test → Review。
+  与 feature.yaml 的关键差异：
+  1. 多一个前置 Inventory 节点，调用 phase0_inventory.md 产出 code_map JSON，
+     供 Design 阶段读取（写入 session["artifacts"]["code_map"]）。
+  2. Review 的回归目标改为 inventory 而非 coding——brownfield 的 REGRESS 通常是
+     "存量没看清"，回 coding 修不到根因。
+  3. 保留双 HITL（design + deploy），与 feature 模板一致。
+
+entry: inventory
+
+nodes:
+  inventory:
+    prompt_file: phase0_inventory.md
+    depends_on: []
+    # Inventory 不挂 HITL：它是技术性扫描，没有需要人审批的产物
+    retry:
+      max_attempts: 1
+  design:
+    prompt_file: phase1_design.md
+    depends_on: [inventory]
+    checkpoint: design          # 第 1 HITL：Design 产出审批
+    retry:
+      max_attempts: 1
+  coding:
+    prompt_file: phase2_coding.md
+    depends_on: [design]
+    retry:
+      max_attempts: 1
+  test:
+    prompt_file: phase3_test.md
+    depends_on: [coding]
+    retry:
+      max_attempts: 1
+  review:
+    prompt_file: phase4_review.md
+    depends_on: [test]
+    checkpoint: deploy          # 第 2 HITL：Review 通过后是否部署
+    retry:
+      max_attempts: 1
+    on_failure:
+      action: regress
+      to: inventory             # 关键：brownfield 回归到 inventory，重新盘点存量
+      max_attempts: 3

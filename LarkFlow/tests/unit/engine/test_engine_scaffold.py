@@ -28,25 +28,28 @@ class EnsureTargetScaffoldTestCase(unittest.TestCase):
         self.temp_dir.cleanup()
 
     def test_materializes_into_missing_target_dir(self):
-        """target_dir 完全不存在时应完整 copytree"""
+        """target_dir 完全不存在时应完整 copytree，并返回 greenfield"""
         self.assertFalse(self.target_dir.exists())
-        _ensure_target_scaffold(str(self.workspace_root), str(self.target_dir))
+        mode = _ensure_target_scaffold(str(self.workspace_root), str(self.target_dir))
+        self.assertEqual(mode, "greenfield")
         self.assertTrue((self.target_dir / "go.mod").is_file())
         self.assertTrue((self.target_dir / "cmd" / "server" / "main.go").is_file())
 
     def test_materializes_into_empty_target_dir(self):
-        """target_dir 存在但为空也应正常物化，不应因 copytree 的 dst 存在而报错"""
+        """target_dir 存在但为空也应正常物化，并返回 greenfield"""
         self.target_dir.mkdir()
         self.assertEqual(list(self.target_dir.iterdir()), [])
-        _ensure_target_scaffold(str(self.workspace_root), str(self.target_dir))
+        mode = _ensure_target_scaffold(str(self.workspace_root), str(self.target_dir))
+        self.assertEqual(mode, "greenfield")
         self.assertTrue((self.target_dir / "go.mod").is_file())
 
     def test_idempotent_when_marker_present(self):
-        """target_dir 已有 go.mod 时必须视为已物化，不覆盖任何现存内容（resume 场景）"""
+        """target_dir 已有 go.mod 时必须视为存量改造，返回 brownfield 且不覆盖任何文件"""
         self.target_dir.mkdir()
         (self.target_dir / "go.mod").write_text("module existing\n", encoding="utf-8")
         (self.target_dir / "business.go").write_text("package main\n", encoding="utf-8")
-        _ensure_target_scaffold(str(self.workspace_root), str(self.target_dir))
+        mode = _ensure_target_scaffold(str(self.workspace_root), str(self.target_dir))
+        self.assertEqual(mode, "brownfield")
         # 保留用户原有 go.mod 内容
         self.assertEqual(
             (self.target_dir / "go.mod").read_text(encoding="utf-8"),

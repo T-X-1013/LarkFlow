@@ -133,17 +133,45 @@ def create_pipeline(
 
     @params:
         requirement: 需求文本
-        template: 可选模板名
+        template: 可选模板名；caller 传 "default" 视为"未显式选择"，本函数会按
+                  demo-app 当前是否已是 Kratos 布局自动切到 "brownfield"。
+                  显式传入 feature / bugfix / refactor / brownfield 等具名模板时
+                  尊重 caller 的选择，不做覆写。
 
     @return:
         返回新建后的 PipelineState
     """
+    effective_template = _auto_select_template(template)
     ctl = engine_control.register(
         requirement=requirement,
-        template=template,
+        template=effective_template,
         record_id=record_id,
     )
     return engine_control.build_state(ctl, _session(ctl.demand_id))
+
+
+def _auto_select_template(requested: str) -> str:
+    """根据 demo-app 当前状态在 'default' 上做模板自动选择
+
+    Step 6 的目的：让"用户没指定模板 + demo-app 已有存量代码"的场景默认走 brownfield，
+    而不是退化成 default（后者把存量当 0-1 处理，会丢 inventory 节点）。
+
+    选型策略：
+      - requested != "default"  → 视为 caller 显式选择，原样返回
+      - requested == "default"  → 探测 repo_mode；brownfield 切到 "brownfield"，
+        greenfield 仍返回 "default"
+
+    探测异常时回退到 requested，保证创建 pipeline 永远不会因这一步失败。
+    """
+    if requested != "default":
+        return requested
+    try:
+        if engine.detect_repo_mode() == "brownfield":
+            return "brownfield"
+    except Exception:
+        # 文件系统异常 / 路径不存在不能阻塞 pipeline 创建；降级回原 template
+        pass
+    return requested
 
 
 def start(pipeline_id: str) -> PipelineState:

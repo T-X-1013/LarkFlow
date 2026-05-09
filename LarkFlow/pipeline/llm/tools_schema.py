@@ -101,6 +101,54 @@ def get_tool_specs() -> List[Dict[str, Any]]:
             }
         },
         {
+            "name": "grep_symbol",
+            "description": "Lightweight regex search across the workspace / target_dir. Designed for the inventory phase: find handlers / structs / proto services without reading whole files. Returns up to `max_results` matches as `relative_path:line: snippet`. Skips .git/vendor/node_modules/dist/build by default.",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "pattern": {
+                        "type": "string",
+                        "description": "Regex pattern (Python `re` syntax). Use anchors / word boundaries to keep noise low."
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Relative root to search under (e.g. '../demo-app', '../demo-app/internal'). If omitted, search target_dir."
+                    },
+                    "file_glob": {
+                        "type": "string",
+                        "description": "Optional file name glob filter, e.g. '*.go', '*.proto'. Matched against basenames."
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Maximum match lines returned. Defaults to 50, hard-capped at 200 to protect the LLM context window."
+                    }
+                },
+                "required": ["pattern"]
+            }
+        },
+        {
+            "name": "list_dir_summary",
+            "description": "Recursive directory tree summary. Returns files with their byte size, directories as nodes — but NEVER reads file contents. Use this in the inventory phase to map an existing demo-app before deciding which files to deep-read with `file_editor`. Auto-skips .git/vendor/node_modules/dist/build/__pycache__.",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Relative directory to summarize. If omitted, defaults to target_dir."
+                    },
+                    "depth": {
+                        "type": "integer",
+                        "description": "Max recursion depth (1 = direct children only). Defaults to 3, hard-capped at 6."
+                    },
+                    "max_entries": {
+                        "type": "integer",
+                        "description": "Maximum number of file/dir entries returned. Defaults to 200, hard-capped at 1000."
+                    }
+                },
+                "required": []
+            }
+        },
+        {
             "name": "run_bash",
             "description": "Executes a bash command in the project's Docker container or sandbox. Useful for running tests ('go test ./...'), building ('go build'), or managing dependencies ('go mod tidy').",
             "schema": {

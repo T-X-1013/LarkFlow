@@ -27,7 +27,7 @@ def _turn(tool_calls=None, finished=False, text=None):
 def test_start_new_demand_suspends_on_approval(temp_session_store, stub_build_client, monkeypatch, tmp_path):
     """Phase 1 调用 ask_human_approval → phase=design_pending + pending_approval 已写入"""
     # scaffold 替身，避免真实 copytree
-    monkeypatch.setattr(engine, "_ensure_target_scaffold", lambda *a, **kw: None)
+    monkeypatch.setattr(engine, "_ensure_target_scaffold", lambda *a, **kw: "greenfield")
     monkeypatch.setattr(engine, "get_provider_name", lambda: "openai")
     monkeypatch.setattr(engine, "initialize_session", lambda provider, text, client: {
         "provider": provider, "history": [{"role": "user", "content": text}],

@@ -19,7 +19,7 @@ _DEFAULT_YAML = os.path.join(os.path.dirname(__file__), "default.yaml")
 # D6: 内置模板名单，需与 pipeline/dag/<name>.yaml 一一对应。
 # 前端 PipelinesPage 下拉硬编码了这 4 个选项，后端 load_template 接到未知名字必须抛错。
 # D7: 新增 feature_multi，启用 Phase 4 Review 多视角并行 + 仲裁（实验性，feat flag）。
-TEMPLATE_NAMES = ("default", "feature", "bugfix", "refactor", "feature_multi")
+TEMPLATE_NAMES = ("default", "feature", "bugfix", "refactor", "feature_multi", "brownfield")
 
 
 class RetryPolicy(BaseModel):

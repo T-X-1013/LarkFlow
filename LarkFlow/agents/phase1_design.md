@@ -14,7 +14,9 @@ Produce a design that a reviewer can approve or reject in under 2 minutes, with 
 
 2. **Explore the Context**
    - Call `inspect_db` to inspect real schema before proposing schema changes. Never invent column names.
-   - Use `file_editor` (action: `read`) to survey existing handlers, services, and migrations in `../demo-app`. Respect existing naming conventions.
+   - Check `repo_mode` in your context (engine injects this from session):
+     - **`repo_mode == "brownfield"`** — A Phase 0 Inventory agent has already produced a `code_map` JSON in `session["artifacts"]["code_map"]` (also surfaced in your context as `<code-map>...</code-map>`). **Read it first**, treat it as the authoritative map of existing domains / APIs / tables / naming conventions. Do NOT redo the same scans. Use `grep_symbol` / `file_editor read` only to fill in specific gaps the code_map didn't cover.
+     - **`repo_mode == "greenfield"`** — `demo-app/` was just materialized from the Kratos skeleton. There is no code_map; explore lightly with `file_editor read` if needed, but don't pretend existing surface exists.
    - Consult `rules/skill-routing.yaml` to pick the `tech_tags` for this requirement (see §Tech Tags Contract below). The engine uses these tags — not your prose — to inject skills into Phase 2 / Phase 4, so omitting a tag means the rule will not be enforced downstream.
 
 3. **Draft the Design Document** — use exactly this structure. **The product is a Kratos v2.7 service (four-layer layout already materialized in `demo-app/`). Every usecase in your design MUST spell out which file goes into `internal/biz` / `internal/data` / `internal/service` and which `.proto` lands in `api/<domain>/v1/`.** See `skills/framework/kratos.md` for the hard rules.
@@ -22,6 +24,16 @@ Produce a design that a reviewer can approve or reject in under 2 minutes, with 
    ```markdown
    ## Goal & Scope
    <1–3 sentences on what ships and what explicitly doesn't>
+
+   ## Existing Surface Touched
+   <Brownfield: REQUIRED — list each existing file/API/table this demand will modify or
+    rely on, citing the code_map. One row per item, max ~8 rows. Use "none (greenfield)"
+    only when repo_mode == "greenfield".>
+   | File / API / Table | Currently | This Demand Will |
+   |---|---|---|
+   | internal/biz/user.go | UserUsecase.Register / UpdateProfile | extend with UpdateNickname |
+   | api/user/v1/user.proto | UserService rpcs | add rpc UpdateNickname |
+   | table users | columns id/email/profile_id | add column nickname |
 
    ## Database Changes
    <table, columns, indexes, migration direction; "none" if no change>
@@ -43,6 +55,15 @@ Produce a design that a reviewer can approve or reject in under 2 minutes, with 
 
    ## Core Logic Flow
    <numbered steps with branches; call out transactions, locks, external calls>
+
+   ## Compatibility Risks
+   <Brownfield: REQUIRED — call out things that could regress existing behavior:
+    breaking proto / API contract changes, migrations that require backfill, locks held
+    longer than before, error code shifts, naming-convention deviations cited from
+    code_map.naming_conventions. Use "none identified" only after explicitly considering
+    each item — never as a lazy default. Use "none (greenfield)" if repo_mode == "greenfield".>
+   - <risk 1: what could break, who notices, mitigation>
+   - <risk 2: ...>
 
    ## Relevant Skills
    <human-readable mirror of the tech_tags you will pass to ask_human_approval; list the skills/*.md paths for the reviewer to eyeball. Authoritative routing is the tech_tags JSON, not this list.>
@@ -95,6 +116,9 @@ Write tags for **intent**, not only literal keywords — that is the whole point
 - Skipping `inspect_db` when the requirement touches the database.
 - Approving your own design or calling Phase 2 tools directly.
 - Inventing API conventions that diverge from existing handlers without calling it out in `## Open Questions`.
+- **Brownfield only**: leaving `## Existing Surface Touched` empty / "n/a" / "none" when `repo_mode == "brownfield"`. If the demand truly touches no existing file (rare — usually means a new domain), say so explicitly with one row like `| (new domain) | does not exist yet | new files only |`. Phase 4 Review will REGRESS the design otherwise.
+- **Brownfield only**: writing `## Compatibility Risks` as `"none"` without analysis. List risks per item, or write `"none identified after reviewing X, Y, Z"` to show you actually considered them.
+- **Brownfield only**: re-running scans the Phase 0 Inventory agent already produced. If `code_map` covers it, cite it instead of calling `grep_symbol` again.
 
 ## Output Format
 
@@ -102,11 +126,20 @@ Your final message before calling `ask_human_approval` MUST be the Markdown desi
 
 ## Worked Example
 
-**Demand**: "Allow users to set a nickname, max 30 chars, shown on their profile."
+**Demand**: "Allow users to set a nickname, max 30 chars, shown on their profile." (assume `repo_mode == "brownfield"`, code_map shows existing user domain with Register / UpdateProfile)
 
 ```markdown
 ## Goal & Scope
 Add a nullable `nickname` field to users and a PATCH endpoint to update it. Out of scope: profile page UI, validation beyond length.
+
+## Existing Surface Touched
+| File / API / Table | Currently | This Demand Will |
+|---|---|---|
+| api/user/v1/user.proto | UserService.Register, UpdateProfile | add rpc UpdateNickname next to UpdateProfile |
+| internal/biz/user.go | UserUsecase with Register/UpdateProfile, UserRepo iface | extend UserUsecase + UserRepo with UpdateNickname |
+| internal/data/user.go | gorm UserRepo impl | implement UpdateNickname via gorm UPDATE |
+| internal/service/user.go | proto-to-biz adapters | wire UpdateNickname handler |
+| table users | id, email, profile_id (per code_map) | add column nickname VARCHAR(30) NULL |
 
 ## Database Changes
 ALTER TABLE users ADD COLUMN nickname VARCHAR(30) NULL; no index (low cardinality, not queried).
@@ -119,6 +152,11 @@ PATCH /users/me/nickname — body `{ "nickname": "string <=30" }`, returns 200 w
 2. Validate length <= 30; reject otherwise.
 3. UPDATE users SET nickname=? WHERE id=?; 1 row expected.
 4. Return refreshed user row.
+
+## Compatibility Risks
+- Existing `User` proto message gains a `nickname` field — additive, but old clients reading this message will see an empty string they didn't see before; downstream serializers that JSON-encode users will start emitting `"nickname":""`. Mitigation: confirm no existing consumer rejects unknown fields (code_map shows only one consumer in service layer).
+- ALTER TABLE on `users` (per code_map: row count unknown). On a small dev DB this is fine; if the table is ever scaled, run with online-DDL. Mitigation: flag in deploy notes.
+- Naming convention check (code_map.naming_conventions): proto uses snake_case fields → emit `nickname`, not `nickName`. Confirmed.
 
 ## Kratos Layering
 | Layer | New/Changed File | Responsibility |

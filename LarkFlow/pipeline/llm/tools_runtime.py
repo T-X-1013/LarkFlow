@@ -7,6 +7,7 @@ LarkFlow 本地工具运行时
 3. 对文件工具施加读写边界，避免 Agent 误改框架代码
 """
 
+import fnmatch
 import os
 import re
 import signal
@@ -15,7 +16,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 from urllib.parse import unquote, urlparse
 
 from pipeline.config import runtime as runtime_config
@@ -60,6 +61,26 @@ SQLITE_SHOW_COLUMNS_RE = re.compile(
 
 # 兼容 SHOW TABLES，让 Agent 不需要感知 SQLite 和 MySQL 的元数据查询差异
 SQLITE_SHOW_TABLES_RE = re.compile(r"^\s*show\s+tables\s*;?\s*$", re.IGNORECASE)
+
+# 代码索引类工具的全局上限：避免任何一次工具调用把 LLM 上下文吃满
+GREP_DEFAULT_MAX_RESULTS = 50
+GREP_HARD_MAX_RESULTS = 200
+GREP_MAX_FILE_BYTES = 512 * 1024            # 单文件 >512KB 跳过，避免读巨型生成产物
+GREP_MAX_LINE_SNIPPET = 240                 # 单行片段最多 240 字节，超出截断
+
+LIST_DIR_DEFAULT_DEPTH = 3
+LIST_DIR_HARD_MAX_DEPTH = 6
+LIST_DIR_DEFAULT_MAX_ENTRIES = 200
+LIST_DIR_HARD_MAX_ENTRIES = 1000
+
+# inventory 节点关注的是源代码结构，构建产物 / 依赖目录 / 缓存对它们没意义且会爆量
+_CODE_INDEX_SKIP_DIRS = frozenset({
+    ".git", ".hg", ".svn",
+    "vendor", "node_modules",
+    "dist", "build", "out",
+    "__pycache__", ".venv", "venv", ".tox",
+    ".idea", ".vscode",
+})
 
 
 @dataclass
@@ -642,6 +663,185 @@ def _execute_mysql_query(query: str, database_url: str) -> str:
     return _format_db_rows("mysql", query, columns, list(rows))
 
 
+def _resolve_code_index_root(raw_path: str, ctx: ToolContext) -> Path:
+    """
+    解析 grep_symbol / list_dir_summary 的根路径
+
+    省略 path 时默认 target_dir，与 inventory 节点"先扫存量"的语义一致；显式传入时
+    强制相对，并要求落在 workspace_root 或 target_dir 内。
+    """
+    if raw_path in (None, ""):
+        root = Path(ctx.target_dir).resolve()
+    else:
+        requested = Path(raw_path)
+        if requested.is_absolute():
+            raise ValueError("Absolute paths are not allowed")
+        root = (Path(ctx.workspace_root) / requested).resolve(strict=False)
+
+    if not root.exists():
+        raise ValueError(f"Path does not exist: {root}")
+    if not root.is_dir():
+        raise ValueError(f"Path is not a directory: {root}")
+
+    _ensure_read_allowed(root, ctx)
+    return root
+
+
+def _iter_code_index_files(root: Path, file_glob: Optional[str]) -> Iterable[Path]:
+    """
+    在 root 下按 _CODE_INDEX_SKIP_DIRS 跳过噪音目录，按 file_glob 过滤文件名
+
+    @params:
+        root: 已校验过的搜索根
+        file_glob: 可选 basename 通配，例如 '*.go'
+
+    @return:
+        生成器，yield 命中条件的文件绝对路径
+    """
+    for dirpath, dirnames, filenames in os.walk(root):
+        # 原地修剪 dirnames 以阻止 os.walk 进入噪音目录
+        dirnames[:] = [d for d in dirnames if d not in _CODE_INDEX_SKIP_DIRS]
+        for name in filenames:
+            if file_glob and not fnmatch.fnmatch(name, file_glob):
+                continue
+            yield Path(dirpath) / name
+
+
+def _execute_grep_symbol(args: dict, ctx: ToolContext) -> str:
+    """
+    在 workspace_root / target_dir 受限范围内做正则搜索
+
+    设计目标是"广而浅"：每命中即记录 file:line:snippet，超过 max_results 即停。
+    跳过二进制 / 大文件 / 噪音目录，避免一次工具调用塞爆 LLM 上下文。
+    """
+    pattern = args.get("pattern", "")
+    if not pattern:
+        raise ValueError("Missing required argument: pattern")
+    try:
+        regex = re.compile(pattern)
+    except re.error as exc:
+        raise ValueError(f"Invalid regex pattern: {exc}")
+
+    raw_max = args.get("max_results")
+    if raw_max in (None, ""):
+        max_results = GREP_DEFAULT_MAX_RESULTS
+    else:
+        max_results = max(1, min(int(raw_max), GREP_HARD_MAX_RESULTS))
+
+    file_glob = args.get("file_glob") or None
+    root = _resolve_code_index_root(args.get("path", ""), ctx)
+    workspace_root = Path(ctx.workspace_root).resolve()
+
+    matches: list[str] = []
+    files_scanned = 0
+    for file_path in _iter_code_index_files(root, file_glob):
+        if len(matches) >= max_results:
+            break
+        try:
+            stat = file_path.stat()
+        except OSError:
+            continue
+        if stat.st_size > GREP_MAX_FILE_BYTES:
+            continue
+        try:
+            text = file_path.read_text(encoding="utf-8", errors="ignore")
+        except (OSError, UnicodeDecodeError):
+            continue
+        files_scanned += 1
+        try:
+            rel = file_path.relative_to(workspace_root)
+            display_path = str(rel)
+        except ValueError:
+            display_path = str(file_path)
+        for lineno, line in enumerate(text.splitlines(), start=1):
+            if regex.search(line):
+                snippet = line.strip()
+                if len(snippet) > GREP_MAX_LINE_SNIPPET:
+                    snippet = snippet[:GREP_MAX_LINE_SNIPPET] + "..."
+                matches.append(f"{display_path}:{lineno}: {snippet}")
+                if len(matches) >= max_results:
+                    break
+
+    header = (
+        f"PATTERN: {pattern}\n"
+        f"ROOT: {root}\n"
+        f"FILES_SCANNED: {files_scanned}\n"
+        f"MATCHES: {len(matches)} (max={max_results})\n"
+    )
+    if not matches:
+        return header + "\n<no matches>"
+    return header + "\n" + "\n".join(matches)
+
+
+def _execute_list_dir_summary(args: dict, ctx: ToolContext) -> str:
+    """
+    生成 root 下深度受限的目录树摘要：文件附带字节大小，但不读内容
+
+    给 inventory 节点用——快速建立"项目长什么样"的认知，再决定哪些文件值得 file_editor 深读。
+    """
+    raw_depth = args.get("depth")
+    if raw_depth in (None, ""):
+        depth = LIST_DIR_DEFAULT_DEPTH
+    else:
+        depth = max(1, min(int(raw_depth), LIST_DIR_HARD_MAX_DEPTH))
+
+    raw_max = args.get("max_entries")
+    if raw_max in (None, ""):
+        max_entries = LIST_DIR_DEFAULT_MAX_ENTRIES
+    else:
+        max_entries = max(1, min(int(raw_max), LIST_DIR_HARD_MAX_ENTRIES))
+
+    root = _resolve_code_index_root(args.get("path", ""), ctx)
+
+    lines: list[str] = []
+    truncated = False
+
+    def _walk(current: Path, level: int) -> None:
+        nonlocal truncated
+        if truncated:
+            return
+        try:
+            entries = sorted(
+                current.iterdir(),
+                key=lambda p: (p.is_file(), p.name.lower()),
+            )
+        except OSError:
+            return
+        for entry in entries:
+            if truncated:
+                return
+            if entry.name in _CODE_INDEX_SKIP_DIRS:
+                continue
+            indent = "  " * (level - 1)
+            if entry.is_dir():
+                lines.append(f"{indent}{entry.name}/")
+                if len(lines) >= max_entries:
+                    truncated = True
+                    return
+                if level < depth:
+                    _walk(entry, level + 1)
+            else:
+                try:
+                    size = entry.stat().st_size
+                except OSError:
+                    size = 0
+                lines.append(f"{indent}{entry.name}  ({size}B)")
+                if len(lines) >= max_entries:
+                    truncated = True
+                    return
+
+    _walk(root, level=1)
+
+    header = (
+        f"ROOT: {root}\n"
+        f"DEPTH: {depth}\n"
+        f"ENTRIES: {len(lines)}{' (truncated)' if truncated else ''}\n"
+    )
+    if not lines:
+        return header + "\n<empty>"
+    return header + "\n" + "\n".join(lines)
+
+
 def _execute_inspect_db(query: str, ctx: ToolContext) -> str:
     """
     执行真实数据库结构查询
@@ -728,6 +928,18 @@ def execute(tool_name: str, args: dict, ctx: ToolContext) -> str:
                     result_text = f"Unsupported file_editor action: {action}"
             except Exception as e:
                 result_text = f"File operation failed: {str(e)}"
+        elif tool_name == "grep_symbol":
+            # 轻量代码索引：inventory 节点专用，避免靠 file_editor.read 整文件爆上下文
+            try:
+                result_text = _execute_grep_symbol(args, ctx)
+            except Exception as e:
+                result_text = f"Code index failed: {str(e)}"
+        elif tool_name == "list_dir_summary":
+            # 同样服务 inventory：只出文件大小，不读内容
+            try:
+                result_text = _execute_list_dir_summary(args, ctx)
+            except Exception as e:
+                result_text = f"Code index failed: {str(e)}"
         elif tool_name == "run_bash":
             # run_bash 负责测试、构建等命令执行，并补充 cwd 约束、危险命令拦截、真实超时终止和输出截断
             try:
@@ -755,6 +967,7 @@ def _looks_like_tool_failure(result_text: str) -> bool:
         "Inspect DB failed:",
         "File operation failed:",
         "Command execution failed:",
+        "Code index failed:",
         "Unknown tool:",
         "Unsupported file_editor action:",
     )

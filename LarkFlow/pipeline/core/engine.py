@@ -165,28 +165,33 @@ _SCAFFOLD_MARKER = "go.mod"
 _SCAFFOLD_TEMPLATE_RELPATH = os.path.join("templates", "kratos-skeleton")
 
 
-def _ensure_target_scaffold(workspace_root: str, target_dir: str) -> None:
-    """将 Kratos 骨架模板复制到 target_dir，作为每个新需求的只读起点
+def _ensure_target_scaffold(
+    workspace_root: str, target_dir: str
+) -> Literal["greenfield", "brownfield"]:
+    """将 Kratos 骨架模板复制到 target_dir，并返回本次需求面对的 repo 模式
 
     @params:
         workspace_root: LarkFlow/ 目录的绝对路径，内部有 templates/kratos-skeleton/
         target_dir: 本次需求产物目录的绝对路径，一般是 <repo>/demo-app
 
     @return:
-        无返回值；以下情况抛异常：
+        - "greenfield": 本次调用刚刚物化骨架（target_dir 之前不存在或为空）
+        - "brownfield": target_dir 已经有 `go.mod`，存量代码保留不动
+
+        以下情况抛异常：
           - 模板目录不存在
           - target_dir 已有文件但缺失 `go.mod`（未知状态，拒绝覆盖）
 
     @notes:
-        - 幂等：target_dir 下有 `go.mod` 时直接返回，不做任何覆盖，支持 pipeline 重启后
-          的 resume 流程。
+        - 幂等：target_dir 下有 `go.mod` 时直接返回 "brownfield"，不做任何覆盖；
+          支持 pipeline 重启后的 resume 流程，也是后续 inventory 节点的开关来源。
         - 空目录安全：target_dir 存在但为空时，删除后再 copytree，避免 shutil 报错。
     """
     template_dir = os.path.join(workspace_root, _SCAFFOLD_TEMPLATE_RELPATH)
     marker = os.path.join(target_dir, _SCAFFOLD_MARKER)
 
     if os.path.isfile(marker):
-        return
+        return "brownfield"
 
     if not os.path.isdir(template_dir):
         raise FileNotFoundError(
@@ -202,6 +207,7 @@ def _ensure_target_scaffold(workspace_root: str, target_dir: str) -> None:
         os.rmdir(target_dir)
 
     shutil.copytree(template_dir, target_dir)
+    return "greenfield"
 
 
 def _resolve_workspace_and_target(session_target: str = None) -> tuple:
@@ -216,6 +222,85 @@ def _resolve_workspace_and_target(session_target: str = None) -> tuple:
     workspace_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
     target_dir = session_target or os.path.abspath(os.path.join(workspace_root, "..", "demo-app"))
     return workspace_root, target_dir
+
+
+def _extract_code_map_from_history(session: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """从 session.history 最后一条 assistant 消息里抽取 ```json 围栏块解析为 code_map。
+
+    Phase 0 inventory 的 prompt 强约束最终消息只有一个 ```json 块；这里照协议解析。
+    解析失败 / 没找到 / 不是 dict → 返回 None，由调用方决定降级策略。
+    """
+    import json
+    import re as _re
+
+    history = session.get("history") or []
+    last_assistant_text = None
+    for msg in reversed(history):
+        if msg.get("role") == "assistant":
+            content = msg.get("content")
+            if isinstance(content, str):
+                last_assistant_text = content
+            elif isinstance(content, list):
+                # OpenAI / Anthropic 的 content blocks 形态
+                texts = [
+                    blk.get("text", "")
+                    for blk in content
+                    if isinstance(blk, dict) and blk.get("type") in ("text", "output_text")
+                ]
+                last_assistant_text = "\n".join(t for t in texts if t)
+            break
+    if not last_assistant_text:
+        return None
+
+    matches = _re.findall(r"```json\s*\n(.*?)\n```", last_assistant_text, flags=_re.DOTALL)
+    if not matches:
+        return None
+    try:
+        parsed = json.loads(matches[-1])
+    except (ValueError, json.JSONDecodeError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _render_code_map_block(code_map: Optional[Dict[str, Any]]) -> str:
+    """把 code_map 渲染成 system prompt 顶部可注入的 <code-map> 块。
+
+    code_map 缺失 / 解析失败时返回空串，调用方按"无 brownfield 上下文"处理。
+    """
+    import json
+
+    if not code_map:
+        return ""
+    try:
+        payload = json.dumps(code_map, ensure_ascii=False, indent=2)
+    except (TypeError, ValueError):
+        return ""
+    return (
+        "<code-map>\n"
+        "Phase 0 Inventory 已扫描 ../demo-app 并产出以下结构化盘点（请直接引用其中的 "
+        "existing_domains / existing_apis / existing_tables / naming_conventions / "
+        "recommended_touch_points，不要重复扫描）。\n"
+        f"{payload}\n"
+        "</code-map>\n\n"
+    )
+
+
+def detect_repo_mode(target_dir: Optional[str] = None) -> Literal["greenfield", "brownfield"]:
+    """无副作用地探测 demo-app 的 repo 模式（Step 6 创建 pipeline 时使用）
+
+    与 `_ensure_target_scaffold` 不同，本函数不复制骨架、不动文件系统，仅根据
+    target_dir 下是否存在 `go.mod` 标记判断。create_pipeline 阶段 demo-app 还没物化，
+    所以"目录不存在"也算 greenfield。
+
+    @params:
+        target_dir: 显式产物目录；省略时复用 _resolve_workspace_and_target 默认 ../demo-app
+
+    @return:
+        "brownfield" 当 target_dir 已经有 go.mod；其他情况返回 "greenfield"
+    """
+    _, resolved = _resolve_workspace_and_target(target_dir)
+    marker = os.path.join(resolved, _SCAFFOLD_MARKER)
+    return "brownfield" if os.path.isfile(marker) else "greenfield"
 
 
 def _resolve_provider_for_new_demand(demand_id: str) -> str:
@@ -554,6 +639,7 @@ def run_agent_loop(demand_id: str, system_prompt: str) -> bool:
 # 3. 状态机：阶段流转控制 (A2)
 # ==========================================
 # 合法阶段常量；session["phase"] 仅能取这些值
+PHASE_INVENTORY = "inventory"  # brownfield-only 前置阶段
 PHASE_DESIGN = "design"
 PHASE_DESIGN_PENDING = "design_pending"  # 审批挂起态
 PHASE_CODING = "coding"
@@ -1033,13 +1119,14 @@ def _parse_review_verdict(
     return "regress", findings
 
 
-def _try_regress(demand_id: str, findings: str, logger) -> bool:
+def _try_regress(demand_id: str, findings: str, logger) -> Optional[str]:
     """Review 结论为 REGRESS 时尝试回退到 on_failure.to 指定的阶段。
 
     - D6：按 ctl.template 加载对应 DAG（default/feature/bugfix/refactor 等模板的 on_failure 各异）
-    - 累计 regression.attempts，达 max_attempts 返回 False（上游置 failed）
+    - 累计 regression.attempts，达 max_attempts 返回 None（上游置 failed）
     - 否则：递增计数、history 追加、以 user 消息形式注入 findings 作为下轮 Coding 的 kickoff
-    - 返回 True 表示已调度回归，上游应把 current 切换到 policy.to
+    - Step 8：返回值改为 Optional[str]——None=不回归 / 回归目标 phase 字符串。
+      上游不再硬编码 PHASE_CODING，让 brownfield 模板的 to: inventory 真正生效。
     """
     from pipeline.core import engine_control
     from pipeline.dag.schema import default_dag, load_template
@@ -1056,14 +1143,14 @@ def _try_regress(demand_id: str, findings: str, logger) -> bool:
             dag = default_dag()
     review_node = dag.nodes.get(Stage.REVIEW)
     if review_node is None:
-        return False
+        return None
     policy = review_node.on_failure
     if policy is None or policy.action != "regress" or policy.to is None:
-        return False
+        return None
 
     session = _load_session(demand_id)
     if session is None:
-        return False
+        return None
 
     reg = session.setdefault("regression", {"attempts": 0, "history": []})
     if reg.get("attempts", 0) >= policy.max_attempts:
@@ -1076,7 +1163,7 @@ def _try_regress(demand_id: str, findings: str, logger) -> bool:
                 "max": policy.max_attempts,
             },
         )
-        return False
+        return None
 
     reg["attempts"] = reg.get("attempts", 0) + 1
     reg.setdefault("history", []).append({
@@ -1106,7 +1193,7 @@ def _try_regress(demand_id: str, findings: str, logger) -> bool:
             "max": policy.max_attempts,
         },
     )
-    return True
+    return policy.to.value
 
 
 # ==========================================
@@ -1463,6 +1550,14 @@ def _run_phase(demand_id: str, phase: str) -> bool:
             # <skill-routing> 块注入到 system prompt 顶部，Coding/Reviewing 两阶段按此清单读 skills。
             if phase in (PHASE_CODING, PHASE_REVIEWING):
                 system_prompt = _augment_with_skill_routing(demand_id, system_prompt)
+            # Step 8：brownfield 路径下，Phase 1 / Phase 4 Agent 都需要看到 code_map
+            # （Phase 1 据此写 Existing Surface Touched，Phase 4 据此做预飞校验）。
+            # 不存在 code_map 时返回空串，等同于无注入。
+            if phase in (PHASE_DESIGN, PHASE_REVIEWING):
+                code_map = (session or {}).get("artifacts", {}).get("code_map")
+                code_map_block = _render_code_map_block(code_map)
+                if code_map_block:
+                    system_prompt = code_map_block + system_prompt
             completed = run_agent_loop(demand_id, system_prompt)
             span.set_attribute("phase.completed", completed)
             if completed:
@@ -1487,6 +1582,81 @@ def _run_phase(demand_id: str, phase: str) -> bool:
         )
         _mark_failed(demand_id, phase, str(exc))
         return False
+
+
+def _persist_design_pending_if_any(demand_id: str, logger) -> None:
+    """Step 8：design 阶段从 brownfield REGRESS 重入后挂在 ask_human_approval 上的统一收尾。
+
+    复用 start_new_demand 里 design 挂起后的状态回写逻辑，保证 brownfield 二次回归
+    后的飞书卡片 / Bitable 状态 / checkpoint 与首次设计审批走同一路径。
+    """
+    latest = _load_session(demand_id)
+    if not latest or not latest.get("pending_approval"):
+        return
+    latest["phase"] = PHASE_DESIGN_PENDING
+    _save_session(demand_id, latest)
+    _sync_bitable_status(demand_id, "设计审批中")
+    _seed_pending_checkpoint(demand_id, CheckpointName.DESIGN)
+    _sync_status_to_bitable(demand_id, PHASE_DESIGN, StageStatus.PENDING, latest)
+    logger.info(
+        "design pending after brownfield regress",
+        extra={"event": "demand_suspended", "phase": PHASE_DESIGN_PENDING},
+    )
+
+
+def _should_run_inventory(demand_id: str, repo_mode: str) -> bool:
+    """判断本次需求启动是否应进入 brownfield Inventory 前置阶段。
+
+    条件：repo_mode == "brownfield" 且 ctl.template 选了 brownfield 模板（DAG 入口为
+    inventory）。任一不满足都跳过——例如 caller 显式传 feature 想强制 0-1 思路。
+    """
+    if repo_mode != "brownfield":
+        return False
+    ctl = get_pipeline_control(demand_id)
+    if ctl is None:
+        return False
+    try:
+        from pipeline.dag.schema import load_template
+        dag = load_template(ctl.template)
+    except (ValueError, FileNotFoundError):
+        return False
+    return dag.entry == Stage.INVENTORY
+
+
+def _run_inventory_phase(demand_id: str) -> bool:
+    """跑 Phase 0 Inventory：扫存量代码，把 LLM 输出的 code_map JSON 落到 session.artifacts。
+
+    返回 True 表示 inventory 成功产出（即便 code_map 解析失败也算 success——降级让 design
+    自己扫——避免 brownfield 整体卡死）。
+    """
+    if _advance_to_phase(demand_id, PHASE_INVENTORY) is None:
+        return False
+    completed = _run_phase(demand_id, PHASE_INVENTORY)
+    session = _load_session(demand_id)
+    if session is None:
+        return completed
+    code_map = _extract_code_map_from_history(session)
+    artifacts = session.setdefault("artifacts", {})
+    if code_map is not None:
+        artifacts["code_map"] = code_map
+        get_logger(demand_id, PHASE_INVENTORY).info(
+            "code_map captured",
+            extra={
+                "event": "code_map_captured",
+                "domains": len(code_map.get("existing_domains") or []),
+                "apis": len(code_map.get("existing_apis") or []),
+                "tables": len(code_map.get("existing_tables") or []),
+            },
+        )
+    else:
+        # 解析失败：写一个空骨架占位，design 阶段读到会按"无 code_map"降级处理
+        artifacts.setdefault("code_map", None)
+        get_logger(demand_id, PHASE_INVENTORY).warning(
+            "code_map parse failed; design will fall back to ad-hoc scan",
+            extra={"event": "code_map_parse_failed"},
+        )
+    _save_session(demand_id, session)
+    return completed
 
 
 def start_new_demand(
@@ -1514,13 +1684,19 @@ def start_new_demand(
             extra={"event": "demand_started", "phase": PHASE_DESIGN},
         )
 
-        # 将 Kratos 骨架模板物化为本次需求的产物目录，Phase 2 Agent 会在骨架基础上追加业务代码
+        # 将 Kratos 骨架模板物化为本次需求的产物目录，Phase 2 Agent 会在骨架基础上追加业务代码；
+        # 返回 repo_mode，下游 DAG 选择和 prompt 分支据此判定 0-1 还是存量改造。
         workspace_root, target_dir = _resolve_workspace_and_target()
-        _ensure_target_scaffold(workspace_root, target_dir)
+        repo_mode = _ensure_target_scaffold(workspace_root, target_dir)
         span.set_attribute("target_dir", target_dir)
+        span.set_attribute("repo_mode", repo_mode)
         logger.info(
             "scaffold ready",
-            extra={"event": "scaffold_ready", "phase": PHASE_DESIGN},
+            extra={
+                "event": "scaffold_ready",
+                "phase": PHASE_DESIGN,
+                "repo_mode": repo_mode,
+            },
         )
 
         provider = _resolve_provider_for_new_demand(demand_id)
@@ -1533,10 +1709,23 @@ def start_new_demand(
         session["demand_id"] = demand_id
         session["target_dir"] = target_dir
         session["workspace_root"] = workspace_root
+        session["repo_mode"] = repo_mode
         session["phase"] = PHASE_DESIGN
         if record_id:
             session["record_id"] = record_id
         _save_session(demand_id, session)
+
+        # Step 8：brownfield 模板先跑 Phase 0 Inventory，把 code_map 落到
+        # session.artifacts 后再进 design；greenfield 不执行这一步。
+        if _should_run_inventory(demand_id, repo_mode):
+            inventory_completed = _run_inventory_phase(demand_id)
+            if not inventory_completed:
+                # inventory 阶段挂起 / 异常都视为失败：不强行降级到无 code_map design
+                logger.warning(
+                    "inventory phase did not complete; aborting demand start",
+                    extra={"event": "inventory_aborted"},
+                )
+                return
 
         # 进入 Phase 1: Design
         completed = _run_phase(demand_id, PHASE_DESIGN)
@@ -1587,15 +1776,38 @@ def resume_from_phase(demand_id: str, phase: str) -> None:
                 # agent 挂起、超轮数或异常。_run_phase 已按需打日志/置 failed
                 return
 
-            # D5：Review 结束后解析 verdict；REGRESS 且未超上限 → 回退到 Coding
+            # D5：Review 结束后解析 verdict；REGRESS 且未超上限 → 按 DAG 模板的 on_failure.to 回退
             if current == PHASE_REVIEWING:
                 session = _load_session(demand_id)
                 if session is not None:
                     verdict, findings = _parse_review_verdict(session)
                     if verdict == "regress":
-                        if _try_regress(demand_id, findings, logger):
-                            current = PHASE_CODING
-                            continue
+                        regress_target = _try_regress(demand_id, findings, logger)
+                        if regress_target is not None:
+                            # Step 8：尊重 DAG 模板 on_failure.to。
+                            # - feature/bugfix/default → coding：原行为
+                            # - brownfield → inventory：重新扫存量 + 重做 design + 触发 HITL → 挂起返回
+                            if regress_target == PHASE_INVENTORY:
+                                _run_inventory_phase(demand_id)
+                                # 重做 design：再次走 Phase 1 的 ask_human_approval HITL；
+                                # _run_phase 内部会在挂起时返回 False，外层挂起逻辑由
+                                # start_new_demand 的对偶处理。这里直接返回，等 HITL 唤醒。
+                                if _advance_to_phase(demand_id, PHASE_DESIGN) is None:
+                                    return
+                                _run_phase(demand_id, PHASE_DESIGN)
+                                # design 阶段必然 HITL 挂起或失败；任一情况都不应继续往后跑
+                                _persist_design_pending_if_any(demand_id, logger)
+                                return
+                            if regress_target in (PHASE_CODING, PHASE_TESTING, PHASE_REVIEWING):
+                                current = regress_target
+                                continue
+                            # 兜底：未知/未支持的 to 直接置 failed，避免静默漂移
+                            _mark_failed(
+                                demand_id,
+                                PHASE_REVIEWING,
+                                f"regression target {regress_target!r} not supported by engine loop",
+                            )
+                            return
                         # 上限耗尽：置 failed，让外部接管（HITL 或人工介入）
                         _mark_failed(
                             demand_id,

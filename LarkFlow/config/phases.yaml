@@ -13,6 +13,14 @@
 # banner_index / banner_label 只用于终端可读 banner，不影响结构化日志。
 
 phases:
+  inventory:
+    # brownfield-only 前置阶段：扫描 demo-app 存量代码，产出 code_map JSON
+    # 供 design 阶段消费。greenfield 模板不会进入这个 phase。
+    prompt: phase0_inventory.md
+    kickoff: "请扫描 ../demo-app 下的存量代码，按 phase0_inventory.md 的 schema 输出一个 ```json 块作为最终消息。"
+    banner_index: 0
+    banner_label: Inventory 存量盘点
+
   design:
     prompt: phase1_design.md
     kickoff: null
