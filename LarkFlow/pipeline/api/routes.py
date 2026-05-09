@@ -383,15 +383,26 @@ def create_app() -> FastAPI:
         for row in list_bitable_records():
             demand_id = row.get("demand_id") or row.get("record_id") or ""
             runtime = runtime_states.get(demand_id)
+            mapped_status, mapped_stage = _map_bitable_status(row.get("status") or "")
             if runtime:
                 # 运行时状态优先于 Base 文本状态，避免列表页看到过期的中文列值。
+                effective_status = runtime.status
+                effective_stage = runtime.current_stage
+                # 但如果用户在 Base 里手工改成了明确终态，就以 Base 为准，避免列表卡在旧 runtime 状态
+                if mapped_status in {
+                    PipelineStatus.SUCCEEDED,
+                    PipelineStatus.STOPPED,
+                    PipelineStatus.REJECTED,
+                }:
+                    effective_status = mapped_status
+                    effective_stage = mapped_stage
                 items.append(
                     DemandListItem(
                         id=runtime.id,
                         record_id=row.get("record_id") or runtime.id,
                         requirement=row.get("requirement") or runtime.requirement,
-                        status=runtime.status,
-                        current_stage=runtime.current_stage,
+                        status=effective_status,
+                        current_stage=effective_stage,
                         provider=runtime.provider,
                         template=runtime.template,
                         updated_at=runtime.updated_at,
@@ -402,7 +413,6 @@ def create_app() -> FastAPI:
                 )
                 continue
 
-            mapped_status, mapped_stage = _map_bitable_status(row.get("status") or "")
             items.append(
                 DemandListItem(
                     id=demand_id,
@@ -432,7 +442,53 @@ def create_app() -> FastAPI:
         @return:
             返回当前 PipelineState
         """
-        return _guard(lambda: engine.get_state(pipeline_id))
+        state = _guard(lambda: engine.get_state(pipeline_id))
+
+        row_doc_url = None
+        row_tech_doc_url = None
+        row_requirement = None
+        row_status = ""
+        for row in list_bitable_records():
+            row_id = str(row.get("demand_id") or row.get("record_id") or "")
+            if row_id != pipeline_id:
+                continue
+            row_doc_url = row.get("doc_url") or None
+            row_tech_doc_url = row.get("tech_doc_url") or None
+            row_requirement = row.get("requirement") or None
+            row_status = row.get("status") or ""
+            break
+
+        mapped_status, mapped_stage = _map_bitable_status(row_status)
+        next_status = state.status
+        next_stage = state.current_stage
+        # 详情页和列表页保持同一套覆盖策略，避免两处看到不同终态
+        if mapped_status in {
+            PipelineStatus.SUCCEEDED,
+            PipelineStatus.STOPPED,
+            PipelineStatus.REJECTED,
+        }:
+            next_status = mapped_status
+            next_stage = mapped_stage
+
+        if row_doc_url or row_tech_doc_url or (not state.requirement and row_requirement):
+            state = state.model_copy(
+                update={
+                    "requirement": state.requirement or row_requirement or "",
+                    "doc_url": row_doc_url,
+                    "tech_doc_url": row_tech_doc_url,
+                    "status": next_status,
+                    "current_stage": next_stage,
+                }
+            )
+        elif next_status != state.status or next_stage != state.current_stage:
+            state = state.model_copy(
+                update={
+                    "status": next_status,
+                    "current_stage": next_stage,
+                }
+            )
+
+        return state
 
     # ========== Artifact ==========
     @app.get(

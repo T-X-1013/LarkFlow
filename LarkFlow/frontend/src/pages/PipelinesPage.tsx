@@ -2,7 +2,7 @@ import type { FormEvent } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
-import { createPipelineFromDoc, listDemands } from "../lib/api";
+import { createPipelineFromDoc, extractRequestErrorMessage, listDemands } from "../lib/api";
 import type { DemandListItem, PipelineStatus } from "../types/api";
 
 const POLL_INTERVAL_MS = 3000;
@@ -75,10 +75,13 @@ export function PipelinesPage() {
 
   const filteredPipelines = useMemo(() => {
     return pipelines.filter((pipeline) => {
+      // 当前列表页搜索只匹配页面已拿到的结构化字段，不会读取飞书文档正文内容。
       const matchesQuery =
         !query ||
         pipeline.id.toLowerCase().includes(query.toLowerCase()) ||
-        pipeline.requirement.toLowerCase().includes(query.toLowerCase());
+        pipeline.requirement.toLowerCase().includes(query.toLowerCase()) ||
+        (pipeline.doc_url ?? "").toLowerCase().includes(query.toLowerCase()) ||
+        (pipeline.tech_doc_url ?? "").toLowerCase().includes(query.toLowerCase());
       const matchesStatus = statusFilter === "all" || pipeline.status === statusFilter;
       const matchesProvider =
         providerFilter === "all" || (pipeline.provider ?? "unknown") === providerFilter;
@@ -95,13 +98,14 @@ export function PipelinesPage() {
 
   async function handleCreate(event: FormEvent) {
     event.preventDefault();
-    const created = await createPipelineFromDoc(docUrl);
-    setCreatedId(created.id);
-    setDocUrl("");
     try {
+      const created = await createPipelineFromDoc(docUrl);
+      setCreatedId(created.id);
+      setDocUrl("");
       setPipelines(await listDemands());
-    } catch {
-      // 下次轮询会兜底刷新
+    } catch (err) {
+      // 创建失败需要直接打断用户，而不是把错误静态堆在列表页里。
+      window.alert(`创建失败\n\n${extractRequestErrorMessage(err)}`);
     }
   }
 
@@ -163,7 +167,6 @@ export function PipelinesPage() {
           无法加载 Pipeline 列表：{loadError}
         </p>
       ) : null}
-
       <div className="metric-grid">
         <div className="stat-card">
             <p className="eyebrow">总量</p>
@@ -247,7 +250,7 @@ export function PipelinesPage() {
         <div className="filter-grid">
           <input
             className="input"
-            placeholder="按需求 ID、文档链接或需求内容搜索"
+            placeholder="按需求 ID、需求文档链接或技术方案链接搜索"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
           />

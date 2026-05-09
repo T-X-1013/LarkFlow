@@ -6,6 +6,7 @@ import type { DemandListItem, MetricsResponse } from "../types/api";
 export function DashboardPage() {
   const [demands, setDemands] = useState<DemandListItem[]>([]);
   const [metrics, setMetrics] = useState<MetricsResponse>({ pipelines: [] });
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -18,10 +19,10 @@ export function DashboardPage() {
         if (cancelled) return;
         setDemands(nextDemands);
         setMetrics(nextMetrics);
-      } catch {
+        setLoadError(null);
+      } catch (err) {
         if (cancelled) return;
-        setDemands([]);
-        setMetrics({ pipelines: [] });
+        setLoadError((err as Error).message);
       }
     }
     loadDashboardData();
@@ -149,6 +150,12 @@ export function DashboardPage() {
           </aside>
         </div>
       </div>
+
+      {loadError ? (
+        <p className="flash-note" style={{ color: "crimson", borderColor: "crimson" }}>
+          仪表盘刷新失败，当前展示最近一次成功加载的数据：{loadError}
+        </p>
+      ) : null}
 
       <div className="metric-grid">
         <div className="stat-card">

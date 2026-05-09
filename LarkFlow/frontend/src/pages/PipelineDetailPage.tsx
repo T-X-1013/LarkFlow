@@ -15,6 +15,14 @@ import {
 } from "../lib/api";
 import type { ArtifactResponse, CheckpointName, PipelineState, Stage } from "../types/api";
 
+const POLL_INTERVAL_MS = 3000;
+
+function reviewStatusBadgeClass(status: string) {
+  if (status === "done" || status === "success" || status === "succeeded") return "badge badge--running";
+  if (status === "pending" || status === "queued" || status === "running") return "badge badge--pending";
+  return "badge badge--failed";
+}
+
 export function PipelineDetailPage() {
   const { pipelineId = "" } = useParams();
   const [pipeline, setPipeline] = useState<PipelineState | null>(null);
@@ -23,7 +31,25 @@ export function PipelineDetailPage() {
   const [artifact, setArtifact] = useState<ArtifactResponse | null>(null);
 
   useEffect(() => {
-    getPipeline(pipelineId).then(setPipeline).catch(() => setPipeline(null));
+    let cancelled = false;
+
+    async function loadPipeline() {
+      try {
+        const next = await getPipeline(pipelineId);
+        if (cancelled) return;
+        setPipeline(next);
+      } catch {
+        if (cancelled) return;
+        setPipeline(null);
+      }
+    }
+
+    loadPipeline();
+    const timer = window.setInterval(loadPipeline, POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
   }, [pipelineId]);
 
   useEffect(() => {
@@ -36,10 +62,27 @@ export function PipelineDetailPage() {
 
   useEffect(() => {
     if (!pipeline) return;
-    getStageArtifact(pipeline.id, selectedStage)
-      .then(setArtifact)
-      .catch(() => setArtifact(null));
-  }, [pipeline, selectedStage]);
+    let cancelled = false;
+    const pipelineRuntimeId = pipeline.id;
+
+    async function loadArtifact() {
+      try {
+        const next = await getStageArtifact(pipelineRuntimeId, selectedStage);
+        if (cancelled) return;
+        setArtifact(next);
+      } catch {
+        if (cancelled) return;
+        setArtifact(null);
+      }
+    }
+
+    loadArtifact();
+    const timer = window.setInterval(loadArtifact, POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [pipeline?.id, selectedStage]);
 
   async function runAction(action: "start" | "pause" | "resume" | "stop") {
     if (!pipeline) return;
@@ -117,6 +160,14 @@ export function PipelineDetailPage() {
   const totalDuration = stageRows.reduce((sum, stage) => sum + (stage?.duration_ms ?? 0), 0);
   const reviewSubroles = pipeline?.review_multi?.subroles ?? [];
   const updatedAt = new Date(pipeline?.updated_at ? pipeline.updated_at * 1000 : Date.now()).toLocaleString();
+  // 真实运行里 detail.requirement 可能为空；优先用补齐后的文档链接兜底，避免详情页出现空白。
+  const requirementDisplay = pipeline?.requirement || pipeline?.doc_url || "—";
+  const reviewCompletedCount = reviewSubroles.filter((role) => !role.error && role.status === "done").length;
+  const reviewErrorCount = reviewSubroles.filter((role) => Boolean(role.error)).length;
+  const reviewInputTokens = reviewSubroles.reduce((sum, role) => sum + role.tokens_input, 0);
+  const reviewOutputTokens = reviewSubroles.reduce((sum, role) => sum + role.tokens_output, 0);
+  const reviewDuration = reviewSubroles.reduce((sum, role) => sum + role.duration_ms, 0);
+  const reviewAggregatorArtifact = pipeline?.stages.review?.artifact_path ?? null;
 
   if (!pipeline) {
     return (
@@ -218,8 +269,28 @@ export function PipelineDetailPage() {
             <tbody>
               <tr>
                 <th>需求描述</th>
-                <td>{pipeline.requirement}</td>
+                <td>{requirementDisplay}</td>
               </tr>
+              {pipeline.doc_url ? (
+                <tr>
+                  <th>需求文档</th>
+                  <td>
+                    <a className="pipeline-card__link" href={pipeline.doc_url} target="_blank" rel="noreferrer">
+                      {pipeline.doc_url}
+                    </a>
+                  </td>
+                </tr>
+              ) : null}
+              {pipeline.tech_doc_url ? (
+                <tr>
+                  <th>技术方案</th>
+                  <td>
+                    <a className="pipeline-card__link" href={pipeline.tech_doc_url} target="_blank" rel="noreferrer">
+                      {pipeline.tech_doc_url}
+                    </a>
+                  </td>
+                </tr>
+              ) : null}
               <tr>
                 <th>当前阶段</th>
                 <td>{pipeline.current_stage ?? "n/a"}</td>
@@ -344,8 +415,53 @@ export function PipelineDetailPage() {
             <div>
               <p className="eyebrow">Review Roles</p>
               <h3>多视角 Review</h3>
+              <p className="muted">
+                当前模板会把安全、测试覆盖、分层约束等 reviewer 并行执行，再由主 review 产物做统一归纳。
+              </p>
             </div>
             <span className="badge badge--pending">{reviewSubroles.length} roles</span>
+          </div>
+          <div className="metric-grid" style={{ marginBottom: 16 }}>
+            <div className="stat-card">
+              <p className="eyebrow">Role Status</p>
+              <div className="stat-card__value stat-card__value--small">
+                {reviewCompletedCount}/{reviewSubroles.length}
+              </div>
+              <p className="muted">已完成 reviewer 数。</p>
+            </div>
+            <div className="stat-card">
+              <p className="eyebrow">Role Errors</p>
+              <div className="stat-card__value stat-card__value--small">{reviewErrorCount}</div>
+              <p className="muted">需要回看的 reviewer 异常数。</p>
+            </div>
+            <div className="stat-card">
+              <p className="eyebrow">Role Tokens</p>
+              <div className="stat-card__value stat-card__value--small">
+                {reviewInputTokens}/{reviewOutputTokens}
+              </div>
+              <p className="muted">多视角 review 累积 token。</p>
+            </div>
+            <div className="stat-card">
+              <p className="eyebrow">Role Duration</p>
+              <div className="stat-card__value stat-card__value--small">{reviewDuration}ms</div>
+              <p className="muted">子 reviewer 累积耗时。</p>
+            </div>
+          </div>
+          <div className="surface-note" style={{ marginBottom: 16 }}>
+            <strong>Aggregator</strong>
+            <span className="muted">
+              最终主审结论来自 review 阶段产物
+              {reviewAggregatorArtifact ? (
+                <>
+                  ：
+                  <button className="link-button" type="button" onClick={() => copyArtifactPath(reviewAggregatorArtifact)}>
+                    {reviewAggregatorArtifact}
+                  </button>
+                </>
+              ) : (
+                "，当前还没有可复制的聚合 artifact 路径。"
+              )}
+            </span>
           </div>
           <table>
             <thead>
@@ -362,7 +478,9 @@ export function PipelineDetailPage() {
               {reviewSubroles.map((role) => (
                 <tr key={role.role}>
                   <td>{role.role}</td>
-                  <td>{role.status}</td>
+                  <td>
+                    <span className={reviewStatusBadgeClass(role.error ? "failed" : role.status)}>{role.status}</span>
+                  </td>
                   <td>
                     {role.tokens_input}/{role.tokens_output}
                   </td>

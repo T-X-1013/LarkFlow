@@ -131,6 +131,8 @@ class PipelineState(BaseModel):
     provider: Optional[str] = None
     created_at: int = 0
     updated_at: int = 0
+    doc_url: Optional[str] = None
+    tech_doc_url: Optional[str] = None
     # D7：多视角并行 Review 的补充信息。仅 feature_multi 等声明 parallel_review
     # 的模板会写入；前端判 None 不渲染，保证向后兼容。
     review_multi: Optional[ReviewMultiSnapshot] = None
@@ -242,6 +244,16 @@ class VisualEditPreviewRequest(BaseModel):
     intent: str
 
 
+class VisualEditIntentResolution(BaseModel):
+    """视觉编辑意图的归一化结果，供前端回显与排障使用。"""
+
+    source: str
+    kind: str
+    value: str
+    property_name: Optional[str] = None
+    confidence: float = 1.0
+
+
 class VisualEditSession(BaseModel):
     """视觉编辑会话快照，贯穿预览、确认、取消和提交流程。"""
 
@@ -251,6 +263,7 @@ class VisualEditSession(BaseModel):
     page_path: str
     intent: str
     target: VisualEditTarget
+    resolved_action: Optional[VisualEditIntentResolution] = None
     status: VisualEditSessionStatus = VisualEditSessionStatus.DRAFT
     preview_url: Optional[str] = None
     changed_files: List[str] = Field(default_factory=list)

@@ -67,6 +67,8 @@ export interface PipelineState {
   provider: string | null;
   created_at: number;
   updated_at: number;
+  doc_url?: string | null;
+  tech_doc_url?: string | null;
   review_multi?: ReviewMultiSnapshot | null;
 }
 
@@ -162,6 +164,14 @@ export interface VisualEditPreviewRequest {
   intent: string;
 }
 
+export interface VisualEditIntentResolution {
+  source: string;
+  kind: string;
+  value: string;
+  property_name?: string | null;
+  confidence: number;
+}
+
 export interface VisualEditSession {
   id: string;
   requirement: string;
@@ -169,6 +179,7 @@ export interface VisualEditSession {
   page_path: string;
   intent: string;
   target: VisualEditTarget;
+  resolved_action?: VisualEditIntentResolution | null;
   status: VisualEditSessionStatus;
   preview_url: string | null;
   changed_files: string[];

@@ -6,6 +6,7 @@ import {
   commitVisualEdit,
   confirmVisualEdit,
   createVisualEditPreview,
+  getVisualEditSession,
   getVisualEditDeliveryCheck,
   prepareVisualEditCommit,
 } from "../lib/api";
@@ -35,6 +36,7 @@ type PanelPosition = { left: number; top: number };
 const PANEL_MARGIN = 24;
 const PANEL_MAX_WIDTH = 420;
 const PANEL_MIN_VIEWPORT_GAP = 32;
+const ACTIVE_SESSION_STORAGE_KEY = "larkflow.visual-edit.active-session";
 
 function describeLocator(locator: Locator): string {
   if (locator.text) {
@@ -152,6 +154,73 @@ function buildPreviewRequest(locator: Locator, intent: string): VisualEditPrevie
   };
 }
 
+function locatorFromSession(session: VisualEditSession): Locator {
+  // 预览会话是后端契约结构，这里把它重新投影成前端 PickerPanel 直接可消费的 Locator。
+  return {
+    larkSrc: session.target.lark_src ?? undefined,
+    cssSelector: session.target.css_selector,
+    tag: session.target.tag,
+    text: session.target.text,
+    pagePath: session.page_path,
+    id: session.target.id,
+    className: session.target.class_name,
+    rect: session.target.rect
+      ? {
+          top: session.target.rect.top,
+          left: session.target.rect.left,
+          width: session.target.rect.width,
+          height: session.target.rect.height,
+        }
+      : { top: 0, left: 0, width: 0, height: 0 },
+    context: {
+      previous: session.target.context?.previous
+        ? {
+            relation: session.target.context.previous.relation,
+            tag: session.target.context.previous.tag,
+            text: session.target.context.previous.text,
+            cssSelector: session.target.context.previous.css_selector,
+            id: session.target.context.previous.id,
+            className: session.target.context.previous.class_name,
+            style: session.target.context.previous.style,
+          }
+        : null,
+      next: session.target.context?.next
+        ? {
+            relation: session.target.context.next.relation,
+            tag: session.target.context.next.tag,
+            text: session.target.context.next.text,
+            cssSelector: session.target.context.next.css_selector,
+            id: session.target.context.next.id,
+            className: session.target.context.next.class_name,
+            style: session.target.context.next.style,
+          }
+        : null,
+      parent: session.target.context?.parent
+        ? {
+            relation: session.target.context.parent.relation,
+            tag: session.target.context.parent.tag,
+            text: session.target.context.parent.text,
+            cssSelector: session.target.context.parent.css_selector,
+            id: session.target.context.parent.id,
+            className: session.target.context.parent.class_name,
+            style: session.target.context.parent.style,
+          }
+        : null,
+    },
+    reference: session.target.reference
+      ? {
+          relation: session.target.reference.relation,
+          tag: session.target.reference.tag,
+          text: session.target.reference.text,
+          cssSelector: session.target.reference.css_selector,
+          id: session.target.reference.id,
+          className: session.target.reference.class_name,
+          style: session.target.reference.style,
+        }
+      : null,
+  };
+}
+
 export function PickerPanel() {
   const [phase, setPhase] = useState<Phase>("idle");
   const [locator, setLocator] = useState<Locator | null>(null);
@@ -166,10 +235,92 @@ export function PickerPanel() {
   const dragRef = useRef<{ pointerId: number; offsetX: number; offsetY: number } | null>(null);
   const selectedElementRef = useRef<Element | null>(null);
   const phaseRef = useRef<Phase>("idle");
+  const sessionRef = useRef<VisualEditSession | null>(null);
 
   useEffect(() => {
     phaseRef.current = phase;
   }, [phase]);
+
+  useEffect(() => {
+    sessionRef.current = session;
+  }, [session]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    async function restoreSession() {
+      const savedSessionId = window.localStorage.getItem(ACTIVE_SESSION_STORAGE_KEY);
+      if (!savedSessionId) return;
+      try {
+        const restored = await getVisualEditSession(savedSessionId);
+        if (restored.page_path !== `${window.location.pathname}${window.location.search}${window.location.hash}`) {
+          window.localStorage.removeItem(ACTIVE_SESSION_STORAGE_KEY);
+          return;
+        }
+        // 已取消/失败的会话不再恢复，避免页面重进时重新展示过期面板状态。
+        if (restored.status === "cancelled" || restored.status === "failed") {
+          window.localStorage.removeItem(ACTIVE_SESSION_STORAGE_KEY);
+          return;
+        }
+        setSession(restored);
+        setLocator(locatorFromSession(restored));
+        setIntent(restored.intent);
+        setErrMsg(null);
+        if (restored.status === "confirmed") {
+          setPhase("confirmed");
+          const [check, plan] = await Promise.all([
+            getVisualEditDeliveryCheck(restored.id).catch(() => null),
+            prepareVisualEditCommit(restored.id).catch(() => null),
+          ]);
+          setDeliveryCheck(check);
+          setCommitPlan(plan);
+        } else {
+          setPhase("preview_ready");
+        }
+      } catch {
+        window.localStorage.removeItem(ACTIVE_SESSION_STORAGE_KEY);
+      }
+    }
+
+    void restoreSession();
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    if (session && (phase === "preview_ready" || phase === "confirmed")) {
+      // 只有用户还能继续操作的会话才需要写入本地，供刷新后恢复面板状态。
+      window.localStorage.setItem(ACTIVE_SESSION_STORAGE_KEY, session.id);
+      return;
+    }
+    if (phase === "cancelled" || phase === "idle" || phase === "error" || !session) {
+      window.localStorage.removeItem(ACTIVE_SESSION_STORAGE_KEY);
+    }
+  }, [phase, session]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    function abandonPendingPreview() {
+      const activeSession = sessionRef.current;
+      if (!activeSession) return;
+      if (phaseRef.current !== "preview_ready") return;
+      window.localStorage.removeItem(ACTIVE_SESSION_STORAGE_KEY);
+      // 未确认预览本质上已经改了源码；页面离开时主动回滚，避免“刷新后临时改动还留着”。
+      fetch(`/visual-edits/${activeSession.id}/cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        keepalive: true,
+      }).catch(() => undefined);
+    }
+
+    window.addEventListener("pagehide", abandonPendingPreview);
+    window.addEventListener("beforeunload", abandonPendingPreview);
+    return () => {
+      window.removeEventListener("pagehide", abandonPendingPreview);
+      window.removeEventListener("beforeunload", abandonPendingPreview);
+    };
+  }, []);
 
   function applyPickedElement(el: Element) {
     if (
@@ -436,6 +587,33 @@ export function PickerPanel() {
         {phase === "preview_ready" && session ? (
           <div className="flash-note">
             预览已生成 <code>{session.id}</code>，请确认当前页面效果是否符合预期。
+          </div>
+        ) : null}
+        {(phase === "preview_ready" || phase === "confirmed") && session?.resolved_action ? (
+          <div
+            style={{
+              marginTop: 8,
+              padding: 12,
+              borderRadius: 14,
+              background: "rgba(255,255,255,0.18)",
+              border: "1px solid rgba(101, 150, 184, 0.08)",
+            }}
+          >
+            <p style={{ margin: "0 0 6px", fontSize: 12, fontWeight: 700 }}>意图解析</p>
+            <p className="muted" style={{ margin: "0 0 4px", fontSize: 11 }}>
+              来源：{session.resolved_action.source}，动作：{session.resolved_action.kind}
+            </p>
+            {session.resolved_action.property_name ? (
+              <p className="muted" style={{ margin: "0 0 4px", fontSize: 11 }}>
+                属性：<code>{session.resolved_action.property_name}</code>
+              </p>
+            ) : null}
+            <p className="muted" style={{ margin: "0 0 4px", fontSize: 11 }}>
+              结果：<code>{session.resolved_action.value}</code>
+            </p>
+            <p className="muted" style={{ margin: 0, fontSize: 11 }}>
+              置信度：{session.resolved_action.confidence.toFixed(2)}
+            </p>
           </div>
         ) : null}
         {phase === "preview_ready" && session?.diff_summary.length ? (

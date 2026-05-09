@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 import threading
@@ -21,6 +22,7 @@ from pipeline.core.contracts import (
     VisualEditCommitPlan,
     VisualEditCommitResult,
     VisualEditDeliveryCheck,
+    VisualEditIntentResolution,
     VisualEditPreviewRequest,
     VisualEditSession,
     VisualEditSessionStatus,
@@ -50,6 +52,8 @@ class _StoredVisualEditSession:
 
 _SESSIONS: dict[str, _StoredVisualEditSession] = {}
 _LOCK = threading.Lock()
+
+
 def _now() -> int:
     """
     返回当前 Unix 时间戳。
@@ -120,6 +124,52 @@ def _git_root() -> Path:
         capture_output=True,
     )
     return Path(result.stdout.strip()).resolve()
+
+
+def _visual_edit_store_dir() -> Path:
+    """返回视觉编辑会话落盘目录"""
+    return _workspace_root() / ".larkflow" / "visual_edits"
+
+
+def _visual_edit_store_path(session_id: str) -> Path:
+    """返回单个视觉编辑会话的落盘文件路径"""
+    return _visual_edit_store_dir() / f"{session_id}.json"
+
+
+def _persist_session_locked(stored: _StoredVisualEditSession) -> None:
+    """在持锁状态下持久化视觉编辑会话及其快照"""
+    store_path = _visual_edit_store_path(stored.session.id)
+    store_path.parent.mkdir(parents=True, exist_ok=True)
+    # 快照一起落盘，才能在服务重启后继续执行取消回滚
+    payload = {
+        "session": stored.session.model_dump(mode="json"),
+        "snapshots": stored.snapshots,
+    }
+    store_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def _load_persisted_sessions() -> dict[str, _StoredVisualEditSession]:
+    """从磁盘恢复视觉编辑会话，支持预览阶段跨进程回滚"""
+    store_dir = _visual_edit_store_dir()
+    if not store_dir.exists():
+        return {}
+
+    restored: dict[str, _StoredVisualEditSession] = {}
+    for path in sorted(store_dir.glob("*.json")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            session = VisualEditSession.model_validate(payload.get("session") or {})
+            snapshots = payload.get("snapshots") or {}
+            restored[session.id] = _StoredVisualEditSession(
+                session=session,
+                snapshots={str(raw_path): str(content) for raw_path, content in snapshots.items()},
+            )
+        except Exception:
+            continue
+    return restored
 
 
 def _resolve_target_file(lark_src: str | None) -> tuple[Path, int | None]:
@@ -438,6 +488,7 @@ def _cancel_active_preview_sessions_locked(exclude_session_id: str | None = None
         stored.session.status = VisualEditSessionStatus.CANCELLED
         stored.session.error = "Superseded by a newer preview session."
         stored.session.updated_at = _now()
+        _persist_session_locked(stored)
 
 
 def create_preview(request: VisualEditPreviewRequest) -> VisualEditSession:
@@ -470,6 +521,8 @@ def create_preview(request: VisualEditPreviewRequest) -> VisualEditSession:
         _cancel_active_preview_sessions_locked()
         stored = _StoredVisualEditSession(session=session)
         _SESSIONS[session_id] = stored
+        # 先持久化空壳会话，保证即使后续步骤异常，前端也能看到失败态而不是“会话不存在”
+        _persist_session_locked(stored)
 
         try:
             target_file, line_no = _resolve_target_file(request.target.lark_src)
@@ -478,6 +531,14 @@ def create_preview(request: VisualEditPreviewRequest) -> VisualEditSession:
                 action = resolve_visual_edit_action(intent=request.intent, target=request.target)
             except VisualEditIntentError as exc:
                 raise VisualEditRequestError(str(exc)) from exc
+            # 把归一化结果写回会话，前端可以直接展示“最终理解成了什么动作”
+            stored.session.resolved_action = VisualEditIntentResolution(
+                source=action.source,
+                kind=action.kind,
+                value=action.value,
+                property_name=action.property_name,
+                confidence=action.confidence,
+            )
             updated_source = _apply_visual_edit_action(
                 current_source,
                 request.target,
@@ -494,11 +555,13 @@ def create_preview(request: VisualEditPreviewRequest) -> VisualEditSession:
             stored.session.diff_summary = _build_diff_summary(relative_path, current_source, updated_source)
             stored.session.status = VisualEditSessionStatus.PREVIEW_READY
             stored.session.updated_at = _now()
+            _persist_session_locked(stored)
             return stored.session.model_copy(deep=True)
         except Exception as exc:  # noqa: BLE001
             stored.session.status = VisualEditSessionStatus.FAILED
             stored.session.error = str(exc)
             stored.session.updated_at = _now()
+            _persist_session_locked(stored)
             raise
 
 
@@ -767,6 +830,7 @@ def confirm_preview(session_id: str) -> VisualEditSession:
         stored.session.updated_at = _now()
         # 确认后把当前文件视为新的工作区基线，因此不再保留回滚快照。
         stored.snapshots.clear()
+        _persist_session_locked(stored)
         return stored.session.model_copy(deep=True)
 
 
@@ -799,4 +863,9 @@ def cancel_preview(session_id: str) -> VisualEditSession:
         stored.session.status = VisualEditSessionStatus.CANCELLED
         stored.session.error = None
         stored.session.updated_at = _now()
+        _persist_session_locked(stored)
         return stored.session.model_copy(deep=True)
+
+
+# 启动时把未确认会话恢复进内存，确保后续取消请求仍能找到对应快照
+_SESSIONS.update(_load_persisted_sessions())

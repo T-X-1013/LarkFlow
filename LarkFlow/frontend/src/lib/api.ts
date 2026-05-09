@@ -36,6 +36,19 @@ async function jsonRequest<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
+export function extractRequestErrorMessage(err: unknown): string {
+  const fallback = "请求失败，请稍后重试。";
+  if (!(err instanceof Error)) return fallback;
+  const message = err.message || fallback;
+  const detailMarker = " - ";
+  // `jsonRequest` 会把 HTTP 状态拼在前面；弹窗场景只需要更可读的后端 detail。
+  const markerIndex = message.indexOf(detailMarker);
+  if (markerIndex >= 0) {
+    return message.slice(markerIndex + detailMarker.length).trim() || fallback;
+  }
+  return message;
+}
+
 export function createPipeline(requirement: string, template = "default") {
   return jsonRequest<PipelineCreateResponse>("/pipelines", {
     method: "POST",
@@ -73,9 +86,11 @@ export function confirmVisualEdit(id: string) {
   });
 }
 
-export function cancelVisualEdit(id: string) {
+export function cancelVisualEdit(id: string, init?: RequestInit) {
   return jsonRequest<VisualEditSession>(`/visual-edits/${id}/cancel`, {
     method: "POST",
+    // 允许页面关闭时复用这个接口定义，并透传 keepalive 等 fetch 选项。
+    ...init,
   });
 }
 
